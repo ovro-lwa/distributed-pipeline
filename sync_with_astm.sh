@@ -4,5 +4,5 @@ LOCAL_DIR=/home/dynamic/astm-workspace/astm-transient-stuff/
 REMOTE_HOST=astmhead
 REMOTE_USER=yuping
 
-rsync -aP --delete --exclude 'notebooks' $LOCAL_DIR ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR} 
+rsync -aP --delete --exclude={'notebooks','Pipfile.lock'} $LOCAL_DIR ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR} 
 rsync -aP ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/notebooks $LOCAL_DIR/
