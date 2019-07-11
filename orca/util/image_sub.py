@@ -16,7 +16,7 @@ def rot_ellipse(x,y,x0,y0,sigmax,sigmay,theta):
 def image_sub(file1,file2,savediff=False,radius=0):
     hdulist1 = fits.open(file1)
     hdulist2 = fits.open(file2)
-    # get image data and header information
+    # get image data and header information; Transpose such that the indices are consistent with ds9 and casa
     image1 = hdulist1[0].data[0,0].T
     image2 = hdulist2[0].data[0,0].T
     header1 = hdulist1[0].header
@@ -31,7 +31,7 @@ def image_sub(file1,file2,savediff=False,radius=0):
 
     # write to file
     if savediff:
-        difffits = fits.PrimaryHDU(np.asarray([np.asarray([diffim.T])]), header=header1)
+        difffits = fits.PrimaryHDU(np.reshape(diffim.T, newshape=(1,1, *diffim.T.shape)), header=header1)
         difffits.writeto('diff_%s' % os.path.basename(file1), overwrite=True)
     
     if radius==0:

@@ -8,6 +8,7 @@ import numpy as np
 import pyrap.tables as pt
 import os,argparse
 import numpy.ma as ma
+import logging
 from scipy.stats import skew
 from scipy.ndimage import filters
 
@@ -107,6 +108,7 @@ def flag_bad_chans(msfile, band, usedatacol=False, generate_plot=False, apply_fl
 
     ################################################
 
+    print('Flaglist size is %i' % flaglist[0].size)
     if flaglist[0].size > 0:
         # turn flaglist into text file of channel flags
         textfile = os.path.splitext(os.path.abspath(msfile))[0]+'.chans'
@@ -118,6 +120,7 @@ def flag_bad_chans(msfile, band, usedatacol=False, generate_plot=False, apply_fl
 
         # write flags into FLAG column
         if apply_flag:
+            logging.info('NOT applying the changes to the measurement set.')
             flagcol_altered = t.getcol('FLAG')
             flagcol_altered[:,flaglist,:] = 1
             t.putcol('FLAG', flagcol_altered)
@@ -137,7 +140,7 @@ def main():
     args = parser.parse_args()
     flag_bad_chans(args.msfile, args.band, usedatacol=args.usedatacol,
                    generate_plot=args.plot, apply_flag=args.apply_flag)
-    
+
 
 if __name__ == '__main__':
     main()
