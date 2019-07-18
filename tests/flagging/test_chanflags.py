@@ -9,7 +9,7 @@ ms_name = common.config['test_ms']
 
 def test_get_marin_baseline():
     """
-    Consistency check with Marin's code while I migrate the thing
+    Consistency check with Marin's code while I refactor gen_chanflags.py
     :return:
     """
     antchanflags, ant_flagged = marin_gen_chanflags.generate_chan_flags(ms_name)
