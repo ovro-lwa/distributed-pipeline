@@ -11,6 +11,7 @@ dask = {version = "*", extras = ["distributed"]}
 ipykernel = "*"
 python-casacore = "*"
 matplotlib = '*'
+opencv-python = '*'
 
 [dev-packages]
 pytest = '*'
