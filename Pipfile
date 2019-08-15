@@ -5,13 +5,12 @@ name = "pypi"
 
 [packages]
 astropy = "*"
-pandas = "*"
 scipy = "*"
-dask = {version = "*", extras = ["distributed"]}
 ipykernel = "*"
 python-casacore = "*"
 matplotlib = '*'
 scikit-image = '*'
+celery = '~=4.3'
 
 [dev-packages]
 pytest = '*'
