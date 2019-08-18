@@ -3,9 +3,7 @@
 # sudo pdsh -w astm[04-13] "chmod -R 777 /var/log/celery/"
 
 # start
-# celery multi start w1 -A proj -l info -n w1@%n --pidfile=/var/run/celery/%n.pid --logfile=/var/log/celery/%n%I.log
-# restart
-# celery multi restart w1 -n w1@%n --pidfile=/var/run/celery/%n.pid --logfile=/var/run/celery/%n.pid
+# pdsh -w astm[04-12] 'cd /home/yuping/transient && celery multi start w1 -A orca.proj --concurrency=10 -l info -n %h --pidfile=/var/run/celery/%n.pid --logfile=/var/log/celery/%n%I.log'
 
 # kill
-# pkill -9 -f 'celery worker'
+# pdsh -w astm[04-12] "pkill -9 -f 'celery worker'"
