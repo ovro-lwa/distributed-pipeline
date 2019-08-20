@@ -9,7 +9,7 @@ CHGCENTRE_PATH = '/opt/astro/wsclean/bin/chgcentre'
 def change_phase_center(ms: str, center_dir: str) -> None:
     ra, dec = center_dir.split(' ')
     try:
-        output = subprocess.check_output([CHGCENTRE_PATH, ms, ra, dec], stderr=subprocess.STDOUT)
+        subprocess.check_output([CHGCENTRE_PATH, ms, ra, dec], stderr=subprocess.STDOUT)
     except subprocess.CalledProcessError as e:
         raise e
 

@@ -22,12 +22,12 @@ def dispatch_dada2ms(start_time, end_time, dada_prefix, out_dir, utc_times_txt):
                 logging.info('Making directory ', p)
                 os.mkdir(p)
     params = dada2ms.generate_params(utc_times, start_time, end_time, spws, dada_prefix, out_dir)
-    group(run_dada2ms.s(**p) for p in params)().get()
+    group(run_dada2ms.s(**p) for p in params)()
 
 
 @app.task
-def run_dada2ms(dada_file, out_ms):
-    dada2ms.run_dada2ms(dada_file, out_ms)
+def run_dada2ms(dada_file, out_ms, gaintable=None):
+    dada2ms.run_dada2ms(dada_file, out_ms, gaintable)
 
 @app.task
 def run_chgcentre(ms_file, direction):
@@ -47,7 +47,7 @@ def add(x, y):
 
 def chgcentre():
     msl = glob.glob('/lustre/yuping/0-100-hr-reduction/ms/*/*ms')
-    group(run_chgcentre.s(ms, '-02h13m03.31s 36d58m27.57s') for ms in msl)().get()
+    group(run_chgcentre.s(ms, '-02h13m03.31s 36d58m27.57s') for ms in msl)()
 
 
 def average_ms():
@@ -61,8 +61,10 @@ def average_ms():
 
 
 def get_data():
-        s = datetime(2018, 3, 22, 17, 32, 0)
-        e = datetime(2018, 3, 22, 17, 48, 0)
-        dp = '/lustre/yuping/0-100-hr-reduction/ms'
+        # s = datetime(2018, 3, 22, 17, 32, 0)
+        # e = datetime(2018, 3, 22, 17, 48, 0)
+        s = datetime(2018, 3, 22, 12, 32, 0)
+        e = datetime(2018, 3, 22, 18, 32, 0)
+        dp = '/lustre/yuping/0-100-hr-reduction/blflag_ms'
         dap = '/lustre/data/2018-03-20_100hr_run'
         dispatch_dada2ms(s, e, dap, dp, '/lustre/yuping/2018-09-100-hr-autocorr/utc_times_isot.txt')
