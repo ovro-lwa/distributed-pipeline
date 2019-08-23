@@ -52,7 +52,6 @@ def generate_params(utc_mapping: Dict[datetime, str], begin_time: datetime, end_
     :return:
     """
     return [{'dada_file': f'{dada_prefix}/{s}/{dada_file}',
-             'out_ms': get_ms_name(time, s, out_dir),
-             'gaintable': f'/lustre/yuping/0-100-hr-reduction/bcal/{s}_2018-03-22T17:34:35.bcal'} for s in spw
+             'out_ms': get_ms_name(time, s, out_dir)} for s in spw
             for time, dada_file in utc_mapping.items() if begin_time <= time < end_time]
 
