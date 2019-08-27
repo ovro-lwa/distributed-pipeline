@@ -9,7 +9,6 @@ import pyrap.tables as pt
 import os,argparse
 import numpy.ma as ma
 import logging
-from scipy.stats import skew
 from scipy.ndimage import filters
 
 def flag_bad_chans(msfile, band, usedatacol=False, generate_plot=False, apply_flag=False):

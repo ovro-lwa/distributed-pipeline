@@ -8,6 +8,7 @@ astropy = "*"
 scipy = "*"
 ipykernel = "*"
 python-casacore = "*"
+julia = "*"
 matplotlib = '*'
 scikit-image = '*'
 celery = '~=4.3'

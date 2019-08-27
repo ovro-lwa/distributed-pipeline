@@ -1,6 +1,7 @@
 from .celery import app
 from celery import group
-from ..transform import dada2ms, change_phase_centre, averagems
+from ..transform import dada2ms, change_phase_centre, averagems, peel
+from ..flagging import flag_bad_chans
 from datetime import datetime
 import os
 import logging
@@ -45,6 +46,19 @@ def add(x, y):
     return x, y
 
 
+@app.task
+def peel(ms_file, sources):
+    peel.peel_with_ttcal(ms_file, sources)
+
+
+@app.task
+def apply_chan_flags(ms_file):
+    flag_bad_chans(ms_file)
+
+@app.task
+def apply_a_priori_flags(ms_file, flag_dir):
+    pass
+
 def chgcentre():
     msl = sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/cal-2018-03-22/ms/*/*ms'))
     group(run_chgcentre.s(ms, '-02h13m03.31s 36d58m27.57s') for ms in msl)()
@@ -61,10 +75,10 @@ def average_ms():
 
 
 def get_data():
-        s = datetime(2018, 3, 22, 17, 32, 0)
-        e = datetime(2018, 3, 22, 17, 48, 0)
+        s = datetime(2018, 3, 24, 0, 0, 0)
+        e = datetime(2018, 3, 24, 0, 30, 0)
         # s = datetime(2018, 3, 22, 12, 32, 0)
         # e = datetime(2018, 3, 22, 18, 32, 0)
-        dp = '/lustre/yuping/0-100-hr-reduction/cal-2018-03-22/ms'
+        dp = '/lustre/yuping/0-100-hr-reduction/qual/msfiles/2018-03-24/hh=00'
         dap = '/lustre/data/2018-03-20_100hr_run'
         dispatch_dada2ms(s, e, dap, dp, '/lustre/yuping/2018-09-100-hr-autocorr/utc_times_isot.txt')

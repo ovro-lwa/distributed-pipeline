@@ -1,6 +1,6 @@
 # Sync code to astm and notebooks from astm.
 REMOTE_DIR=/home/yuping/transient/
-LOCAL_DIR=/opt2/lwa/astm-transient-stuff/
+LOCAL_DIR=/home/yuping/radio_projects/lwa/astm-transient-stuff/
 REMOTE_HOST=astmhead
 REMOTE_USER=yuping
 
