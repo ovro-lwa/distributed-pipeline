@@ -10,3 +10,6 @@
 
 # kill
 # pdsh -w astm[04-12] "pkill -9 -f 'celery worker'"
+
+# check messages in the rabbitmq queue
+# sudo rabbitmqctl list_queues -p yuping

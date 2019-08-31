@@ -1,7 +1,7 @@
 from .celery import app
 from celery import group
-from ..transform import dada2ms, change_phase_centre, averagems, peel
-from ..flagging import flag_bad_chans
+from ..transform import dada2ms, change_phase_centre, averagems, peeling
+from ..flagging import flag_bad_chans, merge_flags
 from datetime import datetime
 import os
 import logging
@@ -48,16 +48,17 @@ def add(x, y):
 
 @app.task
 def peel(ms_file, sources):
-    peel.peel_with_ttcal(ms_file, sources)
-
+    # TODO make this idempotent somehow
+    peeling.peel_with_ttcal(ms_file, sources)
 
 @app.task
 def apply_chan_flags(ms_file):
     flag_bad_chans(ms_file)
 
 @app.task
-def apply_a_priori_flags(ms_file, flag_dir):
-    pass
+def apply_a_priori_flags(ms_file, flag_npy_path):
+    merge_flags.write_to_flag_column(ms_file, flag_npy_path,
+                                     create_corrected_data_column=True)
 
 def chgcentre():
     msl = sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/cal-2018-03-22/ms/*/*ms'))
@@ -75,10 +76,16 @@ def average_ms():
 
 
 def get_data():
-        s = datetime(2018, 3, 24, 0, 0, 0)
-        e = datetime(2018, 3, 24, 0, 30, 0)
+        s = datetime(2018, 3, 23, 0, 0, 0)
+        e = datetime(2018, 3, 23, 0, 0, 13)
         # s = datetime(2018, 3, 22, 12, 32, 0)
         # e = datetime(2018, 3, 22, 18, 32, 0)
-        dp = '/lustre/yuping/0-100-hr-reduction/qual/msfiles/2018-03-24/hh=00'
+        dp = '/lustre/yuping/0-100-hr-reduction/qual/msfiles/2018-03-23/hh=00'
         dap = '/lustre/data/2018-03-20_100hr_run'
         dispatch_dada2ms(s, e, dap, dp, '/lustre/yuping/2018-09-100-hr-autocorr/utc_times_isot.txt')
+
+
+def flag_and_peel():
+    ms_list = sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/qual/msfiles/2018-03-23/hh=00/*/??_*ms'))
+    group(apply_a_priori_flags.s(ms,  '/home/yuping/100-hr-a-priori-flags/201906_consolidated.npy') for ms in ms_list)()
+    #group(peel.s(ms,  '/home/yuping/casA_resolved_rfi.json') for ms in ms_list)()

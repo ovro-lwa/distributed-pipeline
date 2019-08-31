@@ -5,7 +5,7 @@ Copy from Marin Anderson 3/8/2019
 """
 from __future__ import division
 import numpy as np
-import pyrap.tables as pt
+import casacore.tables as pt
 import os,argparse
 import numpy.ma as ma
 import logging
