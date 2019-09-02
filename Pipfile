@@ -12,6 +12,7 @@ julia = "*"
 matplotlib = '*'
 scikit-image = '*'
 celery = '~=4.3'
+tornado = '~=4.2'
 
 [dev-packages]
 pytest = '*'
