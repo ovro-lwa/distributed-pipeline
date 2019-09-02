@@ -10,16 +10,13 @@ CORRECTED_DATA = 'CORRECTED_DATA'
 
 
 def merge_flags(ms1: str, ms2: str):
-    t_prev = pt.table(ms1, readonly=False)
-    t = pt.table(ms2, readonly=False)
-
-    flagcol1 = t.getcol('FLAG')
-    flagcol2 = t.getcol('FLAG')
-    flagcol = flagcol1 | flagcol2
-    t.putcol('FLAG', flagcol)
-    t_prev.putcol('FLAG', flagcol)
-    t_prev.close()
-    t.close()
+    with pt.table(ms1, readonly=False) as t_prev:
+        with pt.table(ms2, readonly=False) as t:
+            flagcol1 = t.getcol('FLAG')
+            flagcol2 = t.getcol('FLAG')
+            flagcol = flagcol1 | flagcol2
+            t.putcol('FLAG', flagcol)
+            t_prev.putcol('FLAG', flagcol)
 
 
 def write_to_flag_column(ms: str, flag_npy: str, create_corrected_data_column: bool = False):

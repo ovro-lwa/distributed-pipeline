@@ -15,7 +15,7 @@ def change_phase_center(ms: str, center_dir: str) -> None:
 
 
 def get_phase_center(ms: str) -> str:
-    with open(table(f'{ms}/FIELD')) as t:
+    with table(f'{ms}/FIELD') as t:
         ra, dec = t.getcol('PHASE_DIR')[0][0]
     return SkyCoord(ra=ra, dec=dec, frame='icrs', unit='radian').to_string('hmsdms')
 

@@ -2,11 +2,13 @@ from .celery import app
 from celery import group, chain
 from ..transform import dada2ms, change_phase_centre, averagems, peeling, imaging
 from ..flagging import flag_bad_chans, merge_flags
+from ..utils import image_sub
 from datetime import datetime
 import os, sys
 import logging
 import glob
 import shutil
+import uuid
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
@@ -74,10 +76,27 @@ def make_first_image(prefix, datetime_string, out_dir):
     pass
 
 @app.task
-def subsequent_frame_subtraction(in_tree, ):
-    # Copy over to /dev/shm, chgcentre, merge flag, and then subtract, write back.
-    temp_tree = '/dev/shm/yuping/' + os.path.basename(in_tree)
-    shutil.copytree(in_tree, temp_tree)
+def subsequent_frame_subtraction(dir1, dir2, datetime_1, datetime_2, out_dir):
+    # Copy over to local disk, chgcentre, merge flag, and then subtract, write back.
+    temp_tree = f'/pipedata/workdir/yuping/{uuid.uuid4()}'
+    # I'd rather have an error thrown here if there's a UUID clash which shouldn't ever happen.
+    os.mkdir(temp_tree)
+    try:
+        tree1 = f'{temp_tree}/{datetime_1}'
+        tree2 = f'{temp_tree}/{datetime_2}'
+        shutil.copytree(dir1, tree1)
+        shutil.copytree(dir2, tree2)
+        new_phase_center = change_phase_centre.get_phase_center(f'{tree1}/00_{datetime_1}.ms')
+        spws = [f'{i:02d}' for i in range(22)]
+        for s in spws:
+            merge_flags.merge_flags(f'{tree1}/{s}_{datetime_1}.ms', f'{tree2}/{s}_{datetime_2}.ms')
+            change_phase_centre.change_phase_center(f'{tree2}/{s}_{datetime_2}.ms', new_phase_center)
+        im1 = imaging.make_image(sorted(glob.glob(f'{tree2}/??_{datetime_2}.ms')), datetime_2, temp_tree)
+        im2 = imaging.make_image(sorted(glob.glob(f'{tree1}/??_{datetime_1}.ms')), datetime_1, temp_tree)
+        image_sub.image_sub(im1, im2, out_dir)
+    finally:
+        shutil.rmtree(temp_tree)
+
 
 @app.task
 def sidereal_subtraction():
@@ -146,3 +165,11 @@ def do_first_batch_image():
     ms_list = sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/qual/msfiles/2018-03-22/hh=02/*'))
     group(make_first_image.s(prefix, os.path.basename(ms),
                              '/lustre/yuping/0-100-hr-reduction/qual/images/2018-03-22/hh=02') for ms in ms_list)()
+
+
+def do_subsequent_frame_subtraction():
+    ms_list = sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/qual/msfiles/2018-03-23/hh=02/*'))
+    group(subsequent_frame_subtraction.s(ms_list[i], ms_list[i+1],
+                                         os.path.basename(ms_list[i]), os.path.basename(ms_list[i+1]),
+                                 '/lustre/yuping/0-100-hr-reduction/qual/subsequent-subtraction/2018-03-23/hh=02') for
+          i, dir1 in enumerate(ms_list[:-1]))()
