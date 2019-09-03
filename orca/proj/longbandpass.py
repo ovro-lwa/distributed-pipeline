@@ -4,6 +4,7 @@ from ..transform import dada2ms, change_phase_centre, averagems, peeling, imagin
 from ..flagging import flag_bad_chans, merge_flags
 from ..utils import image_sub
 from datetime import datetime, timedelta
+import numpy as np
 import os, sys
 import logging
 import glob
@@ -129,7 +130,7 @@ def prep_image_for_sidereal_subtraction(dir1, dir2, datetime_1, datetime_2, out_
 @app.task
 def sidereal_subtract_image(im1_path, im2_path, out_dir):
     sidereal_subtraction_kit.subtract_images(im1_path, im2_path, out_dir)
-    pass
+
 
 @app.task
 def image_with_phase_center():
@@ -203,7 +204,7 @@ def do_subsequent_frame_subtraction():
           i, dir1 in enumerate(ms_list[:-1]))()
 
 
-def generate_ms_pairs() -> List[Tuple[datetime, datetime]]:
+def generate_datetime_pairs() -> List[Tuple[datetime, datetime]]:
     sday = timedelta(days=0, hours=23, minutes=56, seconds=4)
     day_1_times = [ datetime.fromisoformat(os.path.basename(p)) for p in
                     sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/qual/msfiles/2018-03-22/hh=02/*'))]
@@ -214,7 +215,7 @@ def prep_sidereal_subtraction():
     """TODO for sidereal subtraction involving more than one day. This directory structure won't really work since
     the flags will be different.
     """
-    ms_pairs = generate_ms_pairs()
+    ms_pairs = generate_datetime_pairs()
     logging.info(f'There are {len(ms_pairs)} pairs of sidereally separated measurement sets to process.')
     group(prep_image_for_sidereal_subtraction.s(
         '/lustre/yuping/0-100-hr-reduction/qual/msfiles/2018-03-22/hh=02',
@@ -229,6 +230,12 @@ def do_sidereal_subtraction():
     # call the kit
     # do the subtraction
     out_dir = '/lustre/yuping/0-100-hr-reduction/qual/sidereal-subtraction-1/2018-03-22/hh=02'
-    pass
+    pairs = generate_datetime_pairs()
+    logging.info(f'There are {len(pairs)} pairs of sidereally separated images to process.')
+    group(sidereal_subtract_image.s(
+        f'/lustre/yuping/0-100-hr-reduction/qual/prep-sidereal-images/2018-03-22/hh=02/{p[0].isoformat()}-image.fits',
+        f'/lustre/yuping/0-100-hr-reduction/qual/prep-sidereal-images/2018-03-23/hh=02/{p[1].isoformat()}-image.fits',
+        out_dir)
+          for p in pairs)()
 
 
