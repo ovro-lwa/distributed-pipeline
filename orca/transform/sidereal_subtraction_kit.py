@@ -13,12 +13,15 @@ def subtract_images(im1_path: str, im2_path: str, out_dir: str, psf_path: str=No
         #find the peak, subtract 0.85 of it; then find an adjacent peak, do like 0.4 percent
         logging.warn('The crab box is hardcoded.')
         psf, _ = fitsutils.read_image_fits(psf_path)
-        subtracted1 = sub_crab(im1, psf)
-        subtracted2 = sub_crab(im2, psf)
-        pass
+        im1 = sub_crab(im1, psf)
+        im2 = sub_crab(im2, psf)
     if scale:
-        # just minimize the stdev in the inner 500 pixel
-        pass
+        # just minimize the stdev in the inner 1000 pixel by brute-forcing
+        scales = np.linspace(0.90, 1.10, num=81)
+        ind = np.argmin([np.std(
+            x * im1[2048 - 500:2048 + 500, 2048 - 500:2048 + 500] - im2[2048 - 500:2048 + 500, 2048 - 500:2048 + 500])
+            for x in scales])
+        im1 = im1 * scales[ind]
     fitsutils.write_image_fits(f'{out_dir}/diff_{os.path.basename(im1_path)}', header, im2 - im1, overwrite=True)
 
 

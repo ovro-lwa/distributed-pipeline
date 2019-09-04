@@ -133,10 +133,9 @@ def sidereal_subtract_image(im1_path, im2_path, out_dir):
 
 
 @app.task
-def image_with_phase_center():
-    # For looking at what the ionosphere is doing. Low priority
-    pass
-
+def sidereal_subtract_image2(im1_path, im2_path, psf_path, out_dir):
+    # subtract the crab and do a flux scale.
+    sidereal_subtraction_kit.subtract_images(im1_path, im2_path, out_dir, psf_path, subtract_crab=True, scale=True)
 
 
 """
@@ -239,3 +238,15 @@ def do_sidereal_subtraction():
           for p in pairs)()
 
 
+def do_sidereal_subtraction2():
+    # call the kit
+    # do the subtraction
+    out_dir = '/lustre/yuping/0-100-hr-reduction/qual/sidereal-subtraction-2/2018-03-22/hh=02'
+    pairs = generate_datetime_pairs()
+    logging.info(f'There are {len(pairs)} pairs of sidereally separated images to process.')
+    group(sidereal_subtract_image2.s(
+        f'/lustre/yuping/0-100-hr-reduction/qual/prep-sidereal-images/2018-03-22/hh=02/{p[0].isoformat()}-image.fits',
+        f'/lustre/yuping/0-100-hr-reduction/qual/prep-sidereal-images/2018-03-23/hh=02/{p[1].isoformat()}-image.fits',
+        f'/lustre/yuping/0-100-hr-reduction/qual/prep-sidereal-images/2018-03-22/hh=02/{p[0].isoformat()}-psf.fits',
+        out_dir)
+          for p in pairs)()
