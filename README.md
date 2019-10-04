@@ -4,5 +4,8 @@ Run in this directory (with pipenv properly installed)
 ```
 pipenv update --dev
 ```
+`orca` is where the wrappers and functions that do single units of work sit.
 
-TODO: testing with a test ms
+`proj` contains code that executes the pipeline with `celery`.
+
+`notebook` contains ad-hoc analyses and experimental things.
