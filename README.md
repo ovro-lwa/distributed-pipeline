@@ -10,14 +10,18 @@ This should install the dependencies of the project. Then run in the pipenv-mana
 python ./setup.py test
 ```
 
-to run the tests.
+Then run
+```
+pipenv install -e
+```
+, which will install the package in development mode, so that libraries can be called and
+binaries be executed. This can be re-run after code changes.
 
-Optionally,
+To run the tests, do
 ```
-pipenv install -e .
+pytest
 ```
-will install the package in development mode, so that libraries can be called and
-binaries be executed.
+which should run the tests and output a report.
 
 It is recommended that pycharm be used for development. I have not settled on a
 style linter or a documentation format yet...
