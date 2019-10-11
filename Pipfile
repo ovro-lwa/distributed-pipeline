@@ -8,11 +8,11 @@ astropy = "*"
 scipy = "*"
 ipykernel = "*"
 python-casacore = "*"
-julia = "*"
 matplotlib = '*'
 scikit-image = '*'
 celery = '~=4.3'
 tornado = '~=4.2'
+pyyaml = "*"
 
 [dev-packages]
 pytest = '*'

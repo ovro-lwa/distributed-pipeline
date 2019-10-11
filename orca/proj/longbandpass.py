@@ -163,7 +163,7 @@ def get_data():
         e = datetime(2018, 3, 22, 2, 30, 0)
         dp = '/lustre/yuping/0-100-hr-reduction/qual/msfiles/2018-03-22/hh=02'
         dap = '/lustre/data/2018-03-20_100hr_run'
-        dispatch_dada2ms(s, e, dap, dp, '/lustre/yuping/2018-09-100-hr-autocorr/utc_times_isot.txt')
+        dispatch_dada2ms(s, e, dap, dp, '/home/yuping/utc_times_isot.txt')
 
 
 def do_flag():
