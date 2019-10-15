@@ -1,6 +1,6 @@
 # astm-transient-stuff
 ## Set up development environment
-Run in this directory (with pipenv properly installed)
+Run in this directory (with pipenv installed)
 ```
 pipenv update --dev
 ```

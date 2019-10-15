@@ -42,7 +42,7 @@ def run_dada2ms(dada_file: str, out_ms: str, gaintable: str = None) -> str:
 def generate_params(utc_mapping: Dict[datetime, str], begin_time: datetime, end_time: datetime,
                     spw: List[str], dada_prefix: str, out_dir: str) -> List[dict]:
     """
-
+    Generate parameters for dada2ms given files.
     :param utc_mapping:
     :param begin_time:
     :param end_time:
@@ -54,6 +54,7 @@ def generate_params(utc_mapping: Dict[datetime, str], begin_time: datetime, end_
     logging.warning("The calibration table paths for dada2ms are HARDCODED!")
     return [{'dada_file': f'{dada_prefix}/{s}/{dada_file}',
              'out_ms': get_ms_name(time, s, out_dir),
-             'gaintable': f'/lustre/yuping/0-100-hr-reduction/bcal/{s}_2018-03-22T17:34:35.bcal'} for s in spw
+             'gaintable': f'/lustre/yuping/2019-10-100-hr-take-two/2018-03-22T17:34:35/{s}/2018-03-22T17:34:35.bcal'}
+            for s in spw
             for time, dada_file in utc_mapping.items() if begin_time <= time < end_time]
 

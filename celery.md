@@ -20,9 +20,14 @@ sudo /sbin/service rabbitmq-server start
 ```celery -A orca.proj purge```
 
 ### Kill the workers
-```pdsh -w astm[04-12] "pkill -9 -f 'celery worker'"```
 This is needed after a task code update. Then you need to launch workers again for
 the changes to take effect.
+
+Send SIGTERM (usually works and wait till current job finishes on a worker.)
+```pdsh -w astm[04-12] "pkill -15 -f 'celery worker'"```
+
+Send SIGKILL (more disruptive)
+```pdsh -w astm[04-12] "pkill -9 -f 'celery worker'"```
 
 ## Diagnostics
 ### check messages in the rabbitmq queue
