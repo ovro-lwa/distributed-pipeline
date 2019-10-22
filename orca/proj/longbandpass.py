@@ -27,7 +27,7 @@ def dispatch_dada2ms(start_time, end_time, dada_prefix, out_dir, utc_times_txt):
             p = f'{out_dir}/{time.isoformat()}'
             if not os.path.exists(p):
                 logging.info(f'Making directory {p}')
-                os.mkdir(p)
+                #os.mkdir(p)
     params = dada2ms.generate_params(utc_times, start_time, end_time, spws, dada_prefix, out_dir)
     logging.info(f'Making {len(params)} dada2ms calls.')
     group(run_dada2ms.s(**p) for p in params)()
@@ -159,9 +159,9 @@ def average_ms():
 
 
 def get_data():
-        s = datetime(2018, 3, 22, 2, 0, 0)
-        e = datetime(2018, 3, 22, 2, 30, 0)
-        dp = '/lustre/yuping/0-100-hr-reduction/qual/msfiles/2018-03-22/hh=02'
+        s = datetime(2018, 3, 22, 17, 23, 0)
+        e = datetime(2018, 3, 22, 17, 45, 0)
+        dp = '/lustre/yuping/2019-10-100-hr-take-two/bandpass/2018-03-22/'
         dap = '/lustre/data/2018-03-20_100hr_run'
         dispatch_dada2ms(s, e, dap, dp, '/home/yuping/utc_times_isot.txt')
 
