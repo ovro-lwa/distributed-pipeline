@@ -6,9 +6,6 @@ pipenv update --dev
 ```
 This should install the dependencies of the project. Then run in the pipenv-managed virtualenv
 (which can be invoked with `pipenv shell` or prefix the command with `pipenv run`)
-```
-python ./setup.py test
-```
 
 Then run
 ```
