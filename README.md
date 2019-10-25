@@ -9,7 +9,7 @@ This should install the dependencies of the project. Then run in the pipenv-mana
 
 Then run
 ```
-pipenv install -e
+pipenv install -e .
 ```
 , which will install the package in development mode, so that libraries can be called and
 binaries be executed. This can be re-run after code changes.
