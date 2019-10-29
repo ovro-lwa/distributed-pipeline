@@ -1,4 +1,3 @@
-import logging
 import subprocess
 
 TTCAL_EXEC = '/opt/astro/mwe/bin/ttcal-0.3.0'

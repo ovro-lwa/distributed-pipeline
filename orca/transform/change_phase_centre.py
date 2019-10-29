@@ -1,4 +1,3 @@
-import logging
 import subprocess
 from casacore.tables import table
 from astropy.coordinates import SkyCoord
