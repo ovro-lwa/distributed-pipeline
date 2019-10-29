@@ -2,10 +2,11 @@ from .celery import app
 from celery import group, chain
 from ..transform import dada2ms, change_phase_centre, averagems, peeling, imaging, sidereal_subtraction_kit
 from ..flagging import flag_bad_chans, merge_flags
+from ..metadata.pathsmanagers import OfflinePathsManager
 from ..utils import image_sub
 from datetime import datetime, timedelta
-import numpy as np
-import os, sys
+import os
+import sys
 import logging
 import glob
 import shutil
@@ -14,21 +15,21 @@ import uuid
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
+pm = OfflinePathsManager(utc_times_txt_path='/home/yuping/utc_times.txt',
+                         msfile_dir='/lustre/yuping/0-100-hr-reduction/msfile',
+                         bcal_dir='/lustre/yuping/0-100-hr-reduction/day-1-bcal/',
+                         flag_npy_path='/home/yuping/100-hr-a-priori-flags/consolidated_flags.npy')
+
 
 def dispatch_dada2ms(start_time, end_time, dada_prefix, out_dir, utc_times_txt):
     spws = [f'{i:02d}' for i in range(22)]
-    utc_times = {}
-    with open(utc_times_txt, 'r') as f:
-        for line in f:
-            l = line.split(' ')
-            utc_times[datetime.strptime(l[0], "%Y-%m-%dT%H:%M:%S")] = l[1].rstrip('\n')
-    for time, dada in utc_times.items():
+    for time, dada in pm.utc_times_mapping.items():
         if start_time <= time < end_time:
             p = f'{out_dir}/{time.isoformat()}'
             if not os.path.exists(p):
                 logging.info(f'Making directory {p}')
-                #os.mkdir(p)
-    params = dada2ms.generate_params(utc_times, start_time, end_time, spws, dada_prefix, out_dir)
+                os.mkdir(p)
+    params = dada2ms.generate_params(pm.utc_times_mapping, start_time, end_time, spws, dada_prefix, out_dir)
     logging.info(f'Making {len(params)} dada2ms calls.')
     group(run_dada2ms.s(**p) for p in params)()
 

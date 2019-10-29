@@ -2,14 +2,15 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from os import path
 
+
 class PathsManager(ABC):
     def __init__(self, utc_times_txt_path: str):
         # do the mapping thing
-        self._mapping = {}
+        self.utc_times_mapping = {}
         with open(utc_times_txt_path) as f:
             for line in f:
                 l = line.split()
-                self._mapping[datetime.strptime(f'{l[0]}T{l[1]}', "%Y-%m-%dT%H:%M:%S")] = l[2].rstrip('\n')
+                self.utc_times_mapping[datetime.strptime(f'{l[0]}T{l[1]}', "%Y-%m-%dT%H:%M:%S")] = l[2].rstrip('\n')
 
     @abstractmethod
     def get_gaintable_path(self, spw: str) -> str:
