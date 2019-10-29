@@ -6,6 +6,10 @@ class PathsManager(ABC):
     def __init__(self, utc_times_txt_path: str):
         # do the mapping thing
         self._mapping = {}
+        with open(utc_times_txt_path) as f:
+            for line in f:
+                l = line.split()
+                self._mapping[datetime.strptime(f'{l[0]}T{l[1]}', "%Y-%m-%dT%H:%M:%S")] = l[2].rstrip('\n')
 
     @abstractmethod
     def get_gaintable_path(self, spw: str) -> str:
@@ -40,8 +44,10 @@ class OfflinePathsManager(PathsManager):
     """
     def __init__(self, utc_times_txt_path: str, msfile_dir: str, bcal_dir: str, flag_npy_path: str):
         super().__init__(utc_times_txt_path)
+        # Validation?
         self.msfile_dir = msfile_dir
         self.bcal_dir = bcal_dir
+        self.flag_npy_path = flag_npy_path
 
     def get_gaintable_path(self,  spw: str):
         return f'{self.bcal_dir}/{spw}'
@@ -58,4 +64,4 @@ class OfflinePathsManager(PathsManager):
         return f'{self.msfile_dir}/{date}/{hour}/{timestamp.isoformat()}/{spw}_{timestamp.isoformat()}.ms'
 
     def get_flag_npy_path(self, timestamp):
-        pass
+        return self.flag_npy_path
