@@ -15,10 +15,10 @@ import uuid
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
-pm = OfflinePathsManager(utc_times_txt_path='/home/yuping/utc_times.txt',
-                         msfile_dir='/lustre/yuping/0-100-hr-reduction/msfile',
-                         bcal_dir='/lustre/yuping/0-100-hr-reduction/day-1-bcal/',
-                         flag_npy_path='/home/yuping/100-hr-a-priori-flags/consolidated_flags.npy')
+#pm = OfflinePathsManager(utc_times_txt_path='/home/yuping/utc_times.txt',
+#                         msfile_dir='/lustre/yuping/0-100-hr-reduction/msfile',
+#                         bcal_dir='/lustre/yuping/0-100-hr-reduction/day-1-bcal/',
+#                         flag_npy_path='/home/yuping/100-hr-a-priori-flags/consolidated_flags.npy')
 
 
 def dispatch_dada2ms(start_time, end_time, dada_prefix, out_dir, utc_times_txt):
@@ -63,6 +63,12 @@ def peel(ms_file, sources):
 def apply_a_priori_flags(ms_file, flag_npy_path, create_corrected_data_column=False):
     merge_flags.write_to_flag_column(ms_file, flag_npy_path,
                                      create_corrected_data_column=create_corrected_data_column)
+
+@app.task
+def apply_ant_flag(ms_file, ants):
+    from casacore.tables import table, taql
+    t = table(ms_file)
+    taql(f"update $t set FLAG=True where any(ANTENNA1==$ants || ANTENNA2==$ants)")
 
 @app.task
 def flag_chans(ms, spw):
