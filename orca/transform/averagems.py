@@ -4,6 +4,7 @@ from os import path
 import logging
 log = logging.getLogger(__name__)
 
+
 def average_ms(ms_list: List[str], ref_ms_index: int,  out_ms: str, column: str) -> str:
     """
     Average the list of measurement sets' select column.

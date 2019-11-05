@@ -21,4 +21,10 @@ def test_with_bad_path():
 def test_get_gaintable_path():
     pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt',
                              '.', '.', '.')
-    assert pm.get_gaintable_path('00') == './00.bcal'
+    assert pm.get_gaintable_path('00') == './00/00.bcal'
+
+def test_get_ms_file():
+    pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt',
+                             '.', '.', '.')
+    assert pm.get_ms_path(datetime(2019, 10, 28, 23, 4, 44), '00') == \
+           './2019-10-28/hh=23/2019-10-28T23:04:44/00_2019-10-28T23:04:44.ms'

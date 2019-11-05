@@ -4,7 +4,8 @@ from os import path
 
 
 class PathsManager(ABC):
-    def __init__(self, utc_times_txt_path: str):
+    def __init__(self, utc_times_txt_path: str, dadafile_dir: str):
+        self.dadafile_dir = dadafile_dir
         # do the mapping thing
         self.utc_times_mapping = {}
         with open(utc_times_txt_path) as f:
@@ -12,11 +13,13 @@ class PathsManager(ABC):
                 l = line.split()
                 self.utc_times_mapping[datetime.strptime(f'{l[0]}T{l[1]}', "%Y-%m-%dT%H:%M:%S")] = l[2].rstrip('\n')
 
+    def get_dada_path(self, spw: str, timestamp: datetime):
+        return f'{self.dadafile_dir}/{spw}/{self.utc_times_mapping[timestamp]}'
+
     @abstractmethod
     def get_gaintable_path(self, spw: str) -> str:
         """
         Get path of gaintable closest to the timestamp at spw.
-        :param timestamp:
         :param spw:
         :return:
         """
@@ -45,17 +48,18 @@ class OfflinePathsManager(PathsManager):
 
     Assumes that the bandpass calibration table is named like bcal_dir/00.bcal'
     """
-    def __init__(self, utc_times_txt_path: str, msfile_dir: str, bcal_dir: str, flag_npy_path: str):
-        for d in (msfile_dir, bcal_dir, flag_npy_path):
-            if not path.exists(d):
+    def __init__(self, utc_times_txt_path: str, dadafile_dir:str=None, msfile_dir: str=None,
+                 bcal_dir: str=None, flag_npy_path: str=None):
+        for d in (dadafile_dir,msfile_dir, bcal_dir, flag_npy_path):
+            if d and not path.exists(d):
                 raise FileNotFoundError(f"File not found or path does not exist: {d}.")
-        super().__init__(utc_times_txt_path)
+        super().__init__(utc_times_txt_path, dadafile_dir)
         self.msfile_dir = msfile_dir
         self.bcal_dir = bcal_dir
         self.flag_npy_path = flag_npy_path
 
     def get_gaintable_path(self,  spw: str):
-        return f'{self.bcal_dir}/{spw}.bcal'
+        return f'{self.bcal_dir}/{spw}/{spw}.bcal'
 
     def get_ms_path(self, timestamp: datetime, spw: str):
         """
@@ -66,7 +70,7 @@ class OfflinePathsManager(PathsManager):
         """
         date = timestamp.date().isoformat()
         hour = f'{timestamp.hour:02d}'
-        return f'{self.msfile_dir}/{date}/{hour}/{timestamp.isoformat()}/{spw}_{timestamp.isoformat()}.ms'
+        return f'{self.msfile_dir}/{date}/hh={hour}/{timestamp.isoformat()}/{spw}_{timestamp.isoformat()}.ms'
 
     def get_flag_npy_path(self, timestamp):
         """
