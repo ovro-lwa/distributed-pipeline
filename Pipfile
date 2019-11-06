@@ -15,6 +15,7 @@ tornado = '~=4.2'
 pyyaml = "*"
 fabric = "*"
 flower = '*'
+ovro-lwa-orca = {editable = true,path = "."}
 
 [dev-packages]
 pytest = '*'
