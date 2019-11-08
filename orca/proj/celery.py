@@ -6,7 +6,7 @@ CELERY_APP_NAME = 'proj'
 app = Celery(CELERY_APP_NAME,
              broker='pyamqp://yuping:yuping@astm13:5672/yuping',
              backend='rpc://',
-             include=['orca.proj.longbandpass', 'orca.transform'])
+             include=['orca.proj.longbandpass', 'orca.transform', 'orca.proj.onedayaverage'])
 
 # Optional configuration, see the application user guide.
 app.conf.update(

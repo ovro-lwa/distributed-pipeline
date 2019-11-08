@@ -109,8 +109,8 @@ def sidereal_subtract_image2(im1_path, im2_path, psf_path, out_dir):
 Combinations of stuff to run to do actually dispatch the tasks via celery canvas.
 """
 def get_data():
-        s = datetime(2018, 3, 22, 1, 0, 0)
-        e = datetime(2018, 3, 22, 6, 0, 0)
+        s = datetime(2018, 3, 22, 6, 0, 0)
+        e = datetime(2018, 3, 22, 12, 0, 0)
         dispatch_dada2ms(s, e)
 
 
