@@ -5,7 +5,7 @@ import logging
 log = logging.getLogger(__name__)
 
 
-def average_ms(ms_list: List[str], ref_ms_index: int,  out_ms: str, column: str) -> str:
+def average_ms(ms_list: List[str], ref_ms_index: int,  out_ms: str, column: str, fault_tolerant: bool=True) -> str:
     """
     Average the list of measurement sets' select column.
     :param ms_list: the list of the measurement set.
@@ -21,7 +21,13 @@ def average_ms(ms_list: List[str], ref_ms_index: int,  out_ms: str, column: str)
         averaged_data = out_table.getcol(column) / count
         for i, ms in enumerate(ms_list):
             if i != ref_ms_index:
-                with tables.table(ms, readonly=True) as t:
-                    averaged_data += t.getcol(column) / count
+                try:
+                    with tables.table(ms, readonly=True) as t:
+                        averaged_data += t.getcol(column) / count
+                except RuntimeError as e:
+                    if fault_tolerant:
+                        log.exception('Skipping IO Error from measurement set:')
+                    else:
+                        raise e
         out_table.putcol(column, averaged_data)
     return path.abspath(out_ms)
