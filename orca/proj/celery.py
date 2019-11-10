@@ -11,6 +11,7 @@ app = Celery(CELERY_APP_NAME,
 # Optional configuration, see the application user guide.
 app.conf.update(
     result_expires=3600,
+    worker_prefetch_multiplier=1
 )
 
 if __name__ == '__main__':
