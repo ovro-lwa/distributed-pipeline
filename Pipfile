@@ -20,6 +20,7 @@ ovro-lwa-orca = {editable = true,path = "."}
 [dev-packages]
 pytest = '*'
 sphinx = '*'
+scikit-learn = '*'
 
 [requires]
 python_version = "3"
