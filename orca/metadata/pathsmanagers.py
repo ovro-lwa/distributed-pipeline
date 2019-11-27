@@ -59,7 +59,7 @@ class OfflinePathsManager(PathsManager):
         self.flag_npy_path = flag_npy_path
 
     def get_gaintable_path(self,  spw: str):
-        return f'{self.bcal_dir}/{spw}/{spw}.bcal'
+        return f'{self.bcal_dir}/{spw}_concat.bcal'
 
     def get_ms_path(self, timestamp: datetime, spw: str):
         """

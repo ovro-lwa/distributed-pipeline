@@ -18,13 +18,14 @@ logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
 pm = OfflinePathsManager(utc_times_txt_path='/home/yuping/utc_times.txt',
                          dadafile_dir='/lustre/data/2018-03-20_100hr_run',
-                         msfile_dir='/lustre/yuping/0-100-hr-reduction/blflag/msfile',
-                         bcal_dir='/lustre/yuping/2019-10-100-hr-take-two/2018-03-22T17:34:35')
+                         msfile_dir='/lustre/yuping/0-100-hr-reduction/salf/msfiles',
+                         bcal_dir='/lustre/yuping/2019-10-100-hr-take-two/bandpass/2018-03-22')
 
 
 def dispatch_dada2ms(start_time, end_time):
     spws = [f'{i:02d}' for i in range(22)]
-    params = [{'dada_file': pm.get_dada_path(s, time), 'out_ms': pm.get_ms_path(time, s), 'gaintable': pm.get_gaintable_path(s)}
+    params = [{'dada_file': pm.get_dada_path(s, time), 'out_ms': pm.get_ms_path(time, s),
+               'gaintable': pm.get_gaintable_path(s)}
               for time in pm.utc_times_mapping if start_time <= time < end_time
               for s in spws]
     logging.info(f'Making {len(params)} dada2ms calls.')
@@ -109,8 +110,8 @@ def sidereal_subtract_image2(im1_path, im2_path, psf_path, out_dir):
 Combinations of stuff to run to do actually dispatch the tasks via celery canvas.
 """
 def get_data():
-        s = datetime(2018, 3, 22, 12, 0, 0)
-        e = datetime(2018, 3, 23, 0, 0, 0)
+        s = datetime(2018, 3, 22, 2, 0, 0)
+        e = datetime(2018, 3, 22, 2, 30, 0)
         dispatch_dada2ms(s, e)
 
 
