@@ -120,7 +120,7 @@ def flag_bad_chans(msfile, band, usedatacol=False, generate_plot=False, apply_fl
 
             # write flags into FLAG column
             if apply_flag:
-                logging.info('NOT applying the changes to the measurement set.')
+                logging.info('Applying the changes to the measurement set.')
                 flagcol_altered = t.getcol('FLAG')
                 flagcol_altered[:,flaglist,:] = 1
                 t.putcol('FLAG', flagcol_altered)
