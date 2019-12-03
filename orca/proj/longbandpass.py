@@ -19,7 +19,8 @@ logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 pm = OfflinePathsManager(utc_times_txt_path='/home/yuping/utc_times.txt',
                          dadafile_dir='/lustre/data/2018-03-20_100hr_run',
                          msfile_dir='/lustre/yuping/0-100-hr-reduction/salf/msfiles',
-                         bcal_dir='/lustre/yuping/2019-10-100-hr-take-two/bandpass/2018-03-22')
+                         bcal_dir='/lustre/yuping/2019-10-100-hr-take-two/bandpass/2018-03-22',
+                         flag_npy_path='/home/yuping/100-hr-a-priori-flags/20191125-consolidated-flags/20191125-consolidated-flags.npy')
 
 
 def dispatch_dada2ms(start_time, end_time):
@@ -116,14 +117,14 @@ def get_data():
 
 
 def do_flag():
-    ms_list = sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/qual/msfiles/2018-03-22/hh=02/*/??_*ms'))
+    ms_list = sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-2?/hh=??/*/??_*ms'))
     logging.info(f'Making {len(ms_list)} apply_flag calls.')
-    group(apply_a_priori_flags.s(ms, '/home/yuping/100-hr-a-priori-flags/201906_consolidated.npy', True)
+    group(apply_a_priori_flags.s(ms, pm.get_flag_npy_path(None), True)
           for ms in ms_list)()
 
 
 def do_peel():
-    ms_list = sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/qual/msfiles/2018-03-22/hh=02/*/??_*ms'))
+    ms_list = sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-2?/hh=0?/*/??_*ms'))
     logging.info(f'Making {len(ms_list)} peeling calls.')
     group(peel.s(ms, '/home/yuping/casA_resolved_rfi.json') for ms in ms_list)()
 
@@ -132,30 +133,31 @@ def do_flag_chans():
     spws = [f'{i:02d}' for i in range(22)]
     for s in spws:
         # TODO generate this without having to stat. This doesn't scale well on lustre
-        ms_list = sorted(glob.glob(f'/lustre/yuping/0-100-hr-reduction/qual/msfiles/2018-03-22/hh=02/*/{s}_*.ms'))
+        ms_list = sorted(glob.glob(f'/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-2?/hh=??/*/{s}_*.ms'))
         logging.info(f'Making {len(ms_list)} flag_chans calls.')
         group(flag_chans.s(ms, s) for ms in ms_list)()
 
 
 def do_first_batch_image():
-    prefix = '/lustre/yuping/0-100-hr-reduction/qual/msfiles/2018-03-22/hh=02'
-    ms_list = sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/qual/msfiles/2018-03-22/hh=02/*'))
+    prefix = '/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-22/hh=02'
+    ms_list = sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-22/hh=02/*'))
     group(make_first_image.s(prefix, os.path.basename(ms),
-                             '/lustre/yuping/0-100-hr-reduction/qual/images/2018-03-22/hh=02') for ms in ms_list)()
+                             '/lustre/yuping/0-100-hr-reduction/salf/images/2018-03-22/hh=02') for ms in ms_list)()
 
 
 def do_subsequent_frame_subtraction():
-    ms_list = sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/qual/msfiles/2018-03-23/hh=02/*'))
+    ms_list = sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-23/hh=01/*'))
+    out_dir = '/lustre/yuping/0-100-hr-reduction/salf/subsequent-subtraction/2018-03-23/hh=01'
+    os.makedirs(out_dir, exist_ok=True)
     group(subsequent_frame_subtraction.s(ms_list[i], ms_list[i+1],
-                                         os.path.basename(ms_list[i]), os.path.basename(ms_list[i+1]),
-                                 '/lustre/yuping/0-100-hr-reduction/qual/subsequent-subtraction/2018-03-23/hh=02') for
-          i, dir1 in enumerate(ms_list[:-1]))()
+                                         os.path.basename(ms_list[i]), os.path.basename(ms_list[i+1]), out_dir)
+          for i, dir1 in enumerate(ms_list[:-1]))()
 
 
 def generate_datetime_pairs() -> List[Tuple[datetime, datetime]]:
     sday = timedelta(days=0, hours=23, minutes=56, seconds=4)
     day_1_times = [ datetime.fromisoformat(os.path.basename(p)) for p in
-                    sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/qual/msfiles/2018-03-22/hh=02/*'))]
+                    sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-22/hh=02/*'))]
     return [(one, one + sday) for one in day_1_times if one > datetime(2018, 3, 22, 2, 3, 56)]
 
 
@@ -166,11 +168,11 @@ def prep_sidereal_subtraction():
     ms_pairs = generate_datetime_pairs()
     logging.info(f'There are {len(ms_pairs)} pairs of sidereally separated measurement sets to process.')
     group(prep_image_for_sidereal_subtraction.s(
-        '/lustre/yuping/0-100-hr-reduction/qual/msfiles/2018-03-22/hh=02',
-        '/lustre/yuping/0-100-hr-reduction/qual/msfiles/2018-03-23/hh=02',
+        '/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-22/hh=02',
+        '/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-23/hh=02',
         p[0].isoformat(), p[1].isoformat(),
-        '/lustre/yuping/0-100-hr-reduction/qual/prep-sidereal-images/2018-03-22/hh=02',
-        '/lustre/yuping/0-100-hr-reduction/qual/prep-sidereal-images/2018-03-23/hh=02')
+        '/lustre/yuping/0-100-hr-reduction/salf/prep-sidereal-images/2018-03-22/hh=02',
+        '/lustre/yuping/0-100-hr-reduction/salf/prep-sidereal-images/2018-03-23/hh=02')
           for p in ms_pairs)()
 
 
@@ -190,12 +192,13 @@ def do_sidereal_subtraction():
 def do_sidereal_subtraction2():
     # call the kit
     # do the subtraction
-    out_dir = '/lustre/yuping/0-100-hr-reduction/qual/sidereal-subtraction-2/2018-03-22/hh=02'
+    out_dir = '/lustre/yuping/0-100-hr-reduction/salf/sidereal-subtraction-2/2018-03-22/hh=02'
+    os.makedirs(out_dir, exist_ok=True)
     pairs = generate_datetime_pairs()
     logging.info(f'There are {len(pairs)} pairs of sidereally separated images to process.')
     group(sidereal_subtract_image2.s(
-        f'/lustre/yuping/0-100-hr-reduction/qual/prep-sidereal-images/2018-03-22/hh=02/{p[0].isoformat()}-image.fits',
-        f'/lustre/yuping/0-100-hr-reduction/qual/prep-sidereal-images/2018-03-23/hh=02/{p[1].isoformat()}-image.fits',
-        f'/lustre/yuping/0-100-hr-reduction/qual/prep-sidereal-images/2018-03-22/hh=02/{p[0].isoformat()}-psf.fits',
+        f'/lustre/yuping/0-100-hr-reduction/salf/prep-sidereal-images/2018-03-22/hh=02/{p[0].isoformat()}-image.fits',
+        f'/lustre/yuping/0-100-hr-reduction/salf/prep-sidereal-images/2018-03-23/hh=02/{p[1].isoformat()}-image.fits',
+        f'/lustre/yuping/0-100-hr-reduction/salf/prep-sidereal-images/2018-03-22/hh=02/{p[0].isoformat()}-psf.fits',
         out_dir)
           for p in pairs)()
