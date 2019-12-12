@@ -12,7 +12,7 @@ sudo /sbin/service rabbitmq-server start
 ## Launch workers 
 ### Start the workers with concurrencey 20 or whatever you like
 ```
- pdsh -w astm[04-12] 'cd /home/yuping/transient && celery multi start w1 -A orca.proj --concurrency=20 -l info -n %h --pidfile=/var/run/celery/%n.pid --logfile=/var/log/celery/%n%I.log'
+start_workers.py --concurrency 20
 ```
 
 ## Shutdown/Cleanup
