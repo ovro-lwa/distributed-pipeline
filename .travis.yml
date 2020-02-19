@@ -8,5 +8,9 @@ matrix:
 install:
   - pip install pipenv
   - pipenv install --dev
-  - pytest
 
+script:
+  - pytest --cov=orca
+
+after_success:
+  - codecov

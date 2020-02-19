@@ -20,6 +20,8 @@ ovro-lwa-orca = {editable = true,path = "."}
 [dev-packages]
 pytest = '*'
 sphinx = '*'
+codecov = '*'
+pytest-cov = '*'
 scikit-learn = '*'
 
 [requires]

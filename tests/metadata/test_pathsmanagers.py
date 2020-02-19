@@ -21,7 +21,7 @@ def test_with_bad_path():
 def test_get_gaintable_path():
     pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt',
                              '.', '.', '.')
-    assert pm.get_gaintable_path('00') == './00/00.bcal'
+    assert pm.get_gaintable_path('00') == './00_concat.bcal'
 
 def test_get_ms_file():
     pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt',
