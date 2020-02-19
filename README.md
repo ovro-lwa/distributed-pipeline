@@ -1,4 +1,4 @@
-# astm-transient-stuff
+# orca
 ## Set up development environment
 Run in this directory (with pipenv installed)
 ```
@@ -24,12 +24,9 @@ It is recommended that pycharm be used for development. I have not settled on a
 style linter or a documentation format yet...
 
 ## Run with celery
-I put some of the celery management commands in celery.md. But to run things with
-celery. Do the following.
+TBA, but meanwhile see scripts in `proj` directory. celery admin notes are in `celery.md`.
 
 ## Code Structure
 `orca` is where the wrappers and functions that do single units of work sit.
 
 `proj` contains code that executes the pipeline with celery.
-
-`notebook` contains ad-hoc analyses and experimental things.
