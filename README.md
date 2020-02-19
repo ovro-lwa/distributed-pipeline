@@ -1,4 +1,6 @@
 # orca
+[![Build Status](https://travis-ci.com/ovro-lwa/distributed-pipeline.svg?branch=master)](https://travis-ci.com/ovro-lwa/distributed-pipeline)
+[![codecov](https://codecov.io/gh/ovro-lwa/distributed-pipeline/branch/master/graph/badge.svg)](https://codecov.io/gh/ovro-lwa/distributed-pipeline)
 ## Set up development environment
 Run in this directory (with pipenv installed)
 ```
