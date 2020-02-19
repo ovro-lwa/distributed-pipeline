@@ -1,6 +1,5 @@
 from datetime import datetime
 import logging
-from typing import List, Dict
 from os import path
 import os
 import subprocess
@@ -8,28 +7,6 @@ import subprocess
 # TODO turn this into a class and pull theses things into a config.
 dada2ms_exec = '/opt/astro/dada2ms/bin/dada2ms-tst3'
 dada2ms_config = '/home/yuping/dada2ms.cfg'
-
-
-def get_ms_name(timestamp: datetime, spw: str, out_dir: str) -> str:
-    """
-    This should be managed by a different class (SubdirConvention or something).
-    :param timestamp:
-    :param spw:
-    :param out_dir:
-    :return:
-    """
-    return f'{out_dir}/{timestamp.isoformat()}/{spw}_{timestamp.isoformat()}.ms'
-
-
-def get_ms_name_bandpass(timestamp: datetime, spw: str, out_dir: str) -> str:
-    """
-    This should be managed by a different class (SubdirConvention or something).
-    :param timestamp:
-    :param spw:
-    :param out_dir:
-    :return:
-    """
-    return f'{out_dir}/{spw}/{spw}_{timestamp.isoformat()}.ms'
 
 
 def run_dada2ms(dada_file: str, out_ms: str, gaintable: str = None) -> str:

@@ -1,7 +1,8 @@
-from orca.proj.boilerplate import run_dada2ms, run_chgcentre, peel, apply_a_priori_flags, flag_chans
+from orca.proj.boilerplate import run_dada2ms, peel, apply_a_priori_flags, flag_chans
 from .celery import app
 from celery import group
-from ..transform import dada2ms, change_phase_centre, imaging, sidereal_subtraction_kit
+from ..transform import sidereal_subtraction_kit
+from ..wrapper import change_phase_centre, wsclean
 from ..flagging import merge_flags
 from ..metadata.pathsmanagers import OfflinePathsManager
 from ..utils import image_sub
@@ -43,7 +44,7 @@ def make_first_image(prefix, datetime_string, out_dir):
     logging.info(f'Glob statement is {prefix}/{datetime_string}/??_{datetime_string}.ms')
     ms_list = sorted(glob.glob(f'{prefix}/{datetime_string}/??_{datetime_string}.ms'))
     assert len(ms_list) == 22
-    imaging.make_image(ms_list, datetime_string, out_dir)
+    wsclean.make_image(ms_list, datetime_string, out_dir)
     pass
 
 @app.task
@@ -62,8 +63,8 @@ def subsequent_frame_subtraction(dir1, dir2, datetime_1, datetime_2, out_dir):
         for s in spws:
             merge_flags.merge_flags(f'{tree1}/{s}_{datetime_1}.ms', f'{tree2}/{s}_{datetime_2}.ms')
             change_phase_centre.change_phase_center(f'{tree2}/{s}_{datetime_2}.ms', new_phase_center)
-        im1 = imaging.make_image(sorted(glob.glob(f'{tree2}/??_{datetime_2}.ms')), datetime_2, temp_tree)
-        im2 = imaging.make_image(sorted(glob.glob(f'{tree1}/??_{datetime_1}.ms')), datetime_1, temp_tree)
+        im1 = wsclean.make_image(sorted(glob.glob(f'{tree2}/??_{datetime_2}.ms')), datetime_2, temp_tree)
+        im2 = wsclean.make_image(sorted(glob.glob(f'{tree1}/??_{datetime_1}.ms')), datetime_1, temp_tree)
         image_sub.image_sub(im1, im2, out_dir)
     finally:
         shutil.rmtree(temp_tree)
@@ -86,9 +87,9 @@ def prep_image_for_sidereal_subtraction(dir1, dir2, datetime_1, datetime_2, out_
         for s in spws:
             merge_flags.merge_flags(f'{tree1}/{s}_{datetime_1}.ms', f'{tree2}/{s}_{datetime_2}.ms')
             change_phase_centre.change_phase_center(f'{tree2}/{s}_{datetime_2}.ms', new_phase_center)
-        im1, psf = imaging.make_image(sorted(glob.glob(f'{tree1}/??_{datetime_1}.ms')), datetime_1,
+        im1, psf = wsclean.make_image(sorted(glob.glob(f'{tree1}/??_{datetime_1}.ms')), datetime_1,
                                       temp_tree, make_psf=True)
-        im2 = imaging.make_image(sorted(glob.glob(f'{tree2}/??_{datetime_2}.ms')), datetime_2, temp_tree)
+        im2 = wsclean.make_image(sorted(glob.glob(f'{tree2}/??_{datetime_2}.ms')), datetime_2, temp_tree)
         shutil.copy(im1, out_dir1)
         shutil.copy(psf, out_dir1)
         shutil.copy(im2, out_dir2)
