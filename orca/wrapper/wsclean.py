@@ -15,14 +15,12 @@ def make_image(ms_list: List[str], date_times_string: str, out_dir: str, make_ps
                    AIPSPATH='/opt/astro/casa-data dummy dummy')
     p = subprocess.Popen([WSCLEAN_1_11_EXEC, '-size', '4096', '4096', '-scale', '0.03125',
                           '-niter', '0', '-weight', 'briggs', '0',
-                          '-weighting-rank-filter', '3', '-weighting-rank-filter-size', '128',
                           '-no-update-model-required', '-no-reorder',
                           '-j', '10', '-name', f'{out_dir}/{date_times_string}'] + ms_list, env=new_env)
     p.communicate()
     if make_psf:
         p = subprocess.Popen([WSCLEAN_1_11_EXEC, '-size', '8192', '8192', '-scale', '0.03125',
                               '-niter', '0', '-weight', 'briggs', '0',
-                              '-weighting-rank-filter', '3', '-weighting-rank-filter-size', '128',
                               '-no-update-model-required', '-no-reorder', '-make-psf-only',
                               '-j', '10', '-name', f'{out_dir}/{date_times_string}'] + ms_list, env=new_env)
         p.communicate()
