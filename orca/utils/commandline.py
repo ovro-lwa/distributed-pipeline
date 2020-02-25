@@ -15,7 +15,7 @@ def check_output(cmd: List[str]) -> str:
     :return:
     """
     try:
-        return subprocess.check_output(cmd, stderr=subprocess.PIPE)
+        return subprocess.check_output(cmd, stderr=subprocess.PIPE).decode()
     except subprocess.CalledProcessError as e:
         log.error(f'Error while executing {str(cmd)}: stderr is {e.stderr}.')
         raise e

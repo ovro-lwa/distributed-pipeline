@@ -38,7 +38,7 @@ def run_dada2ms(dada_file: str, out_ms: str, gaintable: str = None) -> str:
             [dada2ms_exec, '-c', dada2ms_config, dada_file, out_ms], env=new_env)
     stdoutdata, stderrdata = proc.communicate()
     if proc.returncode is not 0:
-        logging.error(f'Error in data2ms: {stderrdata}')
+        logging.error(f'Error in data2ms: {stderrdata.decode()}')
         raise Exception('Error in dada2ms.')
     return path.abspath(out_ms)
 

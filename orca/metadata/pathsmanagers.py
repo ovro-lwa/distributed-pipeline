@@ -1,10 +1,11 @@
 from abc import ABC, abstractmethod
 from datetime import datetime
 from os import path
+from typing import Optional
 
 
 class PathsManager(ABC):
-    def __init__(self, utc_times_txt_path: str, dadafile_dir: str):
+    def __init__(self, utc_times_txt_path: str, dadafile_dir: Optional[str]):
         self.dadafile_dir = dadafile_dir
         # do the mapping thing
         self.utc_times_mapping = {}
@@ -48,7 +49,7 @@ class OfflinePathsManager(PathsManager):
 
     Assumes that the bandpass calibration table is named like bcal_dir/00.bcal'
     """
-    def __init__(self, utc_times_txt_path: str, dadafile_dir:str=None, msfile_dir: str=None,
+    def __init__(self, utc_times_txt_path: str, dadafile_dir: Optional[str]=None, msfile_dir: Optional[str]=None,
                  bcal_dir: str=None, flag_npy_path: str=None):
         for d in (dadafile_dir,msfile_dir, bcal_dir, flag_npy_path):
             if d and not path.exists(d):

@@ -10,7 +10,7 @@ WSCLEAN_1_11_EXEC = '/opt/astro/wsclean-1.11-gcc4.8.5_cxx11/bin/wsclean'
 """
 
 
-def make_image(ms_list: List[str], date_times_string: str, out_dir: str, make_psf: bool=False):
+def make_image(ms_list: List[str], date_times_string: str, out_dir: str, make_psf: bool = False):
     new_env = dict(os.environ, LD_LIBRARY_PATH='/opt/astro/mwe/usr/lib64:/opt/astro/lib/:/opt/astro/casacore-1.7.0/lib',
                    AIPSPATH='/opt/astro/casa-data dummy dummy')
     p = subprocess.Popen([WSCLEAN_1_11_EXEC, '-size', '4096', '4096', '-scale', '0.03125',

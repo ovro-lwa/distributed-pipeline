@@ -23,6 +23,7 @@ sphinx = '*'
 codecov = '*'
 pytest-cov = '*'
 scikit-learn = '*'
+mypy = "*"
 
 [requires]
 python_version = "3"

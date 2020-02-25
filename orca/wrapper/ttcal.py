@@ -9,10 +9,9 @@ TTCAL_EXEC = '/opt/astro/mwe/bin/ttcal-0.3.0'
 
 def peel_with_ttcal(ms: str, sources: str):
     """
-    Use TTCal to peel sources. Assumes that the input measurement set only has DATA column and writes to the
-    CORRECTED_DATA column.
-    :param ms:
-    :param sources:
+    Use TTCal to peel sources.
+    :param ms: Path to the measurement set.
+    :param sources: Path to the sources.json file.
     :return:
     """
     new_env = dict(os.environ, LD_LIBRARY_PATH='/opt/astro/mwe/usr/lib64:/opt/astro/lib/',
@@ -22,7 +21,7 @@ def peel_with_ttcal(ms: str, sources: str):
                             stderr=subprocess.PIPE, stdout=subprocess.PIPE)
     stdoutdata, stderrdata = proc.communicate()
     if proc.returncode is not 0:
-        logging.error(f'Error in TTCal: {stderrdata}')
-        logging.info(f'stdout is {stdoutdata}')
+        logging.error(f'Error in TTCal: {stderrdata.decode()}')
+        logging.info(f'stdout is {stdoutdata.decode()}')
         raise Exception('Error in TTCal.')
     return ms
