@@ -34,7 +34,7 @@ def test_shell_equal_true_messes_up_error_catching():
 
 
 def test_commandline_check_output_gives_output():
-    assert commandline.check_output(['echo', '1']) == b"1\n"
+    assert commandline.check_output(['echo', '1']) == "1\n"
 
 
 def test_commandline_check_output_return_stderr():
