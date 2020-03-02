@@ -6,4 +6,5 @@ REMOTE_USER=yuping
 
 rsync -aP --delete --exclude 'notebooks' --exclude '.pytest_cache' --exclude '.venv' \
     --exclude '*__pycache__*' --exclude 'ovro_lwa_orca.egg-info' \
+    --exclude '.*cache' \
     --exclude 'Pipfile.lock' --exclude '.idea' $LOCAL_DIR ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR} 

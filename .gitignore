@@ -1,7 +1,5 @@
 # No I am never committing any data
 *.ms
-# Pipenv artifacts
-Pipfile.lock
 # PyCharm stuff
 .idea
 # Byte-compiled / optimized / DLL files

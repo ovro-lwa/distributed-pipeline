@@ -8,9 +8,12 @@ matrix:
     dist: xenial
     sudo: true
 
+before_install:
+  - sudo apt-get -y install libgfortran3
+
 install:
   - pip install pipenv
-  - pipenv install --dev
+  - pipenv sync --dev
 
 script:
   - pytest --cov=orca
