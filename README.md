@@ -2,6 +2,9 @@
 [![Build Status](https://travis-ci.com/ovro-lwa/distributed-pipeline.svg?branch=master)](https://travis-ci.com/ovro-lwa/distributed-pipeline)
 [![codecov](https://codecov.io/gh/ovro-lwa/distributed-pipeline/branch/master/graph/badge.svg)](https://codecov.io/gh/ovro-lwa/distributed-pipeline)
 ## Set up development environment
+Before you start, it's important to make sure that other installations of casacore are not
+in your `LD_LIBRARY_PATH`; otherwise it may mess up casa6.
+
 If you have not done so, create a barebone python3.6 environment with conda
 ```
 conda create --name py36_orca python=3.6
@@ -16,7 +19,7 @@ Run in this directory (with pipenv installed)
 ```
 pipenv sync --dev
 ```
-This should install the dependencies of the project. Then run in the pipenv-managed virtualenv
+This should install the dependencies of the project (with versions etc as specified in `Pipfile.lock`). Then run in the pipenv-managed virtualenv
 (which can be invoked with `pipenv shell` or prefix the command with `pipenv run`)
 
 Then run

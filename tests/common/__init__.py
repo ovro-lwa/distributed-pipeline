@@ -1,4 +1,5 @@
 import yaml
 from os import path
 
-config = yaml.safe_load(open(f'{path.dirname(__file__)}/../resources/test_config.yml'))
+CONFIG = yaml.safe_load(open(f'{path.dirname(__file__)}/../resources/test_config.yml'))
+TEST_FITS = f'{path.dirname(__file__)}/../resources/2018-03-22T02:07:54-dirty.fits'

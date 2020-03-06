@@ -4,12 +4,13 @@ Convenience executable to start celery worker across the cluster.
 from fabric import ThreadingGroup
 import argparse
 
-ENV_DIR = '/opt/astro/devel/yuping/transient/'
+ENV_DIR = '/opt/astro/devel/yuping/orca/'
 
 
 def main(hosts, concurrency):
     with ThreadingGroup(*hosts) as sg:
-        results = sg.run(f'cd {ENV_DIR} && /opt/astro/bin/pipenv run celery multi start w1 -A orca.proj '
+        results = sg.run('/opt/astro/anaconda3/bin/activate py36_orca && '
+                         f'cd {ENV_DIR} && /opt/astro/bin/pipenv run celery multi start w1 -A orca.proj '
                          f'--concurrency={concurrency} '
                          f'-l info -n %h --pidfile=/var/run/celery/%n.pid --logfile=/var/log/celery/%n%I.log')
 
