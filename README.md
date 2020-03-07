@@ -38,7 +38,7 @@ which should run the tests and output a report.
 It is recommended that pycharm be used for development. I have not settled on a
 style linter or a documentation format yet...
 
-Adding a function to orca also requires integrating it with celery. This [example commit](https://github.com/ovro-lwa/distributed-pipeline/commit/e1e577437bef3c19162bdab1cd3973bee2128c04]) shows the way to add and integrate a new function.
+Adding a function to orca also requires integrating it with celery. This [example commit](https://github.com/ovro-lwa/distributed-pipeline/commit/e1e577437bef3c19162bdab1cd3973bee2128c04) shows the way to add and integrate a new function.
 
 ## Run with celery
 TBA, but meanwhile see scripts in `proj` directory. celery admin notes are in `celery.md`.
