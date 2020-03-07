@@ -1,7 +1,11 @@
 from orca.flagging import merge_flags, flag_bad_chans
 from orca.proj.celery import app
 from orca.wrapper import dada2ms, change_phase_centre, ttcal
+from orca.transform import bandpasscasa
 
+@app.task
+def run_listobs(ms: str):
+    bandpasscasa.list_obs(ms)
 
 @app.task
 def run_dada2ms(dada_file, out_ms, gaintable=None):

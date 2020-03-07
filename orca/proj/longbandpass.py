@@ -1,7 +1,7 @@
 from orca.proj.boilerplate import run_dada2ms, peel, apply_a_priori_flags, flag_chans
 from .celery import app
 from celery import group
-from ..transform import sidereal_subtraction_kit
+from ..transform import siderealsubtraction
 from ..wrapper import change_phase_centre, wsclean
 from ..flagging import merge_flags
 from ..metadata.pathsmanagers import OfflinePathsManager
