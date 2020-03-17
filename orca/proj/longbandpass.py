@@ -1,7 +1,7 @@
-from orca.proj.boilerplate import run_dada2ms, peel, apply_a_priori_flags, flag_chans
+from orca.proj.boilerplate import run_dada2ms, peel, apply_a_priori_flags, flag_chans, make_first_image
 from .celery import app
 from celery import group
-from ..transform import sidereal_subtraction_kit
+from ..transform import siderealsubtraction
 from ..wrapper import change_phase_centre, wsclean
 from ..flagging import merge_flags
 from ..metadata.pathsmanagers import OfflinePathsManager
@@ -38,14 +38,6 @@ def dispatch_dada2ms(start_time, end_time):
 A bunch of light wrapper that converts existing functions into celery tasks
 """
 
-
-@app.task
-def make_first_image(prefix, datetime_string, out_dir):
-    logging.info(f'Glob statement is {prefix}/{datetime_string}/??_{datetime_string}.ms')
-    ms_list = sorted(glob.glob(f'{prefix}/{datetime_string}/??_{datetime_string}.ms'))
-    assert len(ms_list) == 22
-    wsclean.make_image(ms_list, datetime_string, out_dir)
-    pass
 
 @app.task
 def subsequent_frame_subtraction(dir1, dir2, datetime_1, datetime_2, out_dir):
@@ -99,33 +91,34 @@ def prep_image_for_sidereal_subtraction(dir1, dir2, datetime_1, datetime_2, out_
 
 @app.task
 def sidereal_subtract_image(im1_path, im2_path, out_dir):
-    sidereal_subtraction_kit.subtract_images(im1_path, im2_path, out_dir)
+    siderealsubtraction.subtract_images(im1_path, im2_path, out_dir)
 
 
 @app.task
 def sidereal_subtract_image2(im1_path, im2_path, psf_path, out_dir):
     # subtract the crab and do a flux scale.
-    sidereal_subtraction_kit.subtract_images(im1_path, im2_path, out_dir, psf_path, subtract_crab=True, scale=True)
+    siderealsubtraction.subtract_images(im1_path, im2_path, out_dir, psf_path, subtract_crab=True, scale=True)
+
 
 
 """
 Combinations of stuff to run to do actually dispatch the tasks via celery canvas.
 """
 def get_data():
-        s = datetime(2018, 3, 22, 2, 0, 0)
-        e = datetime(2018, 3, 22, 2, 30, 0)
+        s = datetime(2018, 3, 23, 2, 0, 0)
+        e = datetime(2018, 3, 23, 4, 0, 0)
         dispatch_dada2ms(s, e)
 
 
 def do_flag():
-    ms_list = sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-2?/hh=??/*/??_*ms'))
+    ms_list = sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-23/hh=0?/*/??_*ms'))
     logging.info(f'Making {len(ms_list)} apply_flag calls.')
     group(apply_a_priori_flags.s(ms, pm.get_flag_npy_path(None), True)
           for ms in ms_list)()
 
 
 def do_peel():
-    ms_list = sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-2?/hh=0?/*/??_*ms'))
+    ms_list = sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-23/hh=0?/*/??_*ms'))
     logging.info(f'Making {len(ms_list)} peeling calls.')
     group(peel.s(ms, '/home/yuping/casA_resolved_rfi.json') for ms in ms_list)()
 
@@ -134,21 +127,23 @@ def do_flag_chans():
     spws = [f'{i:02d}' for i in range(22)]
     for s in spws:
         # TODO generate this without having to stat. This doesn't scale well on lustre
-        ms_list = sorted(glob.glob(f'/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-2?/hh=??/*/{s}_*.ms'))
+        ms_list = sorted(glob.glob(f'/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-23/hh=0?/*/{s}_*.ms'))
         logging.info(f'Making {len(ms_list)} flag_chans calls.')
         group(flag_chans.s(ms, s) for ms in ms_list)()
 
 
 def do_first_batch_image():
-    prefix = '/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-22/hh=02'
-    ms_list = sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-22/hh=02/*'))
+    hh = '13'
+    prefix = f'/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-22/hh={hh}'
+    ms_list = sorted(glob.glob(f'/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-22/hh={hh}/*'))
+    logging.info(f'Making {len(ms_list)} wsclean calls.')
     group(make_first_image.s(prefix, os.path.basename(ms),
-                             '/lustre/yuping/0-100-hr-reduction/salf/images/2018-03-22/hh=02') for ms in ms_list)()
+                             f'/lustre/yuping/0-100-hr-reduction/salf/images/2018-03-22/hh={hh}') for ms in ms_list)()
 
 
 def do_subsequent_frame_subtraction():
-    ms_list = sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-23/hh=01/*'))
-    out_dir = '/lustre/yuping/0-100-hr-reduction/salf/subsequent-subtraction/2018-03-23/hh=01'
+    ms_list = sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-22/hh=1?/*'))
+    out_dir = '/lustre/yuping/0-100-hr-reduction/salf/subsequent-subtraction/2018-03-22/hh=01'
     os.makedirs(out_dir, exist_ok=True)
     group(subsequent_frame_subtraction.s(ms_list[i], ms_list[i+1],
                                          os.path.basename(ms_list[i]), os.path.basename(ms_list[i+1]), out_dir)
@@ -157,7 +152,7 @@ def do_subsequent_frame_subtraction():
 
 def generate_datetime_pairs() -> List[Tuple[datetime, datetime]]:
     sday = timedelta(days=0, hours=23, minutes=56, seconds=4)
-    day_1_times = [ datetime.fromisoformat(os.path.basename(p)) for p in
+    day_1_times = [ datetime.fromisoformat(os.path.basename(p)) for p in  # type: ignore
                     sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-22/hh=02/*'))]
     return [(one, one + sday) for one in day_1_times if one > datetime(2018, 3, 22, 2, 3, 56)]
 

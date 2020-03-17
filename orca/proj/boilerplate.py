@@ -1,8 +1,15 @@
+import glob
+import os
+import logging
+
 from orca.flagging import merge_flags, flag_bad_chans
 from orca.proj.celery import app
-from orca.wrapper import dada2ms, change_phase_centre, ttcal
+from orca.wrapper import dada2ms, change_phase_centre, ttcal, wsclean
 
 
+"""
+Celery adapter on top of transforms.
+"""
 @app.task
 def run_dada2ms(dada_file, out_ms, gaintable=None):
     dada2ms.run_dada2ms(dada_file, out_ms, gaintable)
@@ -36,3 +43,12 @@ def apply_ant_flag(ms_file, ants):
 def flag_chans(ms, spw):
     flag_bad_chans.flag_bad_chans(ms, spw, apply_flag=True)
     return ms
+
+
+@app.task
+def make_first_image(prefix, datetime_string, out_dir):
+    logging.info(f'Glob statement is {prefix}/{datetime_string}/??_{datetime_string}.ms')
+    os.makedirs(out_dir,exist_ok=True)
+    ms_list = sorted(glob.glob(f'{prefix}/{datetime_string}/??_{datetime_string}.ms'))
+    assert len(ms_list) == 22
+    wsclean.make_image(ms_list, datetime_string, out_dir)
