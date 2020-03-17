@@ -1,6 +1,9 @@
 import pytest
 from mock import patch, Mock
+import shlex
+
 from orca.wrapper import wsclean
+
 
 @patch('subprocess.Popen')
 def test_wsclean(mocked_Popen):
@@ -9,12 +12,13 @@ def test_wsclean(mocked_Popen):
     mocked_p.communicate.return_value = (b'a', b'b')
     mocked_p.returncode = 0
 
-    wsclean.wsclean(['test.ms'], '.', 'test', ['-size', '4096', '4096'])
-    mocked_Popen.assert_called_once_with([wsclean.WSCLEAN_1_11_EXEC, '-size',
-                                          '4096', '4096', '-name', './test', 'test.ms'], env=wsclean.NEW_ENV)
+    wsclean.wsclean(['test.ms'], '.', 'test', ['-size', '4096', '4096', '-weight', '0'])
+    mocked_Popen.assert_called_once_with(
+        shlex.split(f'{wsclean.WSCLEAN_1_11_EXEC} -size 4096 4096 -weight 0 -name ./test test.ms'), env=wsclean.NEW_ENV)
+
 
 @patch('subprocess.Popen')
-def test_wsclean(mocked_Popen):
+def test_wsclean_subprocess_error(mocked_Popen):
     mocked_p = Mock()
     mocked_Popen.return_value = mocked_p
     mocked_p.communicate.return_value = (b'a', b'b')

@@ -12,7 +12,7 @@ Celery adapter on top of transforms.
 """
 @app.task
 def run_dada2ms(dada_file, out_ms, gaintable=None):
-    dada2ms.run_dada2ms(dada_file, out_ms, gaintable)
+    dada2ms.dada2ms(dada_file, out_ms, gaintable)
 
 
 @app.task
