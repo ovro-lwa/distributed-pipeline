@@ -2,6 +2,12 @@ language: python
 
 cache: pip
 
+# whitelist
+branches:
+  only:
+    - master
+    - prod
+
 matrix:
   include:
     python: 3.6
