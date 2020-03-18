@@ -7,7 +7,7 @@ in your `LD_LIBRARY_PATH`; otherwise it may mess up casa6.
 
 If you have not done so, create a barebone python3.6 environment with conda
 ```
-conda create --name py36_orca python=3.6
+conda create --name py36_orca python=3.6 pipenv
 ```
 
 Activate with
@@ -15,18 +15,27 @@ Activate with
 conda activate py36_orca
 ```
 
-Run in this directory (with pipenv installed)
+Helpful environment variables to add to your `.bashrc`:
+```
+export PIPENV_VENV_IN_PROJECT=1
+export PIPENV_CACHE_DIR='/opt/astro/devel/<username>/cache/pipenv/'
+export TMPDIR='/opt/astro/devel/<username/cache/'
+```
+
+Run in this directory (need something about `git checkout Pipfile.lock` here?):
 ```
 pipenv sync --dev
 ```
-This should install the dependencies of the project (with versions etc as specified in `Pipfile.lock`). Then run in the pipenv-managed virtualenv
-(which can be invoked with `pipenv shell` or prefix the command with `pipenv run`)
+This should install the dependencies of the project (with versions etc as specified in `Pipfile.lock`). Then run the pipenv-managed virtualenv:
+```pipenv shell```
+or prefix any command with:
+```pipenv run```
 
 Then run
 ```
 pipenv install -e .
 ```
-, which will install the package in development mode, so that libraries can be called and
+This will install the package in development mode, so that libraries can be called and
 binaries be executed. This can be re-run after code changes.
 
 To run the tests, do
