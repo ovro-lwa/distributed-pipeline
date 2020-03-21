@@ -19,9 +19,12 @@ def peel_with_ttcal(ms: str, sources: str):
     proc = subprocess.Popen([TTCAL_EXEC, 'peel', ms, sources, '--beam', 'sine', '--maxiter', '50',
                              '--tolerance', '1e-4', '--minuvw', '10'], env=new_env,
                             stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-    stdoutdata, stderrdata = proc.communicate()
-    if proc.returncode is not 0:
-        logging.error(f'Error in TTCal: {stderrdata.decode()}')
-        logging.info(f'stdout is {stdoutdata.decode()}')
-        raise Exception('Error in TTCal.')
+    try:
+        stdoutdata, stderrdata = proc.communicate()
+        if proc.returncode is not 0:
+            logging.error(f'Error in TTCal: {stderrdata.decode()}')
+            logging.info(f'stdout is {stdoutdata.decode()}')
+            raise Exception('Error in TTCal.')
+    finally:
+        proc.terminate()
     return ms

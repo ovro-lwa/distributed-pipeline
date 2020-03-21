@@ -35,11 +35,14 @@ def make_image(ms_list: List[str], date_times_string: str, out_dir: str, make_ps
 def wsclean(ms_list: List[str], out_dir: str, filename_prefix: str, arg_list: List[str]) -> Tuple[str, str]:
     arg_list = [WSCLEAN_1_11_EXEC] + arg_list + ['-name', f'{out_dir}/{filename_prefix}'] + ms_list
     proc = subprocess.Popen(arg_list, env=NEW_ENV, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    stdoutdata, stderrdata = proc.communicate()
-    if proc.returncode is not 0:
-        if stderrdata:
-            log.error(f'Error in wsclean: {stderrdata.decode()}')
-        if stdoutdata:
-            log.info(f'stdout is {stdoutdata.decode()}')
-        raise Exception('Error in wsclean.')
+    try:
+        stdoutdata, stderrdata = proc.communicate()
+        if proc.returncode is not 0:
+            if stderrdata:
+                log.error(f'Error in wsclean: {stderrdata.decode()}')
+            if stdoutdata:
+                log.info(f'stdout is {stdoutdata.decode()}')
+            raise Exception('Error in wsclean.')
+    finally:
+        proc.terminate()
     return f'{out_dir}/{filename_prefix}-image.fits', f'{out_dir}/{filename_prefix}-psf.fits'
