@@ -1,6 +1,7 @@
 import pytest
 from mock import patch, Mock
 import shlex
+import subprocess
 
 from orca.wrapper import wsclean
 
@@ -14,7 +15,8 @@ def test_wsclean(mocked_Popen):
 
     wsclean.wsclean(['test.ms'], '.', 'test', ['-size', '4096', '4096', '-weight', '0'])
     mocked_Popen.assert_called_once_with(
-        shlex.split(f'{wsclean.WSCLEAN_1_11_EXEC} -size 4096 4096 -weight 0 -name ./test test.ms'), env=wsclean.NEW_ENV)
+        shlex.split(f'{wsclean.WSCLEAN_1_11_EXEC} -size 4096 4096 -weight 0 -name ./test test.ms'),
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=wsclean.NEW_ENV)
 
 
 @patch('subprocess.Popen')

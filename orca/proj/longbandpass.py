@@ -105,15 +105,17 @@ def sidereal_subtract_image2(im1_path, im2_path, psf_path, out_dir):
 Combinations of stuff to run to do actually dispatch the tasks via celery canvas.
 """
 def get_data():
-        s = datetime(2018, 3, 23, 2, 0, 0)
-        e = datetime(2018, 3, 23, 4, 0, 0)
+        s = datetime(2018, 3, 22, 15, 0, 0)
+        e = datetime(2018, 3, 22, 18, 0, 0)
         dispatch_dada2ms(s, e)
 
 
 def do_flag():
-    ms_list = sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-23/hh=0?/*/??_*ms'))
+    ms_list = []
+    for i in range(15, 18):
+        ms_list += sorted(glob.glob(f'/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-23/hh=0?/*/{i:02d}_*ms'))
     logging.info(f'Making {len(ms_list)} apply_flag calls.')
-    group(apply_a_priori_flags.s(ms, pm.get_flag_npy_path(None), True)
+    group(apply_a_priori_flags.s(ms, pm.get_flag_npy_path(None))
           for ms in ms_list)()
 
 

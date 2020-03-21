@@ -20,5 +20,5 @@ def autocorr_sum(msfile: str) -> Tuple[datetime, str, np.ndarray]:
         datacolxx = np.where(~flagarr, datacol[:, :, 0], 0)
         datacolyy = np.where(~flagarr, datacol[:, :, 3], 0)
 
-        power = np.sum(np.abs(datacolxx) + np.abs(datacolyy))
-    return timestamp, spw, power.item()
+        power = np.abs(datacolxx[:, 50])
+    return timestamp, spw, power.tolist()

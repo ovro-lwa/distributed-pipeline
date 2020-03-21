@@ -4,7 +4,8 @@ import logging
 
 from orca.flagging import merge_flags, flag_bad_chans
 from orca.proj.celery import app
-from orca.wrapper import dada2ms, change_phase_centre, ttcal, wsclean
+from orca.wrapper import dada2ms, change_phase_centre, wsclean
+from orca.transform import peeling
 
 
 """
@@ -22,8 +23,7 @@ def run_chgcentre(ms_file, direction):
 
 @app.task
 def peel(ms_file, sources):
-    # TODO make this idempotent somehow
-    ttcal.peel_with_ttcal(ms_file, sources)
+    peeling.peel_with_ttcal(ms_file, sources)
 
 
 @app.task
