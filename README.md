@@ -5,9 +5,10 @@
 Before you start, it's important to make sure that other installations of casacore are not
 in your `LD_LIBRARY_PATH`; otherwise it may mess up casa6.
 
-If you have not done so, create a barebone python3.6 environment with conda
+If you have not done so, create a barebone python3.6 environment with conda.
+You will need conda-forge in your channels to install pipenv. If it's not there, you can use the `-c conda-forge` flag.
 ```
-conda create --name py36_orca python=3.6 pip
+conda create --name py36_orca python=3.6 pipenv
 ```
 
 Activate with
