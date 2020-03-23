@@ -7,7 +7,7 @@ in your `LD_LIBRARY_PATH`; otherwise it may mess up casa6.
 
 If you have not done so, create a barebone python3.6 environment with conda
 ```
-conda create --name py36_orca python=3.6 pipenv
+conda create --name py36_orca python=3.6 pip
 ```
 
 Activate with
@@ -15,11 +15,11 @@ Activate with
 conda activate py36_orca
 ```
 
-Helpful environment variables to add to your `.bashrc`:
+Helpful environment variables to add to your `.bashrc` (and make sure these directories exist) if you're on astm:
 ```
 export PIPENV_VENV_IN_PROJECT=1
 export PIPENV_CACHE_DIR='/opt/astro/devel/<username>/cache/pipenv/'
-export TMPDIR='/opt/astro/devel/<username/cache/'
+export TMPDIR='/opt/astro/devel/<username/tmp/'
 ```
 
 Run in this directory (need something about `git checkout Pipfile.lock` here?):
