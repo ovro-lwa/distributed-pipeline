@@ -27,9 +27,8 @@ def peel(ms_file, sources):
 
 
 @app.task
-def apply_a_priori_flags(ms_file, flag_npy_path, create_corrected_data_column=False):
-    merge_flags.write_to_flag_column(ms_file, flag_npy_path,
-                                     create_corrected_data_column=create_corrected_data_column)
+def apply_a_priori_flags(ms_file, flag_npy_path):
+    merge_flags.write_to_flag_column(ms_file, flag_npy_path)
 
 
 @app.task

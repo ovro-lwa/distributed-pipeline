@@ -105,31 +105,35 @@ def sidereal_subtract_image2(im1_path, im2_path, psf_path, out_dir):
 Combinations of stuff to run to do actually dispatch the tasks via celery canvas.
 """
 def get_data():
-        s = datetime(2018, 3, 22, 15, 0, 0)
-        e = datetime(2018, 3, 22, 18, 0, 0)
+        s = datetime(2018, 3, 23, 15, 0, 0)
+        e = datetime(2018, 3, 23, 18, 0, 0)
         dispatch_dada2ms(s, e)
 
 
 def do_flag():
     ms_list = []
     for i in range(15, 18):
-        ms_list += sorted(glob.glob(f'/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-23/hh=0?/*/{i:02d}_*ms'))
+        ms_list += sorted(glob.glob(f'/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-23/hh={i:02d}/*/??_*ms'))
     logging.info(f'Making {len(ms_list)} apply_flag calls.')
     group(apply_a_priori_flags.s(ms, pm.get_flag_npy_path(None))
           for ms in ms_list)()
 
 
 def do_peel():
-    ms_list = sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-23/hh=0?/*/??_*ms'))
+    ms_list = []
+    for i in range(15, 18):
+        ms_list += sorted(glob.glob(f'/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-23/hh={i:02d}/*/??_*ms'))
     logging.info(f'Making {len(ms_list)} peeling calls.')
-    group(peel.s(ms, '/home/yuping/casA_resolved_rfi.json') for ms in ms_list)()
+    group(peel.s(ms, '/home/yuping/sources_resolved_rfi.json') for ms in ms_list)()
 
 
 def do_flag_chans():
     spws = [f'{i:02d}' for i in range(22)]
     for s in spws:
-        # TODO generate this without having to stat. This doesn't scale well on lustre
-        ms_list = sorted(glob.glob(f'/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-23/hh=0?/*/{s}_*.ms'))
+        ms_list = []
+        for i in range(15, 18):
+            ms_list += sorted(
+                glob.glob(f'/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-23/hh={i:02d}/*/{s}_*ms'))
         logging.info(f'Making {len(ms_list)} flag_chans calls.')
         group(flag_chans.s(ms, s) for ms in ms_list)()
 

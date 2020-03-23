@@ -9,7 +9,7 @@ DATA = 'DATA'
 
 
 def peel_with_ttcal(ms: str, sources_json: str):
-    with pt.table(ms) as t:
+    with pt.table(ms, readonly=False) as t:
         # Copied from https://github.com/casacore/python-casacore/blob/master/casacore/tables/msutil.py#L48
         column_names = t.colnames()
         if CORRECTED_DATA not in column_names:
