@@ -32,6 +32,7 @@ pytest-cov = '*'
 mock = '*'
 scikit-learn = '*'
 mypy = "*"
+seaborn = "*"
 
 [requires]
 python_version = "3.6"
