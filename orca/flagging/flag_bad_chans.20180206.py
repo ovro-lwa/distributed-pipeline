@@ -5,7 +5,7 @@ import numpy as np
 import pyrap.tables as pt
 import os,argparse
 import numpy.ma as ma
-from scipy.stats import max
+from scipy.stats import skew
 from scipy.ndimage import filters
 
 def flag_bad_chans(msfile, band, usedatacol=False):
