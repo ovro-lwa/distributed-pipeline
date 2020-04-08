@@ -12,7 +12,7 @@ CORRECTED_DATA = 'CORRECTED_DATA'
 def merge_flags(ms1: str, ms2: str):
     with pt.table(ms1, readonly=False) as t_prev:
         with pt.table(ms2, readonly=False) as t:
-            flagcol1 = t.getcol('FLAG')
+            flagcol1 = t_prev.getcol('FLAG')
             flagcol2 = t.getcol('FLAG')
             flagcol = flagcol1 | flagcol2
             t.putcol('FLAG', flagcol)
