@@ -20,7 +20,7 @@ def flag_bad_ants(msfile):
     datacolxx = np.zeros((256,2398))
     datacolyy = np.copy(datacolxx)
     for antind,tauto in enumerate(tautos.iter("ANTENNA1")):
-        print antind
+        print(antind)
         for bandind,tband in enumerate(tauto):
             datacolxx[antind,bandind*109:(bandind+1)*109] = tband["DATA"][:,0]
             datacolyy[antind,bandind*109:(bandind+1)*109] = tband["DATA"][:,3]

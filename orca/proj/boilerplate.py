@@ -2,6 +2,7 @@ import glob
 import os
 import logging
 
+import orca.transform.imaging
 from orca.flagging import merge_flags, flag_bad_chans
 from orca.proj.celery import app
 from orca.wrapper import dada2ms, change_phase_centre, wsclean
@@ -50,4 +51,4 @@ def make_first_image(prefix, datetime_string, out_dir):
     os.makedirs(out_dir,exist_ok=True)
     ms_list = sorted(glob.glob(f'{prefix}/{datetime_string}/??_{datetime_string}.ms'))
     assert len(ms_list) == 22
-    wsclean.make_image(ms_list, datetime_string, out_dir)
+    orca.transform.imaging.make_dirty_image(ms_list, datetime_string, out_dir)

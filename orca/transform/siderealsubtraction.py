@@ -6,8 +6,8 @@ import numpy as np
 log = logging.getLogger(__name__)
 
 
-def subtract_images(im1_path: str, im2_path: str, out_dir: str, psf_path: str=None, subtract_crab: bool=False,
-                    shift: bool=False, scale: bool=False):
+def subtract_images(im1_path: str, im2_path: str, out_dir: str, psf_path: str=None, subtract_crab: bool = False,
+                    scale: bool = False):
     logging.info(f'Subtracting {im2_path} by {im1_path}.')
     im1, header = fitsutils.read_image_fits(im1_path)
     im2, _ = fitsutils.read_image_fits(im2_path)
@@ -54,3 +54,5 @@ def sub_source(im, psf, gain, peakx, peaky):
                    psf_size//2 - peaky : psf_size//2 + im_size - peaky]
     im -= gain * peakval * trunc_psf
     return im
+
+

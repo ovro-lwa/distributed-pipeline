@@ -15,23 +15,6 @@ NEW_ENV = dict(os.environ, LD_LIBRARY_PATH='/opt/astro/mwe/usr/lib64:/opt/astro/
 """
 
 
-def make_image(ms_list: List[str], date_times_string: str, out_dir: str, make_psf: bool = False):
-    p = subprocess.Popen([WSCLEAN_1_11_EXEC, '-size', '4096', '4096', '-scale', '0.03125',
-                          '-niter', '0', '-weight', 'briggs', '0',
-                          '-no-update-model-required', '-no-reorder',
-                          '-j', '10', '-name', f'{out_dir}/{date_times_string}'] + ms_list, env=NEW_ENV)
-    p.communicate()
-    if make_psf:
-        p = subprocess.Popen([WSCLEAN_1_11_EXEC, '-size', '8192', '8192', '-scale', '0.03125',
-                              '-niter', '0', '-weight', 'briggs', '0',
-                              '-no-update-model-required', '-no-reorder', '-make-psf-only',
-                              '-j', '10', '-name', f'{out_dir}/{date_times_string}'] + ms_list, env=NEW_ENV)
-        p.communicate()
-        return f'{out_dir}/{date_times_string}-image.fits', f'{out_dir}/{date_times_string}-psf.fits'
-    else:
-        return f'{out_dir}/{date_times_string}-image.fits'
-
-
 def wsclean(ms_list: List[str], out_dir: str, filename_prefix: str, arg_list: List[str]) -> Tuple[str, str]:
     arg_list = [WSCLEAN_1_11_EXEC] + arg_list + ['-name', f'{out_dir}/{filename_prefix}'] + ms_list
     proc = subprocess.Popen(arg_list, env=NEW_ENV, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

@@ -12,10 +12,10 @@ def auto_corr_data_and_flag(ms: str, data_column: str) -> Tuple[np.ndarray, np.n
     return data, flag
 
 
-def scale_gain(baseline_ms: str, target_ms: str, data_column: str = 'CORRECTED_DATA'):
+def calculate_gain_scale(baseline_ms: str, target_ms: str, data_column: str = 'CORRECTED_DATA'):
     baseline_data, baseline_flag = auto_corr_data_and_flag(baseline_ms, data_column)
     target_data, target_flag = auto_corr_data_and_flag(target_ms, data_column)
-    return np.where(baseline_flag, np.nan, baseline_data), np.where(target_flag, np.nan, target_data)
+    return np.sqrt(np.where(baseline_flag, np.nan, baseline_data)/np.where(target_flag, np.nan, target_data))
 
 
 def apply_gain_scale(data: np.ndarray, scale_spectrum: np.ndarray) -> np.ndarray:
@@ -33,9 +33,16 @@ def apply_gain_scale(data: np.ndarray, scale_spectrum: np.ndarray) -> np.ndarray
             + scale_spectrum.shape[0]):
         raise ValueError(f'Incompatible shapes for data {data.shape} and scale_spectrum {scale_spectrum.shape}')
 
-    # Generate pairs of antenna indices corresponding to the visibility ordering
+    # Generate pairs of antenna indices corresponding to the visibility antenna pair ordering
     upper_triangle_matrix_indices = np.triu_indices(scale_spectrum.shape[0])
     # This computes the outer product along the last axis
-    data = data * (scale_spectrum[upper_triangle_matrix_indices[0], :, :, np.newaxis] *
-                   scale_spectrum[upper_triangle_matrix_indices[1], :, np.newaxis, :]).reshape(data.shape)
+    data *= (scale_spectrum[upper_triangle_matrix_indices[0], :, :, np.newaxis] *
+             scale_spectrum[upper_triangle_matrix_indices[1], :, np.newaxis, :]).reshape(data.shape)
     return data
+
+
+def do_the_thing(baseline_ms: str, target_ms: str, data_column: str = 'CORRECTED_DATA'):
+    scale_spectrum = calculate_gain_scale(baseline_ms, target_ms, data_column)
+    with table(target_ms, readonly=False) as t:
+        data = apply_gain_scale(t.getcol(data_column), scale_spectrum)
+        t.putcol(data_column, data)
