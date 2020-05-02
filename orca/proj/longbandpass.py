@@ -56,8 +56,10 @@ def subsequent_frame_subtraction(dir1, dir2, datetime_1, datetime_2, out_dir):
         for s in spws:
             merge_flags.merge_flags(f'{tree1}/{s}_{datetime_1}.ms', f'{tree2}/{s}_{datetime_2}.ms')
             change_phase_centre.change_phase_center(f'{tree2}/{s}_{datetime_2}.ms', new_phase_center)
-        im1 = orca.transform.imaging.make_dirty_image(sorted(glob.glob(f'{tree2}/??_{datetime_2}.ms')), datetime_2, temp_tree)
-        im2 = orca.transform.imaging.make_dirty_image(sorted(glob.glob(f'{tree1}/??_{datetime_1}.ms')), datetime_1, temp_tree)
+        im1 = orca.transform.imaging.make_dirty_image(sorted(glob.glob(f'{tree2}/??_{datetime_2}.ms')), temp_tree,
+                                                      datetime_2)
+        im2 = orca.transform.imaging.make_dirty_image(sorted(glob.glob(f'{tree1}/??_{datetime_1}.ms')), temp_tree,
+                                                      datetime_1)
         image_sub.image_sub(im1, im2, out_dir)
     finally:
         shutil.rmtree(temp_tree)
@@ -80,9 +82,10 @@ def prep_image_for_sidereal_subtraction(dir1, dir2, datetime_1, datetime_2, out_
         for s in spws:
             merge_flags.merge_flags(f'{tree1}/{s}_{datetime_1}.ms', f'{tree2}/{s}_{datetime_2}.ms')
             change_phase_centre.change_phase_center(f'{tree2}/{s}_{datetime_2}.ms', new_phase_center)
-        im1, psf = orca.transform.imaging.make_dirty_image(sorted(glob.glob(f'{tree1}/??_{datetime_1}.ms')), datetime_1,
-                                                           temp_tree, make_psf=True)
-        im2 = orca.transform.imaging.make_dirty_image(sorted(glob.glob(f'{tree2}/??_{datetime_2}.ms')), datetime_2, temp_tree)
+        im1, psf = orca.transform.imaging.make_dirty_image(sorted(glob.glob(f'{tree1}/??_{datetime_1}.ms')), temp_tree,
+                                                           datetime_1, make_psf=True)
+        im2 = orca.transform.imaging.make_dirty_image(sorted(glob.glob(f'{tree2}/??_{datetime_2}.ms')), temp_tree,
+                                                      datetime_2)
         shutil.copy(im1, out_dir1)
         shutil.copy(psf, out_dir1)
         shutil.copy(im2, out_dir2)

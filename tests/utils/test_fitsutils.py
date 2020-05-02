@@ -10,6 +10,11 @@ def test_get_sample_header():
     assert fitsutils.get_sample_header()['SIMPLE']
 
 
+def test_sample_header_to_wcs():
+    from astropy.wcs import WCS
+    WCS(fitsutils.get_sample_header())
+
+
 def test_write_fits_mask_with_box():
     with tempfile.NamedTemporaryFile() as f:
         fitsutils.write_fits_mask_with_box(f.name, 4096, (1032, 700), 3)

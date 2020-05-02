@@ -9,15 +9,11 @@ WSCLEAN_1_11_EXEC = '/opt/astro/wsclean-1.11-gcc4.8.5_cxx11/bin/wsclean'
 
 NEW_ENV = dict(os.environ, LD_LIBRARY_PATH='/opt/astro/mwe/usr/lib64:/opt/astro/lib/:/opt/astro/casacore-1.7.0/lib',
                AIPSPATH='/opt/astro/casa-data dummy dummy')
-"""
- -size 4096 4096 -scale 0.03125 -fitbeam -tempdir /dev/shm/yuping/ -niter 0 -weight briggs 0 
- -weighting-rank-filter 3 -weighting-rank-filter-size 128 -no-update-model-required -j 10 -name fullband ??_*ms
-"""
 
 
-def wsclean(ms_list: List[str], out_dir: str, filename_prefix: str, arg_list: List[str]) -> Tuple[str, str]:
-    arg_list = [WSCLEAN_1_11_EXEC] + arg_list + ['-name', f'{out_dir}/{filename_prefix}'] + ms_list
-    proc = subprocess.Popen(arg_list, env=NEW_ENV, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+def wsclean(ms_list: List[str], out_dir: str, filename_prefix: str, extra_arg_list: List[str]) -> None:
+    extra_arg_list = [WSCLEAN_1_11_EXEC] + extra_arg_list + ['-name', f'{out_dir}/{filename_prefix}'] + ms_list
+    proc = subprocess.Popen(extra_arg_list, env=NEW_ENV, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         stdoutdata, stderrdata = proc.communicate()
         if proc.returncode is not 0:
@@ -28,4 +24,3 @@ def wsclean(ms_list: List[str], out_dir: str, filename_prefix: str, arg_list: Li
             raise Exception('Error in wsclean.')
     finally:
         proc.terminate()
-    return f'{out_dir}/{filename_prefix}-image.fits', f'{out_dir}/{filename_prefix}-psf.fits'

@@ -10,15 +10,6 @@ def read_image_fits(fn: str) -> Tuple[np.array, fits.Header]:
     return image, header
 
 
-def image_to_np_index():
-    """
-    ds9/casa's images are the transpose of what astropy.io gives.
-    This convers ds9 image pixel indices to the astropy.io numpy representation.
-    :return:
-    """
-    pass
-
-
 def write_image_fits(fn, header, data, overwrite=False):
     fits.PrimaryHDU(np.reshape(data, newshape=(1, 1, *data.shape)), header=header).writeto(
         fn, overwrite=overwrite)
