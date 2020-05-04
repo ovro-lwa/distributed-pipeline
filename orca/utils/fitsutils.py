@@ -15,9 +15,11 @@ def write_image_fits(fn, header, data, overwrite=False):
         fn, overwrite=overwrite)
 
 
-def write_fits_mask_with_box(output_fits_path: str, imsize: int, center: Tuple[int, int], width: int) -> None:
+def write_fits_mask_with_box_xy_coordindates(output_fits_path: str, imsize: int,
+                                             center: Tuple[int, int], width: int) -> str:
     """
-    Writes a fits mask to file.
+    Writes a fits mask to file. Both im and center are in the WCS X Y coordindates (i.e. transpose of the numpy array
+    from astropy.fits.
     :param output_fits_path:
     :param imsize:
     :param center: Center of the box. Must be consistent with astropy indexing (i.e. the transpose of ds9 indexing)
@@ -28,8 +30,8 @@ def write_fits_mask_with_box(output_fits_path: str, imsize: int, center: Tuple[i
     image = np.zeros(shape=(imsize, imsize))
     image[(center[0] - width//2):(center[0] + width//2 + 1), (center[1] - width//2):(center[1] + width//2 + 1)] = \
         np.ones(shape=(width, width))
-    write_image_fits(output_fits_path, get_sample_header(), image, overwrite=True)
-
+    write_image_fits(output_fits_path, get_sample_header(), image.T, overwrite=True)
+    return output_fits_path
 
 def get_sample_header() -> fits.Header:
     return fits.Header(

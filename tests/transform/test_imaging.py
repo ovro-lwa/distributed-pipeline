@@ -23,9 +23,10 @@ def test_astropy_get_sun():
     t = time.Time('2018-03-23T16:26:18', format='isot', scale='utc')
     sun_coord = coordinates.get_sun(t)
     ans = coordinates.SkyCoord('00h09m23s +1d11m30s', frame=coordinates.ICRS)
-    assert sun_coord.separation(ans) < coordinates.Angle('15arcmin')
+    assert sun_coord.separation(ans) < coordinates.Angle('15 arcmin')
 
-def test_astropy_never_transform_to_icrs_sun_location():
+
+def test_astropy_never_transform_to_sun_location_to_icrs():
     """
     This does not work. I think it's because ICRS is barycentric and the Sun's coordinate (in 3D) is too close to
     the coordinate center.
