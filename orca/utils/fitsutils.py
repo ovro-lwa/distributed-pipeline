@@ -22,7 +22,7 @@ def write_fits_mask_with_box_xy_coordindates(output_fits_path: str, imsize: int,
     from astropy.fits.
     :param output_fits_path:
     :param imsize:
-    :param center: Center of the box. Must be consistent with astropy indexing (i.e. the transpose of ds9 indexing)
+    :param center: Center of the box. Must be in XY index (i.e. what ds9 shows)
     :param width:
     :return:
     """
