@@ -1,7 +1,7 @@
 from typing import Tuple, Optional, List, Union
 import subprocess
 import os
-import glob
+import logging
 from os import path
 from tempfile import TemporaryDirectory
 
@@ -14,6 +14,8 @@ import numpy as np
 
 from orca.utils import fitsutils
 from orca.wrapper import wsclean
+
+log = logging.getLogger(__name__)
 
 CRAB = 'CRAB'
 CRAB_COORDINATES = SkyCoord('05h34m31s +22deg00m52s')
@@ -67,6 +69,7 @@ def make_residual_image_with_source_removed(ms_list: List[str], output_dir: str,
     :param inner_tukey:
     :return:
     """
+    log.info(f'ms_list is {ms_list}')
     dirty_image = make_dirty_image(ms_list, output_dir, output_prefix, inner_tukey=inner_tukey)
     extra_args = ['-size', str(IMSIZE), str(IMSIZE), '-scale', str(IM_SCALE_DEGREE),
                   '-weight', 'briggs', '0',
@@ -84,26 +87,22 @@ def make_residual_image_with_source_removed(ms_list: List[str], output_dir: str,
             imsize=im_T.shape[0],
             center=get_peak_around_source(im_T, sun_direction_icrs, wcs.WCS(header)),
             width=45)
-        wsclean.wsclean(ms_list, output_dir, f'{output_dir}/{output_prefix}', extra_arg_list=extra_args +
+        wsclean.wsclean(ms_list, output_dir, output_prefix, extra_arg_list=extra_args +
                         ['-channelsout', str(SUN_CHANNELS_OUT), '-fitsmask', fits_mask,
                          '-threshold', str(CLEAN_THRESHOLD_JY),
                          '-mgain', str(CLEAN_MGAIN)] +
                         taper_args)
         os.renames(f'{output_dir}/{output_prefix}-MFS-residual.fits', f'{output_dir}/{output_prefix}-image.fits')
-        os.remove(glob.glob(f'{output_dir}/{output_prefix}-0000?-*.fits'))
-        os.remove(glob.glob(f'{output_dir}/{output_prefix}-MFS-*.fits'))
     elif source_to_remove is CRAB:
         fitsutils.write_fits_mask_with_box_xy_coordindates(
             fits_mask,
             imsize=IMSIZE,
             center=get_peak_around_source(im_T, CRAB_COORDINATES, wcs.WCS(header)),
-            width=3) # 3 because point source
-        wsclean.wsclean(ms_list, output_dir, f'{output_dir}/{output_prefix}', extra_arg_list=extra_args +
+            width=3)  # 3 because point source
+        wsclean.wsclean(ms_list, output_dir, output_prefix, extra_arg_list=extra_args +
                         ['-fitsmask', fits_mask, '-threshold', str(CLEAN_THRESHOLD_JY), '-mgain', str(CLEAN_MGAIN)] +
                         taper_args)
         os.renames(f'{output_dir}/{output_prefix}-residual.fits', f'{output_dir}/{output_prefix}-image.fits')
-        os.remove(f'{output_dir}/{output_prefix}-dirty.fits')
-        os.remove(f'{output_dir}/{output_prefix}-psf.fits')
     else:
         raise Exception(f'Unknown source to subtract {source_to_remove}.')
     return f'{output_dir}/{output_prefix}-image.fits'
@@ -130,13 +129,13 @@ def make_dirty_image(ms_list: List[str], output_dir: str, output_prefix: str, ma
                   '-niter', '0', '-weight', 'briggs', '0',
                   '-no-update-model-required', '-no-reorder',
                   '-j', '10'] + taper_args
-    wsclean.wsclean(ms_list, output_dir, f'{output_dir}/{output_prefix}', extra_arg_list=extra_args)
+    wsclean.wsclean(ms_list, output_dir, output_prefix, extra_arg_list=extra_args)
     if make_psf:
         extra_args = ['-size', str(2 * IMSIZE), str(2 * IMSIZE), '-scale', str(IM_SCALE_DEGREE),
                       '-niter', '0', '-weight', 'briggs', '0',
                       '-no-update-model-required', '-no-reorder', '-make-psf-only',
                       '-j', '10'] + taper_args
-        wsclean.wsclean(ms_list, output_dir, f'{output_dir}/{output_prefix}', extra_arg_list=extra_args)
+        wsclean.wsclean(ms_list, output_dir, output_prefix, extra_arg_list=extra_args)
         os.remove(f'{output_dir}/{output_prefix}-dirty.fits')
         return f'{output_dir}/{output_prefix}-image.fits', f'{output_dir}/{output_prefix}-psf.fits'
     else:

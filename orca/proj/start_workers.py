@@ -3,14 +3,24 @@ Convenience executable to start celery worker across the cluster.
 """
 from fabric import ThreadingGroup
 import argparse
+import os
+
+from orca.proj.celery import DEVELOPMENT_VARIABLE
 
 ENV_DIR = '/opt/astro/devel/yuping/orca/'
 
 
 def main(hosts, concurrency):
     with ThreadingGroup(*hosts) as sg:
+        queue_name = 'default-1-per-node'
+        if DEVELOPMENT_VARIABLE in os.environ:
+            queue_name = os.environ[DEVELOPMENT_VARIABLE]
+        worker_name = queue_name
+        # Revisit this later https://docs.celeryproject.org/en/stable/reference/celery.bin.multi.html can have multiple
+        # queues on the same worker.
         results = sg.run('/opt/astro/anaconda3/bin/activate py36_orca && '
-                         f'cd {ENV_DIR} && /opt/astro/bin/pipenv run celery multi start w1 -A orca.proj '
+                         f'cd {ENV_DIR} && /opt/astro/bin/pipenv run celery multi start {worker_name} -A orca.proj '
+                         f'-Q {queue_name} '
                          f'--concurrency={concurrency} '
                          f'-l info -n %h --pidfile=/var/run/celery/%n.pid --logfile=/var/log/celery/%n%I.log')
 

@@ -21,10 +21,8 @@ def run_dada2ms(dada_file, out_ms, gaintable=None):
 def run_chgcentre(ms_file, direction):
     change_phase_centre.change_phase_center(ms_file, direction)
 
-
 @app.task
-def peel(ms_file, sources):
-    peeling.peel_with_ttcal(ms_file, sources)
+def peel(ms_file, sources): peeling.peel_with_ttcal(ms_file, sources)
 
 
 @app.task

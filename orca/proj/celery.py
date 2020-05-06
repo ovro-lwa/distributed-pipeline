@@ -2,7 +2,6 @@ from __future__ import absolute_import, unicode_literals
 import os
 from celery import Celery
 
-print(os.environ['HOME'])
 CELERY_APP_NAME = 'proj'
 DEVELOPMENT_VARIABLE = 'ORCA_DEV'
 
@@ -11,7 +10,8 @@ app = Celery(CELERY_APP_NAME,
              backend='rpc://',
              include=['orca.proj.longbandpass', 'orca.transform',
                       'orca.proj.onedayaverage',
-                      'orca.proj.gainvariation'])
+                      'orca.proj.gainvariation',
+                      'orca.proj.pipeline'])
 
 # Optional configuration, see the application user guide.
 app.conf.update(
