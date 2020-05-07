@@ -44,5 +44,5 @@ def apply_gain_scale(data: np.ndarray, scale_spectrum: np.ndarray) -> np.ndarray
 def correct_scaling(baseline_ms: str, target_ms: str, data_column: str = 'CORRECTED_DATA'):
     scale_spectrum = calculate_gain_scale(baseline_ms, target_ms, data_column)
     with table(target_ms, readonly=False) as t:
-        data = apply_gain_scale(t.getcol(data_column), scale_spectrum)
+        data = apply_gain_scale(t.getcol(data_column), scale_spectrum[:, :, (0, 3)])
         t.putcol(data_column, data)
