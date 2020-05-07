@@ -17,7 +17,12 @@ start_workers.py --concurrency 20
 
 ## Shutdown/Cleanup
 ### Kill all pending tasks
+```celery -A orca.proj amqp queue.delete yuping```
+where `yuping` is the name of the queue.
+
+If you did not set up any routing, then
 ```celery -A orca.proj purge```
+would do.
 
 ### Kill the workers
 This is needed after a task code update. Then you need to launch workers again for
