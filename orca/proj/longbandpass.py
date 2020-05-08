@@ -164,7 +164,7 @@ def do_subsequent_frame_subtraction():
 
 def generate_datetime_pairs() -> List[Tuple[datetime, datetime]]:
     sday = timedelta(days=0, hours=23, minutes=56, seconds=4)
-    day_1_times = [ datetime.fromisoformat(os.path.basename(p)) for p in  # type: ignore
+    day_1_times = [ datetime.strptime(os.path.basename(p), "%Y-%m-%dT%H:%M:%S") for p in  # type: ignore
                     sorted(glob.glob('/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-22/hh=02/*'))]
     return [(one, one + sday) for one in day_1_times if one > datetime(2018, 3, 22, 2, 3, 56)]
 

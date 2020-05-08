@@ -95,7 +95,6 @@ def getimrms(filepath,radius=0):
         apertureind = np.where(rot_ellipse(x.ravel(), y.ravel(), naxis/2., naxis/2., radius, radius, 0) <= 1.)
         imgind  = zip(x.ravel()[apertureind], y.ravel()[apertureind])
     for ind, file in enumerate(filelist):
-        print(ind)
         hdulist = fits.open(file)
         header = hdulist[0].header
         image = hdulist[0].data[0,0].T
@@ -103,8 +102,8 @@ def getimrms(filepath,radius=0):
         freqval = header['CRVAL3']
         dateobs = header['DATE-OBS']
         if radius==0:
-            rmsval = np.std(image[naxis//2-500:naxis//2+500,naxis//2-500:naxis//2+500])
-            medval = np.median(image[naxis//2-500:naxis//2+500,naxis//2-500:naxis//2+500])
+            rmsval = np.std(image[naxis//2+500-500:naxis//2+500+500,naxis//2+500-500:naxis//2+500+500])
+            medval = np.median(image[naxis//2+500-500:naxis//2+500+500,naxis//2+500-500:naxis//2+500+500])
         else:
             rmsval = np.std([image[subset] for subset in imgind])
             medval = np.median([image[subset] for subset in imgind])
