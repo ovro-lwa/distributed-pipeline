@@ -102,8 +102,8 @@ def getimrms(filepath,radius=0):
         freqval = header['CRVAL3']
         dateobs = header['DATE-OBS']
         if radius==0:
-            rmsval = np.std(image[naxis//2+500-500:naxis//2+500+500,naxis//2+500-500:naxis//2+500+500])
-            medval = np.median(image[naxis//2+500-500:naxis//2+500+500,naxis//2+500-500:naxis//2+500+500])
+            rmsval = np.std(image[naxis//2-500:naxis//2+500, naxis//2-500:naxis//2+500])
+            medval = np.median(image[naxis//2-500:naxis//2+500, naxis//2-500:naxis//2+500])
         else:
             rmsval = np.std([image[subset] for subset in imgind])
             medval = np.median([image[subset] for subset in imgind])
