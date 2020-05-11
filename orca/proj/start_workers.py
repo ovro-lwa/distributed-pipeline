@@ -4,10 +4,11 @@ Convenience executable to start celery worker across the cluster.
 from fabric import ThreadingGroup
 import argparse
 import os
+import getpass
 
 from orca.proj.celery import DEVELOPMENT_VARIABLE
 
-ENV_DIR = '/opt/astro/devel/yuping/orca/'
+ENV_DIR = f'/opt/astro/devel/{getpass.getuser()}/distributed-pipeline/'
 
 
 def main(hosts, concurrency):
@@ -27,7 +28,9 @@ def main(hosts, concurrency):
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser(description='Start celery workers across the cluster. Default is to start them on'
-                                                 'all nodes but astm13.')
+                                                 'all nodes but astm13. This code assumes that the '
+                                                 'distributed-processing repo is under /opt/astro/devel/<username>/'
+                                     'distributed-processing, and the conda environment name is py36_orca')
     parser.add_argument('--concurrency', type=int, default=20, help='worker concurrency')
     parser.add_argument('--exclude', type=int, nargs='+', default=[], help='Space-delimited list of hosts to exclude.')
     args = parser.parse_args()

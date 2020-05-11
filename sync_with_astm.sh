@@ -1,5 +1,5 @@
 # Sync code to astm and notebooks from astm.
-REMOTE_DIR=/opt/astro/devel/yuping/orca/
+REMOTE_DIR=/opt/astro/devel/yuping/distributed-pipeline/
 LOCAL_DIR=/home/yuping/radio_projects/lwa/distributed-pipeline/
 REMOTE_HOST=astmhead
 REMOTE_USER=yuping
