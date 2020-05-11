@@ -8,7 +8,9 @@ DEVELOPMENT_VARIABLE = 'ORCA_DEV'
 app = Celery(CELERY_APP_NAME,
              broker='pyamqp://yuping:yuping@astm13:5672/yuping',
              backend='rpc://',
-             include=['orca.proj.longbandpass', 'orca.transform',
+             include=['orca.proj.longbandpass',
+                      'orca.proj.boilerplate'
+                      'orca.transform',
                       'orca.proj.onedayaverage',
                       'orca.proj.gainvariation',
                       'orca.proj.pipeline'])
