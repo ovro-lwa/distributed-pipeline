@@ -50,3 +50,7 @@ def make_first_image(prefix, datetime_string, out_dir):
     ms_list = sorted(glob.glob(f'{prefix}/{datetime_string}/??_{datetime_string}.ms'))
     assert len(ms_list) == 22
     orca.transform.imaging.make_dirty_image(ms_list, out_dir, datetime_string)
+
+@app.task
+def add(x, y):
+    return x+y
