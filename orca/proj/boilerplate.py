@@ -6,7 +6,7 @@ import orca.transform.imaging
 from orca.flagging import merge_flags, flag_bad_chans
 from orca.proj.celery import app
 from orca.wrapper import dada2ms, change_phase_centre, wsclean
-from orca.transform import peeling
+from orca.transform import peeling, integrate
 
 
 """
@@ -51,6 +51,13 @@ def make_first_image(prefix, datetime_string, out_dir):
     assert len(ms_list) == 22
     orca.transform.imaging.make_dirty_image(ms_list, out_dir, datetime_string)
 
+
+@app.task
+def run_integrate_with_concat(ms_list, out_ms, phase_center=None):
+    integrate.integrate(ms_list, out_ms, phase_center)
+
+
 @app.task
 def add(x, y):
     return x+y
+
