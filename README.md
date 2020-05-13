@@ -16,14 +16,6 @@ Activate with
 conda activate py36_orca
 ```
 
-Helpful environment variables to add to your `.bashrc` (and make sure these directories exist) if you're on astm:
-```
-export PIPENV_VENV_IN_PROJECT=1
-export PIPENV_CACHE_DIR='/opt/astro/devel/<username>/cache/pipenv/'
-export TMPDIR='/opt/astro/devel/<username/tmp/'
-```
-
-Run in this directory (need something about `git checkout Pipfile.lock` here?):
 ```
 pipenv sync --dev
 ```
