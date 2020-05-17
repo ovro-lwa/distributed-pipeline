@@ -7,7 +7,7 @@ import os
 CHGCENTRE_PATH = '/opt/astro/wsclean/bin/chgcentre'
 
 
-def change_phase_center(ms: str, center_dir: str) -> None:
+def change_phase_center(ms: str, center_dir: str) -> str:
     new_env = dict(os.environ, LD_LIBRARY_PATH='/opt/astro/mwe/usr/lib64:/opt/astro/lib/:/opt/astro/casacore-1.7.0/lib',
                    AIPSPATH='/opt/astro/casa-data dummy dummy')
     ra, dec = center_dir.split(' ')
@@ -16,6 +16,7 @@ def change_phase_center(ms: str, center_dir: str) -> None:
         p.communicate()
     except subprocess.CalledProcessError as e:
         raise e
+    return ms
 
 
 def get_phase_center(ms: str) -> str:

@@ -124,6 +124,7 @@ def flag_bad_chans(msfile, band, usedatacol=False, generate_plot=False, apply_fl
                 flagcol_altered = t.getcol('FLAG')
                 flagcol_altered[:,flaglist,:] = 1
                 t.putcol('FLAG', flagcol_altered)
+    return msfile
 
 
 

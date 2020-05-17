@@ -58,7 +58,7 @@ def make_movie_from_fits(fits_tuple: Tuple[str], output_dir: str, scale: float,
 
 def make_residual_image_with_source_removed(ms_list: List[str], output_dir: str, output_prefix: str,
                                             source_to_remove: str, tmp_dir: str,
-                                            inner_tukey: Optional[str] = None) -> str:
+                                            inner_tukey: Optional[int] = None, n_thread: int = 10) -> str:
     """
 
     :param ms_list:
@@ -67,6 +67,7 @@ def make_residual_image_with_source_removed(ms_list: List[str], output_dir: str,
     :param source_to_remove:
     :param tmp_dir: tmpdir for wsclean to put the re-ordered visibility.
     :param inner_tukey:
+    :param n_thread:
     :return:
     """
     log.info(f'ms_list is {ms_list}')
@@ -74,8 +75,8 @@ def make_residual_image_with_source_removed(ms_list: List[str], output_dir: str,
     extra_args = ['-size', str(IMSIZE), str(IMSIZE), '-scale', str(IM_SCALE_DEGREE),
                   '-weight', 'briggs', '0',
                   '-no-update-model-required',
-                  '-j', '10', '-niter', '4000', '-tempdir', tmp_dir]
-    taper_args = ['-taper-inner-tukey', inner_tukey] if inner_tukey else []
+                  '-j', str(n_thread), '-niter', '4000', '-tempdir', tmp_dir]
+    taper_args = ['-taper-inner-tukey', str(inner_tukey)] if inner_tukey else []
     im, header = fitsutils.read_image_fits(dirty_image)
     im_T = im.T
     fits_mask = f'{output_dir}/{output_prefix}-mask.fits'
@@ -86,7 +87,7 @@ def make_residual_image_with_source_removed(ms_list: List[str], output_dir: str,
             fits_mask,
             imsize=im_T.shape[0],
             center=get_peak_around_source(im_T, sun_direction_icrs, wcs.WCS(header)),
-            width=45)
+            width=81)
         wsclean.wsclean(ms_list, output_dir, output_prefix, extra_arg_list=extra_args +
                         ['-channelsout', str(SUN_CHANNELS_OUT), '-fitsmask', fits_mask,
                          '-threshold', str(CLEAN_THRESHOLD_JY),
@@ -121,20 +122,19 @@ def get_peak_around_source(im_T: np.ndarray, source_coord: SkyCoord, w: wcs.WCS)
 
 
 def make_dirty_image(ms_list: List[str], output_dir: str, output_prefix: str, make_psf: bool = False,
-                     inner_tukey: Optional[str] = None) ->\
-        Union[str, Tuple[str, str]]:
-    taper_args = ['-taper-inner-tukey', inner_tukey] if inner_tukey else []
+                     inner_tukey: Optional[int] = None, n_thread: int = 10) -> Union[str, Tuple[str, str]]:
+    taper_args = ['-taper-inner-tukey', str(inner_tukey)] if inner_tukey else []
 
     extra_args = ['-size', str(IMSIZE), str(IMSIZE), '-scale', str(IM_SCALE_DEGREE),
                   '-niter', '0', '-weight', 'briggs', '0',
                   '-no-update-model-required', '-no-reorder',
-                  '-j', '10'] + taper_args
+                  '-j', str(n_thread)] + taper_args
     wsclean.wsclean(ms_list, output_dir, output_prefix, extra_arg_list=extra_args)
     if make_psf:
         extra_args = ['-size', str(2 * IMSIZE), str(2 * IMSIZE), '-scale', str(IM_SCALE_DEGREE),
                       '-niter', '0', '-weight', 'briggs', '0',
                       '-no-update-model-required', '-no-reorder', '-make-psf-only',
-                      '-j', '10'] + taper_args
+                      '-j', str(n_thread)] + taper_args
         wsclean.wsclean(ms_list, output_dir, output_prefix, extra_arg_list=extra_args)
         os.remove(f'{output_dir}/{output_prefix}-dirty.fits')
         return f'{output_dir}/{output_prefix}-image.fits', f'{output_dir}/{output_prefix}-psf.fits'

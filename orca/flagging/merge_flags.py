@@ -17,6 +17,7 @@ def merge_flags(ms1: str, ms2: str):
             flagcol = flagcol1 | flagcol2
             t.putcol('FLAG', flagcol)
             t_prev.putcol('FLAG', flagcol)
+    return ms1, ms2
 
 
 def write_to_flag_column(ms: str, flag_npy: str):
@@ -24,3 +25,4 @@ def write_to_flag_column(ms: str, flag_npy: str):
         flagcol = np.load(flag_npy)
         assert flagcol.shape == t.getcol('FLAG').shape, 'Flag file and measurement set have different shapes'
         t.putcol('FLAG', flagcol | t.getcol('FLAG'))
+    return ms
