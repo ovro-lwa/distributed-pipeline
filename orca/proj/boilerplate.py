@@ -6,7 +6,7 @@ import orca.transform.imaging
 from orca.flagging import merge_flags, flag_bad_chans
 from orca.proj.celery import app
 from orca.wrapper import dada2ms, change_phase_centre, wsclean
-from orca.transform import peeling, integrate
+from orca.transform import peeling, integrate, gainscaling
 
 
 """
@@ -57,6 +57,16 @@ def make_first_image(prefix, datetime_string, out_dir):
 @app.task
 def run_integrate_with_concat(ms_list, out_ms, phase_center=None):
     return integrate.integrate(ms_list, out_ms, phase_center)
+
+
+@app.task
+def run_correct_scaling(baseline_ms, target_ms, data_column='CORRECTED_DATA'):
+    return gainscaling.correct_scaling(baseline_ms, target_ms, data_column=data_column)
+
+
+@app.task
+def run_merge_flags(ms1, ms2):
+    merge_flags.merge_flags(ms1, ms2)
 
 
 @app.task
