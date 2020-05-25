@@ -1,6 +1,7 @@
 import glob
 import os
 import logging
+import sys
 
 import orca.transform.imaging
 from orca.flagging import merge_flags, flag_bad_chans
@@ -8,6 +9,7 @@ from orca.proj.celery import app
 from orca.wrapper import dada2ms, change_phase_centre, wsclean
 from orca.transform import peeling, integrate, gainscaling
 
+logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
 """
 Celery adapter on top of transforms.

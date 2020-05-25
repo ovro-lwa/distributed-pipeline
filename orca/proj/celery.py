@@ -1,9 +1,8 @@
 from __future__ import absolute_import, unicode_literals
-import os
 from celery import Celery
+from orca.configmanager import queue_config
 
 CELERY_APP_NAME = 'proj'
-DEVELOPMENT_VARIABLE = 'ORCA_DEV'
 
 app = Celery(CELERY_APP_NAME,
              broker='pyamqp://yuping:yuping@astm13:5672/yuping',
@@ -21,11 +20,7 @@ app.conf.update(
     worker_prefetch_multiplier=1
 )
 
-# TODO: maybe I should split tasks in boilerplate based on queue?
-if DEVELOPMENT_VARIABLE in os.environ:
-    task_routes = {'*': os.environ[DEVELOPMENT_VARIABLE]}
-else:
-    task_routes = {'*': 'default-1-per-node'}
+task_routes = {'*': queue_config['prefix']}
 
 app.conf.task_routes = task_routes
 

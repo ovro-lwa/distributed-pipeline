@@ -22,6 +22,8 @@ CRAB_COORDINATES = SkyCoord('05h34m31s +22deg00m52s')
 SUN = 'SUN'
 
 CLEAN_THRESHOLD_JY = 5
+CLEAN_THRESHOLD_JY_CRAB = 20
+
 CLEAN_MGAIN = 0.8
 SUN_CHANNELS_OUT = 2
 
@@ -101,7 +103,8 @@ def make_residual_image_with_source_removed(ms_list: List[str], output_dir: str,
             center=get_peak_around_source(im_T, CRAB_COORDINATES, wcs.WCS(header)),
             width=3)  # 3 because point source
         wsclean.wsclean(ms_list, output_dir, output_prefix, extra_arg_list=extra_args +
-                        ['-fitsmask', fits_mask, '-threshold', str(CLEAN_THRESHOLD_JY), '-mgain', str(CLEAN_MGAIN)] +
+                        ['-fitsmask', fits_mask, '-threshold', str(CLEAN_THRESHOLD_JY_CRAB),
+                         '-mgain', str(CLEAN_MGAIN)] +
                         taper_args)
         os.renames(f'{output_dir}/{output_prefix}-residual.fits', f'{output_dir}/{output_prefix}-image.fits')
     else:

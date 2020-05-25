@@ -3,19 +3,16 @@ Convenience executable to start celery worker across the cluster.
 """
 from fabric import ThreadingGroup
 import argparse
-import os
 import getpass
 
-from orca.proj.celery import DEVELOPMENT_VARIABLE
+from orca.configmanager import queue_config
 
 ENV_DIR = f'/opt/astro/devel/{getpass.getuser()}/distributed-pipeline/'
 
 
 def main(hosts, concurrency):
     with ThreadingGroup(*hosts) as sg:
-        queue_name = 'default-1-per-node'
-        if DEVELOPMENT_VARIABLE in os.environ:
-            queue_name = os.environ[DEVELOPMENT_VARIABLE]
+        queue_name = queue_config['prefix']
         worker_name = queue_name
         # Revisit this later https://docs.celeryproject.org/en/stable/reference/celery.bin.multi.html can have multiple
         # queues on the same worker.
