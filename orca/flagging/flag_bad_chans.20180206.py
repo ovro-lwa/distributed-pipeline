@@ -2,7 +2,7 @@
 
 from __future__ import division
 import numpy as np
-import pyrap.tables as pt
+import casacore.tables as pt
 import os,argparse
 import numpy.ma as ma
 from scipy.stats import skew
