@@ -1,11 +1,55 @@
 import pytest
 
+from orca.utils import coord
+
 import numpy as np
 from math import radians, atan2, sin, cos, asin, pi, sqrt, degrees
 import math
 from orca.utils import fitsutils
 from tests.common import TEST_FITS
+from astropy.coordinates import SkyCoord, get_sun, Angle, ICRS, GCRS
+from astropy.time import Time
+from astropy import units as u
 
+from datetime import datetime
+
+def test_verify_coordinates():
+    assert coord.CAS_A.separation(SkyCoord.from_name('Cas A')) < 1 * u.arcmin
+    assert coord.CYG_A.separation(SkyCoord.from_name('Cygnus A')) < 1 * u.arcmin
+    assert coord.TAU_A.separation(SkyCoord.from_name('Crab Pulsar ')) < 1 * u.arcmin
+
+
+def test_sun_icrs():
+    t = datetime(2018, 3, 23, 16, 26, 18)
+    ans = SkyCoord('00h09m23s +1d11m30s', frame=ICRS) # Read off from an image
+    assert coord.sun_icrs(t).separation(ans) < 15 * u.arcmin
+
+
+"""
+Tests that illustrate how astropy's get_sun works.
+"""
+
+
+def test_astropy_never_transform_to_sun_location_to_icrs():
+    """
+    This does not work. I think it's because ICRS is barycentric and the Sun's coordinate (in 3D) is too close to
+    the coordinate center.
+    """
+    t = Time('2018-03-23T16:26:18', format='isot', scale='utc')
+    sun_coord = get_sun(t)
+    # The Same GCRS but much farther away. This should convert to the "right" ICRS coordindate
+    # (i.e. what one reads off an image).
+    sun_coord2 = SkyCoord(ra=sun_coord.ra, dec=sun_coord.dec, distance=10 * u.pc, frame=GCRS)
+    sun_coord2_icrs = sun_coord2.transform_to(ICRS)
+    sun_coord_icrs = sun_coord.transform_to(ICRS)
+    # These would look very different
+    assert sun_coord2_icrs.separation(sun_coord_icrs) > Angle('10 deg')
+    # But if you use GCRS as the base frame then it should work
+    assert sun_coord.separation(sun_coord2_icrs) < Angle('5 arcmin')
+
+"""
+Regression test for using astropy's wcs conversions
+"""
 
 def test_wcs_zenith_from_marin():
     im, header = fitsutils.read_image_fits(TEST_FITS)
@@ -29,7 +73,7 @@ def test_wcs_below_horizon_from_marin():
     im, header = fitsutils.read_image_fits(TEST_FITS)
     w = __WCSFromMarin(header)
     assert w.sky2pix(91., -60.) == (np.nan, np.nan)
-    sky =  w.pix2sky(90., 2000)
+    sky = w.pix2sky(90., 2000)
     assert math.isnan(sky[0])
     assert math.isnan(sky[1])
 

@@ -33,6 +33,7 @@ def write_fits_mask_with_box_xy_coordindates(output_fits_path: str, imsize: int,
     write_image_fits(output_fits_path, get_sample_header(), image.T, overwrite=True)
     return output_fits_path
 
+
 def get_sample_header() -> fits.Header:
     return fits.Header(
      {'SIMPLE': True,
