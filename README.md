@@ -37,8 +37,9 @@ pytest
 ```
 which should run the tests and output a report.
 
+
 It is recommended that pycharm be used for development. I have not settled on a
-style linter or a documentation format yet...
+style linter or a documentation format yet...You can sync your local codebase with astm by setting the `$ASTM_USER_NAME` variable and then run `./sync_with_astm.sh` to sync.
 
 Adding a function to orca also requires integrating it with celery. This [example commit](https://github.com/ovro-lwa/distributed-pipeline/commit/e1e577437bef3c19162bdab1cd3973bee2128c04) shows the way to add and integrate a new function.
 
