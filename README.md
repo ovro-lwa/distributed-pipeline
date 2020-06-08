@@ -24,12 +24,6 @@ This should install the dependencies of the project (with versions etc as specif
 or prefix any command with:
 ```pipenv run```
 
-Then run
-```
-pipenv install -e .
-```
-This will install the package in development mode, so that libraries can be called and
-binaries be executed. This can be re-run after code changes.
 
 To run the tests, do
 ```
