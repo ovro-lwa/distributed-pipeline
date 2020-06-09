@@ -23,7 +23,7 @@ install:
 
 script:
   - pytest --cov=orca
+  - mypy --ignore-missing-imports orca
 
 after_success:
-  - codecov
-  - mypy --ignore-missing-imports orca
+  - bash <(curl -s https://codecov.io/bash)
