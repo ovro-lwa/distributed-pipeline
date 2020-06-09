@@ -4,7 +4,7 @@ from .celery import app
 from celery import group
 from ..transform import siderealsubtraction, gainscaling
 from ..wrapper import change_phase_centre, wsclean
-from ..flagging import merge_flags
+from ..flagging import flagoperations
 from ..metadata.pathsmanagers import OfflinePathsManager
 from ..utils import image_sub
 from datetime import datetime, timedelta
@@ -40,7 +40,7 @@ def sidereal_subtraction(dir1, dir2, datetime_1, datetime_2, out_dir1, out_dir2,
         spws = [f'{i:02d}' for i in range(22)]
         for s in spws:
             gainscaling.correct_scaling(f'{tree1}/{s}_{datetime_1}.ms', f'{tree2}/{s}_{datetime_2}.ms')
-            merge_flags.merge_flags(f'{tree1}/{s}_{datetime_1}.ms', f'{tree2}/{s}_{datetime_2}.ms')
+            flagoperations.merge_flags(f'{tree1}/{s}_{datetime_1}.ms', f'{tree2}/{s}_{datetime_2}.ms')
             change_phase_centre.change_phase_center(f'{tree2}/{s}_{datetime_2}.ms', new_phase_center)
 
         im1 = imaging.make_residual_image_with_source_removed(sorted(glob.glob(f'{tree1}/??_{datetime_1}.ms')),

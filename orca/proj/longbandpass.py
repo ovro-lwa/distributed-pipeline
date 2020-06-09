@@ -4,7 +4,7 @@ from .celery import app
 from celery import group
 from ..transform import siderealsubtraction
 from ..wrapper import change_phase_centre, wsclean
-from ..flagging import merge_flags
+from ..flagging import flagoperations
 from ..metadata.pathsmanagers import OfflinePathsManager
 from ..utils import image_sub
 from datetime import datetime, timedelta
@@ -54,7 +54,7 @@ def subsequent_frame_subtraction(dir1, dir2, datetime_1, datetime_2, out_dir):
         new_phase_center = change_phase_centre.get_phase_center(f'{tree1}/00_{datetime_1}.ms')
         spws = [f'{i:02d}' for i in range(22)]
         for s in spws:
-            merge_flags.merge_flags(f'{tree1}/{s}_{datetime_1}.ms', f'{tree2}/{s}_{datetime_2}.ms')
+            flagoperations.merge_flags(f'{tree1}/{s}_{datetime_1}.ms', f'{tree2}/{s}_{datetime_2}.ms')
             change_phase_centre.change_phase_center(f'{tree2}/{s}_{datetime_2}.ms', new_phase_center)
         im1 = orca.transform.imaging.make_dirty_image(sorted(glob.glob(f'{tree2}/??_{datetime_2}.ms')), temp_tree,
                                                       datetime_2)
@@ -80,7 +80,7 @@ def prep_image_for_sidereal_subtraction(dir1, dir2, datetime_1, datetime_2, out_
         new_phase_center = change_phase_centre.get_phase_center(f'{tree1}/00_{datetime_1}.ms')
         spws = [f'{i:02d}' for i in range(22)]
         for s in spws:
-            merge_flags.merge_flags(f'{tree1}/{s}_{datetime_1}.ms', f'{tree2}/{s}_{datetime_2}.ms')
+            flagoperations.merge_flags(f'{tree1}/{s}_{datetime_1}.ms', f'{tree2}/{s}_{datetime_2}.ms')
             change_phase_centre.change_phase_center(f'{tree2}/{s}_{datetime_2}.ms', new_phase_center)
         im1, psf = orca.transform.imaging.make_dirty_image(sorted(glob.glob(f'{tree1}/??_{datetime_1}.ms')), temp_tree,
                                                            datetime_1, make_psf=True)

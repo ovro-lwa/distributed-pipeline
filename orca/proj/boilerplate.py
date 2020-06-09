@@ -4,7 +4,7 @@ import logging
 import sys
 
 import orca.transform.imaging
-from orca.flagging import merge_flags, flag_bad_chans
+from orca.flagging import flagoperations, flag_bad_chans
 from orca.proj.celery import app
 from orca.wrapper import dada2ms, change_phase_centre, wsclean
 from orca.transform import peeling, integrate, gainscaling
@@ -31,7 +31,7 @@ def peel(ms_file, sources):
 
 @app.task
 def apply_a_priori_flags(ms_file, flag_npy_path):
-    return merge_flags.write_to_flag_column(ms_file, flag_npy_path)
+    return flagoperations.write_to_flag_column(ms_file, flag_npy_path)
 
 
 @app.task
@@ -68,7 +68,7 @@ def run_correct_scaling(baseline_ms, target_ms, data_column='CORRECTED_DATA'):
 
 @app.task
 def run_merge_flags(ms1, ms2):
-    merge_flags.merge_flags(ms1, ms2)
+    flagoperations.merge_flags(ms1, ms2)
 
 
 @app.task
