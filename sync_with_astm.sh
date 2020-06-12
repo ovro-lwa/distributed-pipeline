@@ -7,7 +7,7 @@ if [ -z "$ASTM_USER_NAME" ]; then
 fi
 
 REMOTE_USER=$ASTM_USER_NAME
-REMOTE_DIR=/opt/astro/devel/${REMOTE_USER}/distributed-pipeline/
+REMOTE_DIR=/opt/astro/devel/${REMOTE_USER}/
 LOCAL_DIR=`pwd`
 REMOTE_HOST=astm13.lwa.ovro.caltech.edu
 
