@@ -48,6 +48,7 @@ def is_visible(coordinates: Union[SkyCoord, ICRS], utc_time: datetime, altitude_
 
 
 def get_altaz_at_ovro(coordinates: SkyCoord, utc_time: datetime) -> SkyCoord:
+    # TODO Cache the AltAz object
     return coordinates.transform_to(AltAz(location=OVRO_LWA_LOCATION, obstime=Time(utc_time, scale='utc')))
 
 

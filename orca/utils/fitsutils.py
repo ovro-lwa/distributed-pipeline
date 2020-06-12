@@ -1,6 +1,6 @@
 from astropy.io import fits
 import numpy as np
-from typing import Tuple
+from typing import Tuple, List
 
 
 def read_image_fits(fn: str) -> Tuple[np.array, fits.Header]:
@@ -16,21 +16,25 @@ def write_image_fits(fn, header, data, overwrite=False):
 
 
 def write_fits_mask_with_box_xy_coordindates(output_fits_path: str, imsize: int,
-                                             center: Tuple[int, int], width: int) -> str:
+                                             center_list: List[Tuple[int, int]], width_list: List[int]) -> str:
     """
-    Writes a fits mask to file. Both im and center are in the WCS X Y coordindates (i.e. transpose of the numpy array
-    from astropy.fits.
-    :param output_fits_path:
-    :param imsize:
-    :param center: Center of the box. Must be in XY index (i.e. what ds9 shows)
-    :param width:
-    :return:
+    Writes a fits mask with a list of boxes to file. Both im+list and center_list are in
+    WCS X Y coordindates (i.e. transpose of the numpy array
+    from astropy.fits. The fits will NOT have a header that is accurate since only the pixels will be used.
+    :param output_fits_path: The fits file path.
+    :param imsize: size of the image
+    :param center_list: A list of enters of the boxes. Must be in XY index (i.e. what ds9 shows)
+    :param width_list: A list of widths of the boxes in pixels, with each element being the width of the corresponding
+    center_list element
+    :return: The fits file path.
     """
-    assert width % 2 == 1, 'width must be an odd number'
     image = np.zeros(shape=(imsize, imsize))
-    image[(center[0] - width//2):(center[0] + width//2 + 1), (center[1] - width//2):(center[1] + width//2 + 1)] = \
-        np.ones(shape=(width, width))
-    write_image_fits(output_fits_path, get_sample_header(), image.T, overwrite=True)
+    for i, center in enumerate(center_list):
+        width = width_list[i]
+        assert width % 2 == 1, 'width must be an odd number'
+        image[(center[0] - width//2):(center[0] + width//2 + 1), (center[1] - width//2):(center[1] + width//2 + 1)] = \
+            np.ones(shape=(width, width))
+        write_image_fits(output_fits_path, get_sample_header(), image.T, overwrite=True)
     return output_fits_path
 
 

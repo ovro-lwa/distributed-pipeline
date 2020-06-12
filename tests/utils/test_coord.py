@@ -1,7 +1,7 @@
 import pytest
 from pytest import mark
 
-from orca.utils import coord
+from orca.utils import coordutils
 
 import numpy as np
 from math import radians, atan2, sin, cos, asin, pi, sqrt, degrees
@@ -16,16 +16,16 @@ from datetime import datetime
 
 
 def test_verify_coordinates():
-    assert coord.CAS_A.separation(SkyCoord.from_name('Cas A')) < 1 * u.arcmin
-    assert coord.CYG_A.separation(SkyCoord.from_name('Cygnus A')) < 1 * u.arcmin
-    assert coord.TAU_A.separation(SkyCoord.from_name('Crab Pulsar ')) < 1 * u.arcmin
+    assert coordutils.CAS_A.separation(SkyCoord.from_name('Cas A')) < 1 * u.arcmin
+    assert coordutils.CYG_A.separation(SkyCoord.from_name('Cygnus A')) < 1 * u.arcmin
+    assert coordutils.TAU_A.separation(SkyCoord.from_name('Crab Pulsar ')) < 1 * u.arcmin
 
 
 @mark.parametrize('t, expected_pos', [
     (datetime(2018, 3, 23, 16, 26, 18), SkyCoord('00h09m23s +1d11m30s', frame=ICRS))  # Read off an image
 ])
 def test_sun_icrs(t, expected_pos):
-    assert coord.sun_icrs(t).separation(expected_pos) < 15 * u.arcmin
+    assert coordutils.sun_icrs(t).separation(expected_pos) < 15 * u.arcmin
 
 
 @mark.parametrize('t, direction, expected_az, expected_alt', [
@@ -35,8 +35,8 @@ def test_sun_icrs(t, expected_pos):
     (datetime(2018, 3, 22, 3, 30, 14), SkyCoord('19h59m24s +40d44m50s'), 355.27 * u.deg, -11.78 * u.deg)
 ])
 def test_get_altaz_at_ovro(t, direction, expected_az, expected_alt):
-    assert coord.get_altaz_at_ovro(direction, t).az - expected_az < 0.1 * u.deg
-    assert coord.get_altaz_at_ovro(direction, t).alt - expected_alt < 0.1 * u.deg
+    assert coordutils.get_altaz_at_ovro(direction, t).az - expected_az < 0.1 * u.deg
+    assert coordutils.get_altaz_at_ovro(direction, t).alt - expected_alt < 0.1 * u.deg
 
 
 @mark.parametrize('az, expected_alt', [
@@ -46,19 +46,19 @@ def test_get_altaz_at_ovro(t, direction, expected_az, expected_alt):
 
 ])
 def test_get_interpolated_mountain_alt(az, expected_alt):
-    assert coord._get_interpolated_mountain_alt(az) == expected_alt
+    assert coordutils._get_interpolated_mountain_alt(az) == expected_alt
 
 
 @mark.parametrize('coordinates, utc_time, altitude_limit, expected_ans', [
     # Read off an image. CygA is invisible. CasA is low.
-    (coord.TAU_A, datetime(2018, 3, 23, 3, 26, 18), 5 * u.deg, True),
-    (coord.CYG_A, datetime(2018, 3, 23, 3, 26, 18), 5 * u.deg, False),
-    (coord.CYG_A, datetime(2018, 3, 23, 3, 26, 18), 0 * u.deg, False),
-    (coord.CAS_A, datetime(2018, 3, 23, 3, 26, 18), 0 * u.deg, True),
-    (coord.CAS_A, datetime(2018, 3, 23, 3, 26, 18), 20 * u.deg, False),
+    (coordutils.TAU_A, datetime(2018, 3, 23, 3, 26, 18), 5 * u.deg, True),
+    (coordutils.CYG_A, datetime(2018, 3, 23, 3, 26, 18), 5 * u.deg, False),
+    (coordutils.CYG_A, datetime(2018, 3, 23, 3, 26, 18), 0 * u.deg, False),
+    (coordutils.CAS_A, datetime(2018, 3, 23, 3, 26, 18), 0 * u.deg, True),
+    (coordutils.CAS_A, datetime(2018, 3, 23, 3, 26, 18), 20 * u.deg, False),
 ])
 def test_is_visible(coordinates, utc_time, altitude_limit, expected_ans):
-    assert coord.is_visible(coordinates, utc_time, altitude_limit=altitude_limit) == expected_ans
+    assert coordutils.is_visible(coordinates, utc_time, altitude_limit=altitude_limit) == expected_ans
 
 
 """
