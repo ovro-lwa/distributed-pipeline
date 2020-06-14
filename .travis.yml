@@ -8,12 +8,14 @@ branches:
     - master
     - prod
 
-matrix:
+jobs:
   include:
     python: 3.6
     dist: xenial
-    sudo: true
 
+git:
+  lfs_skip_smudge: true
+  
 before_install:
   - sudo apt-get -y install libgfortran3
 
@@ -22,6 +24,8 @@ install:
   - pipenv sync --dev
 
 script:
+  - wget https://www.astro.caltech.edu/~yuping/resources.tar.gz
+  - tar -xvzf resources.tar.gz -C $TRAVIS_BUILD_DIR/distributed-pipeline/test
   - pytest --cov=orca
   - mypy --ignore-missing-imports orca
 
