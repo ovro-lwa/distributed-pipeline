@@ -25,7 +25,7 @@ install:
 
 script:
   - wget --no-check-certificate http://www.astro.caltech.edu/~yuping/resources.tar.gz
-  - tar -xvzf resources.tar.gz -C $TRAVIS_BUILD_DIR/distributed-pipeline/test
+  - tar -xvzf resources.tar.gz -C $TRAVIS_BUILD_DIR/tests
   - pytest --cov=orca
   - mypy --ignore-missing-imports orca
 
