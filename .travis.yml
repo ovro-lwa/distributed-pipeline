@@ -24,7 +24,7 @@ install:
   - pipenv sync --dev
 
 script:
-  - wget http://www.astro.caltech.edu/~yuping/resources.tar.gz
+  - wget --no-check-certificate http://www.astro.caltech.edu/~yuping/resources.tar.gz
   - tar -xvzf resources.tar.gz -C $TRAVIS_BUILD_DIR/distributed-pipeline/test
   - pytest --cov=orca
   - mypy --ignore-missing-imports orca
