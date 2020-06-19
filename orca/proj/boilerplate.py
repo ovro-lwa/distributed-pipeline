@@ -4,10 +4,10 @@ import logging
 import sys
 
 import orca.transform.imaging
-from orca.flagging import flagoperations, flag_bad_chans
+from orca.flagging import flagoperations, flag_bad_chans, flag_bls
 from orca.proj.celery import app
 from orca.wrapper import dada2ms, change_phase_centre, wsclean
-from orca.transform import peeling, integrate, gainscaling
+from orca.transform import peeling, integrate, gainscaling, spectrum
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
@@ -30,6 +30,11 @@ def peel(ms_file, sources):
 
 
 @app.task
+def get_spectrum(ms_file, source, data_column='CORRECTED_DATA', timeavg=False):
+    return spectrum.gen_spectrum(ms_file, source, data_column, timeavg)
+
+
+@app.task
 def apply_a_priori_flags(ms_file, flag_npy_path):
     return flagoperations.write_to_flag_column(ms_file, flag_npy_path)
 
@@ -40,6 +45,11 @@ def apply_ant_flag(ms_file, ants):
     t = table(ms_file)
     taql(f"update $t set FLAG=True where any(ANTENNA1==$ants || ANTENNA2==$ants)")
     return ms_file
+
+
+@app.task
+def apply_bl_flag(ms_file, bl_file):
+    return flag_bls.flag_bls(ms_file, bl_file)
 
 
 @app.task
