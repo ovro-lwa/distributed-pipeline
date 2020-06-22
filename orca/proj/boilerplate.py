@@ -4,7 +4,7 @@ import logging
 import sys
 
 import orca.transform.imaging
-from orca.flagging import flagoperations, flag_bad_chans, flag_bls
+from orca.flagging import flagoperations, flag_bad_chans
 from orca.proj.celery import app
 from orca.wrapper import dada2ms, change_phase_centre, wsclean
 from orca.transform import peeling, integrate, gainscaling, spectrum
@@ -49,7 +49,7 @@ def apply_ant_flag(ms_file, ants):
 
 @app.task
 def apply_bl_flag(ms_file, bl_file):
-    return flag_bls.flag_bls(ms_file, bl_file)
+    return flagoperations.flag_bls(ms_file, bl_file)
 
 
 @app.task
