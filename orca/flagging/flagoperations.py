@@ -5,11 +5,13 @@ Copy from Marin Anderson 3/8/2019
 import casacore.tables as pt
 import numpy as np
 
+from typing import Tuple
+
 DATA = 'DATA'
 CORRECTED_DATA = 'CORRECTED_DATA'
 
 
-def merge_flags(ms1: str, ms2: str):
+def merge_flags(ms1: str, ms2: str) -> Tuple[str, str]:
     with pt.table(ms1, readonly=False) as t_prev:
         with pt.table(ms2, readonly=False) as t:
             flagcol1 = t_prev.getcol('FLAG')
@@ -20,7 +22,7 @@ def merge_flags(ms1: str, ms2: str):
     return ms1, ms2
 
 
-def write_to_flag_column(ms: str, flag_npy: str):
+def write_to_flag_column(ms: str, flag_npy: str) -> str:
     with pt.table(ms, readonly=False) as t:
         flagcol = np.load(flag_npy)
         assert flagcol.shape == t.getcol('FLAG').shape, 'Flag file and measurement set have different shapes'
@@ -28,20 +30,20 @@ def write_to_flag_column(ms: str, flag_npy: str):
     return ms
 
 
-def flag_bls(msfile: str, blfile: str):
+def flag_bls(msfile: str, blfile: str) -> str:
     """
     Input: msfile, .bl file
     Applies baseline flags to FLAG column.
     """
     with pt.table(msfile, readonly=False) as t:
         flagcol = t.getcol('FLAG')  # flagcol.shape = (N*(N-1)/2 + N)*Nspw*Nints,Nchans,Ncorrs
-        Nants   = t.getcol('ANTENNA1')[-1] + 1
-        Nbls    = int((Nants*(Nants-1)/2.) + Nants)
+        Nants = t.getcol('ANTENNA1')[-1] + 1
+        Nbls = int((Nants*(Nants-1)/2.) + Nants)
         if not (flagcol.shape[0] >= Nbls):
             raise ValueError(f'Unexpected number of visibilities in flagcol {flagcol.shape}')
-        Nspw    = int(flagcol.shape[0]/Nbls)
-        Nchans  = flagcol.shape[1]
-        Ncorrs  = flagcol.shape[2]
+        Nspw = int(flagcol.shape[0]/Nbls)
+        Nchans = flagcol.shape[1]
+        Ncorrs = flagcol.shape[2]
         # make the correlation matrix
         flagmat = np.zeros((Nants,Nants,Nspw,Nchans,Ncorrs))
         tiuinds = np.triu_indices(Nants)
