@@ -26,7 +26,7 @@ def run_chgcentre(ms_file, direction):
 
 @app.task
 def peel(ms_file, sources):
-    return peeling.peel_with_ttcal(ms_file, sources)
+    return peeling.ttcal_peel_from_data_to_corrected_data(ms_file, sources)
 
 
 @app.task

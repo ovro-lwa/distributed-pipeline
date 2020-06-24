@@ -1,5 +1,5 @@
 import pytest
-from mock import patch, Mock
+from mock import patch
 
 from os import path
 

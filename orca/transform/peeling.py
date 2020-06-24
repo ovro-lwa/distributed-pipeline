@@ -2,8 +2,9 @@ import logging
 
 from orca.utils.sourcemodels import RFI_B, CYG_A_UNPOLARIZED_RESOLVED, CAS_A_UNPOLARIZED_RESOLVED
 from orca.wrapper import ttcal
-from typing import List
+from typing import List, Optional
 from datetime import datetime
+import json
 
 import casacore.tables as tables
 from orca.utils import coordutils
@@ -13,7 +14,7 @@ CORRECTED_DATA = 'CORRECTED_DATA'
 DATA = 'DATA'
 
 
-def peel_with_ttcal(ms: str, sources_json: str):
+def ttcal_peel_from_data_to_corrected_data(ms: str, sources_json: str):
     with tables.table(ms, readonly=False) as t:
         # Copied from https://github.com/casacore/python-casacore/blob/master/casacore/tables/msutil.py#L48
         column_names = t.colnames()
@@ -32,8 +33,14 @@ def peel_with_ttcal(ms: str, sources_json: str):
     return ms
 
 
-def write_peeling_sources_json(utc_timestamp: datetime, out_json: str, include_rfi_source: bool):
-    pass
+def write_peeling_sources_json(utc_timestamp: datetime, out_json: str, include_rfi_source: bool) -> Optional[str]:
+    sources = _get_peeling_sources_dict(utc_timestamp, include_rfi_source)
+    if sources:
+        with open(out_json, 'w') as out_file:
+            json.dump(sources, out_file)
+        return out_json
+    else:
+        return None
 
 
 def _get_peeling_sources_dict(utc_timestamp: datetime, include_rfi_source: bool) -> List[dict]:
