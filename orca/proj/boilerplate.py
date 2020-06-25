@@ -33,6 +33,9 @@ def peel(ms_file: str, utc_datetime: str) -> str:
     return peeling.ttcal_peel_from_data_to_corrected_data(ms_file,
                                                           datetime.strptime(utc_datetime, "%Y-%m-%dT%H:%M:%S"))
 
+@app.task
+def zest(ms_file):
+    return peeling.zest_with_casa(ms_file)
 
 @app.task
 def get_spectrum(ms_file: str, source: str, data_column: str = 'CORRECTED_DATA', timeavg: bool = False) -> str:
