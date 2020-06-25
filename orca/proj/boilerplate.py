@@ -28,6 +28,9 @@ def run_chgcentre(ms_file, direction):
 def peel(ms_file, sources):
     return peeling.peel_with_ttcal(ms_file, sources)
 
+@app.task
+def zest(ms_file):
+    return peeling.zest_with_casa(ms_file)
 
 @app.task
 def get_spectrum(ms_file, source, data_column='CORRECTED_DATA', timeavg=False):
