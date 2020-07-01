@@ -9,7 +9,7 @@ import orca.transform.imaging
 from orca.flagging import flagoperations, flag_bad_chans
 from orca.proj.celery import app
 from orca.wrapper import dada2ms, change_phase_centre, wsclean
-from orca.transform import peeling, integrate, gainscaling, spectrum
+from orca.transform import peeling, integrate, gainscaling, spectrum, calibration
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
@@ -18,8 +18,8 @@ logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 Celery adapter on top of transforms.
 """
 @app.task
-def run_dada2ms(dada_file: str, out_ms: str, gaintable: Optional[str] = None) -> str:
-    dada2ms.dada2ms(dada_file, out_ms, gaintable)
+def run_dada2ms(dada_file: str, out_ms: str, gaintable: Optional[str] = None, addspw: bool = False) -> str:
+    dada2ms.dada2ms(dada_file, out_ms, gaintable, addspw)
     return out_ms
 
 
@@ -41,6 +41,9 @@ def zest(ms_file):
 def get_spectrum(ms_file: str, source: str, data_column: str = 'CORRECTED_DATA', timeavg: bool = False) -> str:
     return spectrum.gen_spectrum(ms_file, source, data_column, timeavg)
 
+@app.task
+def do_calibration(ms_file):
+    return calibration.calibration_steps(ms_file)
 
 @app.task
 def apply_a_priori_flags(ms_file: str, flag_npy_path: str) -> str:
