@@ -11,12 +11,12 @@ from casacore import measures
 from casatools import componentlist
 
 
-def BCAL_dadaname_list(utc_times_txt_path: str, duration: float = 20):
+def BCAL_dadaname_list(utc_times_txt_path: str, duration_min: float = 20):
     """
     Get list of .dada file names to use for calibration. Selects .dada files that
-    span {duration} centered on transit of Cygnus A.
+    span {duration_min} centered on transit of Cygnus A.
     :param utc_times_txt_path: Path to utc_times.txt file.
-    :param duration: In minutes, amount of time used for calibration.
+    :param duration_min: In minutes, amount of time used for calibration.
         Default is 20 minutes.
     :return: List of .dada file names to use for calibration.
     """
@@ -28,10 +28,10 @@ def BCAL_dadaname_list(utc_times_txt_path: str, duration: float = 20):
     # Convert {utctimes} to array of LSTs and MJDs
     lsttimes = Time(utctimes, scale='utc').sidereal_time('apparent', LWA_LON)
     mjdtimes = Time(utctimes, scale='utc').mjd
-    # Select {duration} range of LSTs where CygA is closest to zenith
+    # Select {duration_min} range of LSTs where CygA is closest to zenith
     CygA_HA        = CYG_A.ra.hourangle
-    CygA_HA_start  = CygA_HA - duration/2./60.
-    CygA_HA_stop   = CygA_HA + duration/2./60.
+    CygA_HA_start  = CygA_HA - duration_min/2./60.
+    CygA_HA_stop   = CygA_HA + duration_min/2./60.
     first_24_hrs   = np.where( (mjdtimes - mjdtimes[0]) <= 1. )
     rel_starttimes = np.abs(lsttimes.value[first_24_hrs] - CygA_HA_start)
     rel_stoptimes  = np.abs(lsttimes.value[first_24_hrs] - CygA_HA_stop)

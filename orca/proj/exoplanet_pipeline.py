@@ -1,5 +1,4 @@
-from orca.proj.boilerplate import run_dada2ms, flag_chans, apply_ant_flag, apply_bl_flag, zest, run_chgcentre, run_integrate_with_concat, do_calibration, get_spectrum
-from orca.transform.calibration import bandpass_correction
+from orca.proj.boilerplate import run_dada2ms, flag_chans, apply_ant_flag, apply_bl_flag, zest, run_chgcentre, run_integrate_with_concat, do_calibration, get_spectrum, do_bandpass_correction
 from orca.utils.calibrationutils import BCAL_dadaname_list
 from orca.utils.coordutils import CYG_A
 from orca.flagging.flag_bad_ants import flag_bad_ants, concat_dada2ms, plot_autos
@@ -34,7 +33,7 @@ spws               = [path.basename(dadafile_dir_wspw) for dadafile_dir_wspw in 
 
 
 def calibration_pipeline(utc_times_txt_path: str):
-    ## add in os.makedirs!
+    ## USE CHAINS
     # identify calibration integrations
     BCALdadafiles  = BCAL_dadaname_list(utc_times_txt_path)
     middleBCALfile = BCALdadafiles[int(BCALdadafiles.shape[0]/2)]
@@ -44,29 +43,29 @@ def calibration_pipeline(utc_times_txt_path: str):
     pdffile        = plot_autos(msfileantflags)
     # chain together dada2ms and chgcentre commands
     phase_center = change_phase_centre.get_phase_center(msfileantflags)
-    pdb.set_trace()
     for spw in spws:
-        BCALmsfiles  = group( [run_dada2ms(f'{dadafile_dir}/{spw}/{dadafile}',f'{bcal_dir}/{spw}-{path.splitext(dadafile)[0]}.ms') for dadafile in BCALdadafiles] )()
-        BCALmsfiles  = group( [run_chgcentre(msfile, phase_center) for msfile in BCALmsfiles] )()
-    BCALmslist   = group( [run_integrate_with_concat(np.sort(glob.glob(f'{bcal_dir}/{spw}-*.ms')), f'{bcal_dir}/{spw}-T1al.ms') for spw in spws] )()
+        BCALmsfiles  = group( [run_dada2ms.s(f'{dadafile_dir}/{spw}/{dadafile}',f'{bcal_dir}/{spw}-{path.splitext(dadafile)[0]}.ms') for dadafile in BCALdadafiles] )()
+        BCALmsfiles  = group( [run_chgcentre.s(msfile, phase_center) for msfile in BCALmsfiles.get()] )()
+    BCALmslist   = group( [run_integrate_with_concat.s(np.sort(glob.glob(f'{bcal_dir}/{spw}-*.ms')).tolist(), f'{bcal_dir}/{spw}-T1al.ms') for spw in spws] )()
     # flag antennas, baselines
     #ants = np.genfromtxt(f'{flag_dir}/all.antflags', dtype=int, delimiter=',')
     ants         = np.genfromtxt(antflagfile, dtype=int, delimiter=',')
-    BCALmslist   = group( [apply_ant_flag(msfile, ants) for msfile in BCALmslist] )()
+    BCALmslist   = group( [apply_ant_flag.s(msfile, ants.tolist()) for msfile in BCALmslist.get()] )()
     #blfile       = f'{flag_dir}/all.blflags'
     blfile1      = '/home/mmanders/imaging_scripts/flagfiles/defaults/expansion2expansion.bl'
-    BCALmslist   = group( [apply_bl_flag(msfile, blfile1) for msfile in BCALmslist] )()
+    BCALmslist   = group( [apply_bl_flag.s(msfile, blfile1) for msfile in BCALmslist.get()] )()
     blfile2      = '/home/mmanders/imaging_scripts/flagfiles/defaults/flagsRyan_adjacent.bl'
-    BCALmslist   = group( [apply_bl_flag(msfile, blfile2) for msfile in BCALmslist] )()
+    BCALmslist   = group( [apply_bl_flag.s(msfile, blfile2) for msfile in BCALmslist.get()] )()
     # Basic calibration steps
-    BCALmslist   = group( [do_calibration(msfile) for msfile in BCALmslist] )()
+    BCALmslist   = group( [do_calibration.s(msfile) for msfile in BCALmslist.get()] )()
     # chgcentre and generate spectrum
-    BCALmslist   = group( [run_chgcentre(msfile, CYG_A.to_string('hmsdms')) for msfile in BCALmslist] )()
-    spectrafiles = group( [get_spectrum(msfile, 'CygA', timeavg=True) for msfile in BCALmslist] )()
+    BCALmslist   = group( [run_chgcentre.s(msfile, CYG_A.to_string('hmsdms')) for msfile in BCALmslist.get()] )()
+    spectrafiles = group( [get_spectrum.s(msfile, 'CygA', timeavg=True) for msfile in BCALmslist.get()] )()
     # bandpass correction tables
-    bpasscorrlist = group( [bandpass_correction(spectrumfile, path.splitext(msfile)[0]+'.bcal', plot=True) for spectrumfile,msfile in zip(spectrafiles,BCALmslist)] )()
+    bpasscorrlist = group( [do_bandpass_correction.s(spectrumfile, path.splitext(msfile)[0]+'.bcal', plot=True) for spectrumfile,msfile in zip(spectrafiles,BCALmslist)] )()
     
-
+    
+# fix this --> either add to boilerplate or add to include in celery.py
 @app.task
 def processing_pipeline(dadafile = str, subband = int):
     spw    = '%02d' % subband
@@ -77,15 +76,18 @@ def processing_pipeline(dadafile = str, subband = int):
     bcal    = f'{bcal_dir}/{spw}-T1al.bcal'
     Xcal    = f'{bcal_dir}/{spw}-T1al.X'
     dcal    = f'{bcal_dir}/{spw}-T1al.dcal'
-    #cygacal = bcal_dir+'/'+spw+'-T1al-spec.bcal'
-    #applycal(msfile, gaintable=[bcal,Xcal,dcal,cygacal], flagbackup=False)
-    applycal(msfile, gaintable=[bcal,Xcal,dcal], flagbackup=False)
+    cygacal = f'{bcal_dir}/{spw}-T1al-spec.bcal'
+    applycal(msfile, gaintable=[bcal,Xcal,dcal,cygacal], flagbackup=False)
     # apply antenna flags
-    ants = np.genfromtxt(f'{flag_dir}/all.antflags', dtype=int, delimiter=',')
-    apply_ant_flag(msfile, ants)
+    #ants = np.genfromtxt(f'{flag_dir}/all.antflags', dtype=int, delimiter=',')
+    ants = np.genfromtxt(f'{bcal_dir}/flag_bad_ants.ants', dtype=int, delimiter=',')
+    apply_ant_flag(msfile, ants.tolist())
     # apply baseline flags
-    blfile = f'{flag_dir}/all.blflags'
-    apply_bl_flag(msfile,blfile)
+    #blfile = f'{flag_dir}/all.blflags'
+    blfile1 = '/home/mmanders/imaging_scripts/flagfiles/defaults/expansion2expansion.bl'
+    blfile2 = '/home/mmanders/imaging_scripts/flagfiles/defaults/flagsRyan_adjacent.bl'
+    apply_bl_flag(msfile,blfile1)
+    apply_bl_flag(msfile,blfile2)
     # generate and apply channel flags
     flag_chans(msfile, spw)
     # polarized peel

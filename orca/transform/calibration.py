@@ -24,15 +24,12 @@ def calibration_steps(ms: str):
     ft(ms, complist = clfile, usescratch=True)
     bandpass(ms, bcalfile, refant='34', uvrange='>15lambda', combine='scan,field,obs',
         fillgaps=1)
-    polcal(ms, Xcalfile, gaintable=[bcalfile], refant='', uvrange='>15lambda>',
-        poltype='Xf', combine='scan,field,obs')
-    polcal(ms, dcalfile, gaintable=[bcalfile, Xcalfile], refant='', uvrange='>15lambda', 
-        poltype='Dflls', combine='scan,field,obs')
+    polcal(ms, Xcalfile, gaintable=[bcalfile], refant='', poltype='Xf', combine='scan,field,obs')
+    polcal(ms, dcalfile, gaintable=[bcalfile, Xcalfile], refant='', poltype='Dflls', combine='scan,field,obs')
     applycal(ms, gaintable=[bcalfile, Xcalfile, dcalfile], flagbackup=False)
     return ms
     
 
-@app.task
 def bandpass_correction(spectrumfile: str, bcalfile: str = None, plot: bool = False):
     """
     Generate calibration tables to correct bandpass flux scale based on Cyg A spectrum.
