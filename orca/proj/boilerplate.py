@@ -44,6 +44,10 @@ def get_spectrum(ms_file: str, source: str, data_column: str = 'CORRECTED_DATA',
 @app.task
 def do_calibration(ms_file):
     return calibration.calibration_steps(ms_file)
+    
+@app.task
+def do_bandpass_correction(spectrum_file, bcal_file=None, plot=False):
+    return calibration.bandpass_correction(spectrum_file, bcal_file, plot)
 
 @app.task
 def apply_a_priori_flags(ms_file: str, flag_npy_path: str) -> str:
