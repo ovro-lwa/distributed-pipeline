@@ -9,7 +9,7 @@ import numpy as np
 
 import casacore.tables as tables
 from orca.utils import coordutils
-from orca.utils.sourcemodels_get import gen_model_ms_stokes
+from orca.utils.calibrationutils import gen_model_ms_stokes
 from casatasks import ft, bandpass, polcal, applycal
 
 log = logging.getLogger(__name__)
