@@ -9,8 +9,8 @@ import tempfile
 
 
 def test_get_peeling_sources_dict():
-    assert len(peeling._get_peeling_sources_dict(datetime(2018, 9, 22, 2, 30, 0), True)) == 3
-    assert len(peeling._get_peeling_sources_dict(datetime(2018, 9, 22, 16, 30, 0), True)) == 2
+    assert len(peeling._get_peeling_sources_list(datetime(2018, 9, 22, 2, 30, 0), True)) == 3
+    assert len(peeling._get_peeling_sources_list(datetime(2018, 9, 22, 16, 30, 0), True)) == 2
 
 
 def test_write_peeling_sources_json():
