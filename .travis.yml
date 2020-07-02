@@ -2,11 +2,10 @@ language: python
 
 cache: pip
 
-# whitelist
+# only CI on the following branches 
 branches:
   only:
-    - master
-    - prod
+    - main
 
 jobs:
   include:
