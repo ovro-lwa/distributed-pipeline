@@ -2,6 +2,7 @@ import glob
 import os
 import logging
 import sys
+from typing import Optional
 
 import orca.transform.imaging
 from orca.flagging import flagoperations, flag_bad_chans
@@ -11,77 +12,73 @@ from orca.transform import peeling, integrate, gainscaling, spectrum
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
+
 """
 Celery adapter on top of transforms.
 """
 @app.task
-def run_dada2ms(dada_file, out_ms, gaintable=None):
+def run_dada2ms(dada_file: str, out_ms: str, gaintable: Optional[str] = None) -> str:
     dada2ms.dada2ms(dada_file, out_ms, gaintable)
     return out_ms
 
 
 @app.task
-def run_chgcentre(ms_file, direction):
+def run_chgcentre(ms_file: str, direction: str) -> str:
     return change_phase_centre.change_phase_center(ms_file, direction)
 
 @app.task
-def peel(ms_file, sources):
+def peel(ms_file: str, sources: str) -> str:
     return peeling.ttcal_peel_from_data_to_corrected_data(ms_file, sources)
 
 
 @app.task
-def get_spectrum(ms_file, source, data_column='CORRECTED_DATA', timeavg=False):
+def get_spectrum(ms_file: str, source: str, data_column: str = 'CORRECTED_DATA', timeavg: bool = False) -> str:
     return spectrum.gen_spectrum(ms_file, source, data_column, timeavg)
 
 
 @app.task
-def apply_a_priori_flags(ms_file, flag_npy_path):
+def apply_a_priori_flags(ms_file: str, flag_npy_path: str) -> str:
     return flagoperations.write_to_flag_column(ms_file, flag_npy_path)
 
 
 @app.task
-def apply_ant_flag(ms_file, ants):
-    from casacore.tables import table, taql
-    t = table(ms_file)
-    taql(f"update $t set FLAG=True where any(ANTENNA1==$ants || ANTENNA2==$ants)")
-    return ms_file
-
-
-@app.task
-def apply_bl_flag(ms_file, bl_file):
+def apply_bl_flag(ms_file: str, bl_file: str) -> str:
     return flagoperations.flag_bls(ms_file, bl_file)
 
 
 @app.task
-def flag_chans(ms, spw):
+def flag_chans(ms: str, spw: str) -> str:
     return flag_bad_chans.flag_bad_chans(ms, spw, apply_flag=True)
 
 
 @app.task
-def make_first_image(prefix, datetime_string, out_dir):
+def make_first_image(prefix: str, datetime_string: str, out_dir: str) -> str:
     logging.info(f'Glob statement is {prefix}/{datetime_string}/??_{datetime_string}.ms')
     os.makedirs(out_dir,exist_ok=True)
     ms_list = sorted(glob.glob(f'{prefix}/{datetime_string}/??_{datetime_string}.ms'))
-    assert len(ms_list) == 22
     return orca.transform.imaging.make_dirty_image(ms_list, out_dir, datetime_string)
 
 
 @app.task
-def run_integrate_with_concat(ms_list, out_ms, phase_center=None):
+def run_integrate_with_concat(ms_list: str, out_ms: str, phase_center: Optional[str] = None) -> str:
     return integrate.integrate(ms_list, out_ms, phase_center)
 
 
 @app.task
-def run_correct_scaling(baseline_ms, target_ms, data_column='CORRECTED_DATA'):
+def run_correct_scaling(baseline_ms: str, target_ms: str, data_column='CORRECTED_DATA') -> str:
     return gainscaling.correct_scaling(baseline_ms, target_ms, data_column=data_column)
 
 
 @app.task
-def run_merge_flags(ms1, ms2):
+def run_merge_flags(ms1: str, ms2: str) -> None:
     flagoperations.merge_flags(ms1, ms2)
 
 
 @app.task
-def add(x, y):
+def add(x: int, y: int) -> int:
     return x+y
 
+
+@app.task
+def str_concat(first, second, third=''):
+    return f'{first}{second}{third}'
