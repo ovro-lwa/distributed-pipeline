@@ -9,8 +9,7 @@ from tempfile import TemporaryDirectory
 from matplotlib import colors as mpl_colors
 from matplotlib import pyplot as plt
 from astropy import wcs
-from astropy.coordinates import SkyCoord, get_sun
-import astropy.time as ap_time
+from astropy.coordinates import SkyCoord
 import numpy as np
 
 from orca.utils import fitsutils, coordutils

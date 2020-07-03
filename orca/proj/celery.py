@@ -11,7 +11,7 @@ app = Celery(CELERY_APP_NAME,
                       'orca.transform',
                       'orca.proj.onedayaverage',
                       'orca.proj.gainvariation',
-                      'orca.proj.pipeline'])
+                      ])
 
 # Optional configuration, see the application user guide.
 app.conf.update(
