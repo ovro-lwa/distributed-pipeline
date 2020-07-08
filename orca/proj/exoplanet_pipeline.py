@@ -11,6 +11,7 @@ from os import path
 import numpy as np
 import glob
 import pdb
+from casatasks import applycal
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
@@ -62,10 +63,9 @@ def calibration_pipeline(utc_times_txt_path: str):
     BCALmslist   = group( [run_chgcentre.s(msfile, CYG_A.to_string('hmsdms')) for msfile in BCALmslist.get()] )()
     spectrafiles = group( [get_spectrum.s(msfile, 'CygA', timeavg=True) for msfile in BCALmslist.get()] )()
     # bandpass correction tables
-    bpasscorrlist = group( [do_bandpass_correction.s(spectrumfile, path.splitext(msfile)[0]+'.bcal', plot=True) for spectrumfile,msfile in zip(spectrafiles,BCALmslist)] )()
+    bpasscorrlist = group( [do_bandpass_correction.s(spectrumfile, path.splitext(msfile)[0]+'.bcal', plot=True) for spectrumfile,msfile in zip(spectrafiles.get(),BCALmslist.get())] )()
     
     
-# fix this --> either add to boilerplate or add to include in celery.py
 @app.task
 def processing_pipeline(dadafile = str, subband = int):
     spw    = '%02d' % subband
@@ -90,8 +90,8 @@ def processing_pipeline(dadafile = str, subband = int):
     apply_bl_flag(msfile,blfile2)
     # generate and apply channel flags
     flag_chans(msfile, spw)
-    # polarized peel
-    zest(msfile)
+    ## polarized peel
+    #zest(msfile)
     return msfile
     
 #@app.task

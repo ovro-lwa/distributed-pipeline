@@ -22,8 +22,10 @@ def calibration_steps(ms: str):
     # CASA tasks
     clearcal(ms, addmodel=True)
     ft(ms, complist = clfile, usescratch=True)
-    bandpass(ms, bcalfile, refant='34', uvrange='>15lambda', combine='scan,field,obs',
-        fillgaps=1)
+    #bandpass(ms, bcalfile, refant='34', uvrange='>15lambda', combine='scan,field,obs',
+    #    fillgaps=1)
+    bandpass(ms, bcalfile, refant='34', uvrange='>100', combine='scan,field,obs',
+        fillgaps=1)    
     polcal(ms, Xcalfile, gaintable=[bcalfile], refant='', poltype='Xf', combine='scan,field,obs')
     polcal(ms, dcalfile, gaintable=[bcalfile, Xcalfile], refant='', poltype='Dflls', combine='scan,field,obs')
     applycal(ms, gaintable=[bcalfile, Xcalfile, dcalfile], flagbackup=False)
@@ -53,7 +55,7 @@ def bandpass_correction(spectrumfile: str, bcalfile: str = None, plot: bool = Fa
         pylab.ylabel('Jy')
         pylab.xlabel('Frequency [MHz]')
         pylab.title('Cygnus A')
-        pylab.xlim([spec['frqarr'].min(),spec['frqarr'].max()]/1.e6)
+        pylab.xlim([spec['frqarr'].min()/1.e6,spec['frqarr'].max()/1.e6])
         pylab.ylim([15000,40000])
         pylab.savefig(path.splitext(spectrumfile)[0]+'_plot.png')
     #
@@ -69,7 +71,7 @@ def bandpass_correction(spectrumfile: str, bcalfile: str = None, plot: bool = Fa
         t = tables.table(f'{path.splitext(bcalfile)[0]}-spec.bcal',readonly=False)
         # fill column
         gains    = t.getcol('CPARAM') # gains.shape = [Nants,Nchans,Npol]
-        gains[:] = np.array([factorfull+0*1.j, factorfull+0*1.j], dtype=complex)
+        gains[:] = np.array([factorfull+0*1.j, factorfull+0*1.j], dtype=complex).T
         t.putcol('CPARAM', gains)
         t.close()
         return f'{path.splitext(bcalfile)[0]}-spec.bcal'
