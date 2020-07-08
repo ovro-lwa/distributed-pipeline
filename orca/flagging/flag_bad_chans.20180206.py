@@ -159,6 +159,7 @@ def flag_bad_chans(msfile, band, usedatacol=False):
         t.putcol('FLAG', flagcol_altered)
         #os.system('apply_sb_flags_single_band_ms2.py %s %s %02d' % (textfile,msfile,np.int(band)) )
     t.close()
+    return msfile
 
 def main():
     parser = argparse.ArgumentParser(description="Flag bad channels and write out list of channels that were \

@@ -1,6 +1,6 @@
 import numpy as np
 from os import path
-import math
+import math, shutil
 from astropy.time import Time
 from astropy.coordinates import SkyCoord, ICRS
 from orca.utils.constants import LWA_LON
@@ -78,7 +78,7 @@ def gen_model_ms_stokes(ms: str, zest: bool = False):
         dec = src['position'].split(' ')[2]
         if is_visible(SkyCoord(ra, dec, frame=ICRS), utctime):
             altaz = get_altaz_at_ovro(SkyCoord(ra, dec, frame=ICRS), utctime)
-            scale = np.array(outbeam.srcIQUV(altaz.az.rad, altaz.alt.rad))
+            scale = np.array(outbeam.srcIQUV(altaz.az.deg, altaz.alt.deg))
             cal_srcs[s]['Stokes'] = str(list(flux80_47(float(src['flux']), src['alpha'], freq, src['ref_freq']) * scale))
         else:
             del cal_srcs[s]
@@ -91,20 +91,30 @@ def gen_model_ms_stokes(ms: str, zest: bool = False):
         counter    = 0
         for ind in sortedinds:
             src     = cal_srcs[ind]
+            clname  = '%s_%d.cl' % (path.splitext(path.abspath(ms))[0],counter)
+            try:
+                shutil.rmtree(clname)
+            except OSError:
+                pass
             cl.done()
             cl.addcomponent(flux=eval(src['Stokes']), polarization='Stokes', dir=src['position'], label=src['label'])
             cl.setstokesspectrum(which=0, type='spectral index', index=[src['alpha'], 0, 0, 0], reffreq='%sMHz' % freq)            
-            cl.rename('%s_%d.cl' % (path.splitext(path.abspath(ms))[0],counter))
+            cl.rename(clname)
             cl.done()
-            cllist.append('%s_%d.cl' % (path.splitext(path.abspath(ms))[0],counter))
+            cllist.append(clname)
             counter+=1
         return cllist
     else:
         cl.done()
+        clname = '%s.cl' % path.splitext(path.abspath(ms))[0]
+        try:
+            shutil.rmtree(clname)
+        except OSError:
+            pass
         for s,src in enumerate(cal_srcs):
             cl.addcomponent(flux=eval(src['Stokes']), polarization='Stokes', dir=src['position'], label=src['label'])
             cl.setstokesspectrum(which=s, type='spectral index', index=[src['alpha'], 0, 0, 0], reffreq='%sMHz' % freq)
-        cl.rename('%s.cl' % path.splitext(path.abspath(ms))[0])
+        cl.rename(clname)
         cl.done()
-        return '%s.cl' % path.splitext(path.abspath(ms))[0]
+        return clname
     
