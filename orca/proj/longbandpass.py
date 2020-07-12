@@ -20,7 +20,7 @@ logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
 pm = OfflinePathsManager(utc_times_txt_path='/home/yuping/utc_times.txt',
                          dadafile_dir='/lustre/data/2018-03-20_100hr_run',
-                         msfile_dir='/lustre/yuping/0-100-hr-reduction/salf/msfiles',
+                         working_dir='/lustre/yuping/0-100-hr-reduction/salf/msfiles',
                          gaintable_dir='/lustre/yuping/2019-10-100-hr-take-two/bandpass/2018-03-22',
                          flag_npy_paths='/home/yuping/100-hr-a-priori-flags/20200602-consolidated-flags/20191125-consolidated-flags.npy')
 

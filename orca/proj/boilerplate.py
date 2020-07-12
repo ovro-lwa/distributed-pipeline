@@ -1,6 +1,7 @@
 import glob
 import os
 import logging
+from datetime import datetime
 import sys
 from typing import Optional
 
@@ -27,8 +28,8 @@ def run_chgcentre(ms_file: str, direction: str) -> str:
     return change_phase_centre.change_phase_center(ms_file, direction)
 
 @app.task
-def peel(ms_file: str, sources: str) -> str:
-    return peeling.ttcal_peel_from_data_to_corrected_data(ms_file, sources)
+def peel(ms_file: str, utc_datetime: datetime) -> str:
+    return peeling.ttcal_peel_from_data_to_corrected_data(ms_file, utc_datetime)
 
 
 @app.task

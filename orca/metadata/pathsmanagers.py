@@ -44,13 +44,13 @@ class OfflinePathsManager(PathsManager):
 
     Assumes that the bandpass calibration table is named like bcal_dir/00.bcal'
     """
-    def __init__(self, utc_times_txt_path: str, dadafile_dir: Optional[str] = None, msfile_dir: Optional[str] = None,
+    def __init__(self, utc_times_txt_path: str, dadafile_dir: Optional[str] = None, working_dir: Optional[str] = None,
                  gaintable_dir: str = None, flag_npy_paths: Optional[Union[str, Dict[date, str]]] = None):
-        for d in (dadafile_dir, msfile_dir, gaintable_dir):
+        for d in (dadafile_dir, working_dir, gaintable_dir):
             if d and not path.exists(d):
                 raise FileNotFoundError(f"File not found or path does not exist: {d}.")
         super().__init__(utc_times_txt_path, dadafile_dir)
-        self.msfile_dir: Optional[str] = msfile_dir
+        self.working_dir: Optional[str] = working_dir
         self.gaintable_dir: Optional[str] = gaintable_dir
 
         self.flag_npy_paths: Union[str, Dict[date, str], None] = flag_npy_paths
@@ -59,7 +59,7 @@ class OfflinePathsManager(PathsManager):
         """
         Return bandpass calibration path in /gaintable/path/2018-03-02/00.bcal
         Args:
-            bandpass_date: Date of the bandpass solution.
+            bandpass_date: Date of the bandpass solution requested.
             spw: Spectral window
 
         Returns:
@@ -67,13 +67,23 @@ class OfflinePathsManager(PathsManager):
         """
         return self.get_gaintable_path(bandpass_date, spw, 'bcal')
 
-    def get_gaintable_path(self, bandpass_date: date, spw: str, extension: str) -> str:
-        return f'{self.gaintable_dir}/{bandpass_date.isoformat()}/{spw}.{extension}'
+    def get_gaintable_path(self, gaintable_date: date, spw: str, extension: str) -> str:
+        """
+        Get the path to a certain CASA gaintable. This 
+        Args:
+            gaintable_date: date of the table requested
+            spw: spw of the gaintable requested
+            extension: extension of the gaintable (bcal etc)
+
+        Returns:
+            The path to the requested gaintable.
+        """
+        return f'{self.gaintable_dir}/{gaintable_date.isoformat()}/{spw}.{extension}'
 
     def get_ms_path(self, timestamp: datetime, spw: str) -> str:
         """
         Generate measurement set paths that look like
-        /path/to/msfile/2018-03-02/hh=02/2018-03-02T02:02:02/00_2018-03-02T02:02:02.ms.
+        /path/to/working_dir/msfiles/2018-03-02/hh=02/2018-03-02T02:02:02/00_2018-03-02T02:02:02.ms.
         Args:
             timestamp:
             spw:
@@ -81,9 +91,24 @@ class OfflinePathsManager(PathsManager):
         Returns:
             Path to the measurement set.
         """
+        return self.get_data_product_path(timestamp, spw, product='msfiles', file_suffix='.ms')
+
+    def get_data_product_path(self, timestamp: datetime, spw: str, product: str, file_suffix: str) -> str:
+        """
+        /path/to/working_dir/<product>/2018-03-02/hh=02/00_2018-03-02T02:02:02<file_suffix>
+        Args:
+            product: Name of the data product to be used for top-level directory
+            file_suffix: Suffix to data file. For example for fits file it'd be '.fits'.
+                You can also have something like '_v2.fits'
+            timestamp: Timestamp of observation.
+            spw: Spectral window.
+
+        Returns: Full path to the data product.
+        """
+        assert product, 'The product variable cannot be None or an empty string'
         hour = f'{timestamp.hour:02d}'
-        return f'{self.msfile_dir}/{timestamp.date().isoformat()}/hh={hour}/{timestamp.isoformat()}/' \
-               f'{spw}_{timestamp.isoformat()}.ms'
+        return f'{self.working_dir}/{product}/{timestamp.date().isoformat()}/hh={hour}/{timestamp.isoformat()}/' \
+               f'{spw}_{timestamp.isoformat()}{file_suffix}'
 
     def get_flag_npy_path(self, timestamp: datetime) -> str:
         """
@@ -92,7 +117,8 @@ class OfflinePathsManager(PathsManager):
             timestamp:
 
         Returns:
-            The flags npy, if only one was supplied; or the closest npy, if a Dict[datetime, str] is supplied.
+            If only one flag_npy was supplied, the flag_npy; if a Dict[datetime, str] is supplied, the closest one in
+            time to the supplied timestamp.
         """
         assert self.flag_npy_paths is not None
         if isinstance(self.flag_npy_paths, str):

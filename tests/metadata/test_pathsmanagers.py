@@ -27,7 +27,7 @@ def test_get_ms_file():
     pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt',
                              '.', '.', '.')
     assert pm.get_ms_path(datetime(2019, 10, 28, 23, 4, 44), '00') == \
-           './2019-10-28/hh=23/2019-10-28T23:04:44/00_2019-10-28T23:04:44.ms'
+           './msfiles/2019-10-28/hh=23/2019-10-28T23:04:44/00_2019-10-28T23:04:44.ms'
 
 
 def test_get_flag_npy_path_single_npy():
@@ -35,6 +35,18 @@ def test_get_flag_npy_path_single_npy():
     pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt',
                              flag_npy_paths=npy)
     assert pm.get_flag_npy_path(date(2018, 3, 2)) == npy
+
+
+def test_get_data_product_path():
+    pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt', working_dir='.')
+    assert pm.get_data_product_path(datetime(2019, 10, 28, 23, 4, 44), '00', 'images', '_diff.fits') == \
+    './images/2019-10-28/hh=23/2019-10-28T23:04:44/00_2019-10-28T23:04:44_diff.fits'
+
+
+def test_get_data_product_path_no_suffix():
+    pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt', working_dir='.')
+    assert pm.get_data_product_path(datetime(2019, 10, 28, 23, 4, 44), '00', 'images', '') == \
+    './images/2019-10-28/hh=23/2019-10-28T23:04:44/00_2019-10-28T23:04:44'
 
 
 def test_get_flag_npy_flag_multiple_npy():
