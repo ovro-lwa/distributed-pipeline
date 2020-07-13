@@ -11,6 +11,13 @@ def test_read_utc_times():
            '2019-10-22-02:35:47_0005246685093888.000000.dada'
 
 
+def test_time_filter():
+    pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt', '.')
+    pm2 = pm.time_filter(datetime(2019, 10, 28, 23, 4, 0), datetime(2019, 10, 28, 23, 5, 0))
+    assert len(pm2.utc_times_mapping) == 4
+    assert pm2.utc_times_mapping[datetime(2019, 10, 28, 23, 4, 44)] == \
+           '2019-10-22-02:35:47_0005246685093888.000000.dada'
+
 def test_with_bad_path():
     with pytest.raises(FileNotFoundError):
         pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt',

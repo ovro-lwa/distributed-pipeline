@@ -20,7 +20,7 @@ logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
 pm_whole = OfflinePathsManager(utc_times_txt_path='/home/yuping/utc_times.txt',
                                dadafile_dir='/lustre/data/2018-03-20_100hr_run',
-                               working_dir='/lustre/yuping/0-100-hr-reduction/epoch-1/',
+                               working_dir='/lustre/yuping/0-100-hr-reduction/final/',
                                gaintable_dir='/lustre/yuping/2019-10-100-hr-take-two/bandpass/',
                                flag_npy_paths='/home/yuping/100-hr-a-priori-flags/20191125-consolidated-flags/20200602-consolidated-flags.npy')
 
@@ -86,9 +86,10 @@ def small_imaging_test():
 
 def calibration_pipeline():
     cal_date = date(2018, 3, 22)
-    pm = pm_whole.time_filter(start_time=datetime(), end_time=datetime())
+    pm = pm_whole.time_filter(start_time=datetime(2018, 3, 22, 11, 56, 4),
+                              end_time=datetime(2018, 3, 22, 17, 56, 4))
     group([
-        run_dada2ms.s(pm.get_dada_path(f'{s:02d}', t), out_ms=pm.get_ms_path(t, '{s:02d}'),
+        run_dada2ms.s(pm.get_dada_path(f'{s:02d}', t), out_ms=pm.get_ms_path(t, f'{s:02d}'),
                       gaintable=pm.get_bcal_path(cal_date, f'{s:02d}')) |
         apply_a_priori_flags.s(flag_npy_path=pm.get_flag_npy_path(t)) |
         peel.s(t) |
@@ -97,4 +98,8 @@ def calibration_pipeline():
 
 
 def imaging_steps():
+    cal_date = date(2018, 3, 22)
+    pm = pm_whole.time_filter(start_time=datetime(2018, 3, 22, 11, 56, 4),
+                              end_time=datetime(2018, 3, 22, 12, 5, 4))
+    # One giant imaging task?
     pass

@@ -29,7 +29,8 @@ def run_chgcentre(ms_file: str, direction: str) -> str:
 
 @app.task
 def peel(ms_file: str, utc_datetime: datetime) -> str:
-    return peeling.ttcal_peel_from_data_to_corrected_data(ms_file, utc_datetime)
+    return peeling.ttcal_peel_from_data_to_corrected_data(ms_file,
+                                                          datetime.strptime(utc_datetime, "%Y-%m-%dT%H:%M:%S"))
 
 
 @app.task
