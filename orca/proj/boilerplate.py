@@ -27,8 +27,9 @@ def run_dada2ms(dada_file: str, out_ms: str, gaintable: Optional[str] = None) ->
 def run_chgcentre(ms_file: str, direction: str) -> str:
     return change_phase_centre.change_phase_center(ms_file, direction)
 
+
 @app.task
-def peel(ms_file: str, utc_datetime: datetime) -> str:
+def peel(ms_file: str, utc_datetime: str) -> str:
     return peeling.ttcal_peel_from_data_to_corrected_data(ms_file,
                                                           datetime.strptime(utc_datetime, "%Y-%m-%dT%H:%M:%S"))
 
