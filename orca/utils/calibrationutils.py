@@ -42,9 +42,9 @@ def BCAL_dadaname_list(utc_times_txt_path: str, duration_min: float = 20):
     return BCALdadafiles
 
 
-cal_srcs = [{'label': 'CasA', 'flux': '16530', 'alpha': -0.72, 'ref_freq': 80.0,
+cal_srcs = [{'label': 'CasA', 'flux': 16530, 'alpha': -0.72, 'ref_freq': 80.0,
      'position': 'J2000 23h23m24s +58d48m54s'},
-        {'label': 'CygA', 'flux': '16300', 'alpha': -0.58, 'ref_freq': 80.0,
+        {'label': 'CygA', 'flux': 16300, 'alpha': -0.58, 'ref_freq': 80.0,
      'position': 'J2000 19h59m28.35663s +40d44m02.0970s'}]
 
 
@@ -74,18 +74,19 @@ def gen_model_ms_stokes(ms: str, zest: bool = False):
     outbeam = beam(ms)
     
     for s,src in enumerate(cal_srcs):
-        ra  = src['position'].split(' ')[1]
-        dec = src['position'].split(' ')[2]
+        src_position: str = src['position']
+        ra  = src_position.split(' ')[1]
+        dec = src_position.split(' ')[2]
         if is_visible(SkyCoord(ra, dec, frame=ICRS), utctime):
             altaz = get_altaz_at_ovro(SkyCoord(ra, dec, frame=ICRS), utctime)
             scale = np.array(outbeam.srcIQUV(altaz.az.deg, altaz.alt.deg))
-            cal_srcs[s]['Stokes'] = str(list(flux80_47(float(src['flux']), src['alpha'], freq, src['ref_freq']) * scale))
+            cal_srcs[s]['Stokes'] = list(flux80_47(src['flux'], src['alpha'], freq, src['ref_freq']) * scale)
         else:
             del cal_srcs[s]
     
     cl = componentlist()
     if zest:
-        fluxIvals  = [float(src['Stokes'].replace('[','').replace(']','').split(',')[0]) for src in cal_srcs]
+        fluxIvals  = [src['Stokes'][0] for src in cal_srcs]
         sortedinds = np.argsort(fluxIvals)[::-1]
         cllist     = []
         counter    = 0
@@ -97,7 +98,7 @@ def gen_model_ms_stokes(ms: str, zest: bool = False):
             except OSError:
                 pass
             cl.done()
-            cl.addcomponent(flux=eval(src['Stokes']), polarization='Stokes', dir=src['position'], label=src['label'])
+            cl.addcomponent(flux=src['Stokes'], polarization='Stokes', dir=src['position'], label=src['label'])
             cl.setstokesspectrum(which=0, type='spectral index', index=[src['alpha'], 0, 0, 0], reffreq='%sMHz' % freq)            
             cl.rename(clname)
             cl.done()
@@ -112,7 +113,7 @@ def gen_model_ms_stokes(ms: str, zest: bool = False):
         except OSError:
             pass
         for s,src in enumerate(cal_srcs):
-            cl.addcomponent(flux=eval(src['Stokes']), polarization='Stokes', dir=src['position'], label=src['label'])
+            cl.addcomponent(flux=src['Stokes'], polarization='Stokes', dir=src['position'], label=src['label'])
             cl.setstokesspectrum(which=s, type='spectral index', index=[src['alpha'], 0, 0, 0], reffreq='%sMHz' % freq)
         cl.rename(clname)
         cl.done()
