@@ -53,6 +53,13 @@ def do_bandpass_correction(spectrum_file, bcal_file=None, plot=False):
 def apply_a_priori_flags(ms_file: str, flag_npy_path: str) -> str:
     return flagoperations.write_to_flag_column(ms_file, flag_npy_path)
 
+@app.task
+def apply_ant_flag(ms_file: str, ants: list) -> str:
+    from casacore.tables import table, taql
+    t = table(ms_file)
+    taql(f"update $t set FLAG=True where any(ANTENNA1==$ants || ANTENNA2==$ants)")
+    return ms_file
+
 
 @app.task
 def apply_bl_flag(ms_file: str, bl_file: str) -> str:
