@@ -1,6 +1,7 @@
 from orca.proj.boilerplate import run_dada2ms, flag_chans, apply_ant_flag, apply_bl_flag, zest, run_chgcentre, run_integrate_with_concat, do_calibration, get_spectrum, do_bandpass_correction
 from orca.utils.calibrationutils import BCAL_dadaname_list
 from orca.utils.coordutils import CYG_A
+from orca.flagging.flag_bad_chans import flag_bad_chans
 from orca.flagging.flag_bad_ants import flag_bad_ants, concat_dada2ms, plot_autos
 from orca.wrapper import change_phase_centre
 from orca.proj.celery import app
@@ -23,7 +24,7 @@ user = os.getlogin()
 utc_times_txt_path = '/lustre/mmanders/exoplanet/orca_test/LST_nopeel/utc_times.txt'
 utc_times_txt_pathcal = '/lustre/mmanders/exoplanet/orca_test/LST_nopeel/utc_times_24hr.txt'
 dadafile_dir       = '/lustre/data/exoplanet_20200117'
-msfile_dir         = f'/lustre/{user}/exoplanet/orca_test/LST_nopeel'
+msfile_dir         = f'/lustre/{user}/exoplanet/orca_test/LST_nopeel/flagtest'
 os.makedirs(msfile_dir, exist_ok=True)
 bcal_dir           = f'/lustre/{user}/exoplanet/orca_test/LST_nopeel/BCAL'
 os.makedirs(bcal_dir, exist_ok=True)
@@ -67,7 +68,7 @@ def calibration_pipeline(utc_times_txt_path: str):
     
     
 @app.task
-def processing_pipeline(dadafile = str, subband = int):
+def processing_pipeline(dadafile: str, subband: int):
     spw    = '%02d' % subband
     # dada2ms
     msfile = run_dada2ms(f'{dadafile_dir}/{spw}/{dadafile}', 
@@ -89,7 +90,7 @@ def processing_pipeline(dadafile = str, subband = int):
     apply_bl_flag(msfile,blfile1)
     apply_bl_flag(msfile,blfile2)
     # generate and apply channel flags
-    flag_chans(msfile, spw)
+    flag_bad_chans(msfile, spw, apply_flag=False, crosshand=True, uvcut_m=50)
     ## polarized peel
     #zest(msfile)
     return msfile
