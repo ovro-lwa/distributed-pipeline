@@ -82,9 +82,9 @@ def flag_bad_chans(msfile, band, usedatacol=False, generate_plot=False, apply_fl
             chans = np.arange(0,109)
             for chan in chans:
                 if chan not in flaglist:
-                    chanpts = np.zeros(len(datacolxxamp_mask[:,chan]))+chan
-                    plt.plot(datacolxxamp_mask[:,chan],chanpts, '.', color='Blue', markersize=0.5)
-                    plt.plot(datacolyyamp_mask[:,chan],chanpts, '.', color='Green', markersize=0.5)
+                    chanpts = np.zeros(len(datacolamp_mask[:,chan,0]))+chan
+                    plt.plot(datacolamp_mask[:,chan,0],chanpts, '.', color='Blue', markersize=0.5)
+                    plt.plot(datacolamp_mask[:,chan,3],chanpts, '.', color='Green', markersize=0.5)
             plt.ylim([0,108])
             plt.ylabel('channel')
             plt.xlabel('Amp')
