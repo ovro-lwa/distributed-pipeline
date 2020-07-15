@@ -1,3 +1,5 @@
+"""Transforms that make images
+"""
 from typing import Tuple, Optional, List, Union
 import subprocess
 import os
@@ -57,16 +59,20 @@ def make_movie_from_fits(fits_tuple: Tuple[str], output_dir: str, scale: float,
 def make_residual_image_with_source_removed(ms_list: List[str], timestamp: datetime, output_dir: str,
                                             output_prefix: str, tmp_dir: str,
                                             inner_tukey: Optional[int] = None, n_thread: int = 10) -> str:
-    """
+    """Make images with bright source(s) removed.
+    Makes a dirty image. Remove the Sun and/or the Crab when they are up.
 
-    :param ms_list:
-    :param timestamp:
-    :param output_dir:
-    :param output_prefix:
-    :param tmp_dir: tmpdir for wsclean to put the re-ordered visibility.
-    :param inner_tukey:
-    :param n_thread:
-    :return:
+    Args:
+        ms_list: List of measurement sets to make an image out of.
+        timestamp: Timestamp used to calculate what sources are up.
+        output_dir: Output directory for the images.
+        output_prefix: Image prefix (as required by wsclean).
+        tmp_dir: Temporary directory to hold wsclean re-ordered files.
+        inner_tukey: Inner Tukey Parameter.
+        n_thread: Number of threads for wsclean to use.
+
+    Returns: Path to the output image (residing in output_dir).
+
     """
     log.info(f'ms_list is {ms_list}')
     dirty_image = make_dirty_image(ms_list, output_dir, output_prefix, inner_tukey=inner_tukey)
@@ -133,6 +139,19 @@ def get_peak_around_source(im_T: np.ndarray, source_coord: SkyCoord, w: wcs.WCS)
 
 def make_dirty_image(ms_list: List[str], output_dir: str, output_prefix: str, make_psf: bool = False,
                      inner_tukey: Optional[int] = None, n_thread: int = 10) -> Union[str, Tuple[str, str]]:
+    """Make dirty image out of list of measurement sets.
+
+    Args:
+        ms_list:
+        output_dir:
+        output_prefix:
+        make_psf:
+        inner_tukey:
+        n_thread:
+
+    Returns: if make_psf, (image path, psf path), else just the image path.
+
+    """
     taper_args = ['-taper-inner-tukey', str(inner_tukey)] if inner_tukey else []
 
     extra_args = ['-size', str(IMSIZE), str(IMSIZE), '-scale', str(IM_SCALE_DEGREE),

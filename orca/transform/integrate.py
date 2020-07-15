@@ -1,3 +1,5 @@
+"""Make a phased measurement set out of many measurement sets.
+"""
 from typing import List, Optional
 import os
 
@@ -9,13 +11,17 @@ from orca.wrapper import change_phase_centre
 
 
 def integrate(ms_list: List[str], out_ms: str, phase_center: Optional[str]) -> str:
-    """
-    "integrate" a list of ms (assumed to be time sorted) by running chgcentre, concat, and then
-    changing the field id. Common phase center is defaulted to the phase center of the first scan in the list.
-    :param ms_list:
-    :param out_ms:
-    :param phase_center:
-    :return:
+    """Integrate a list of ms (assumed to be time sorted)
+    chgcentre, concat, and then changing the field id.
+    Common phase center is defaulted to the phase center of the first scan in the list.
+
+    Args:
+        ms_list: List of (time-sorted) measurement sets to integrate.
+        out_ms: output measurement set path.
+        phase_center: Phase center for the integrated ms, a string like '09h18m05.8s -12d05m44s'
+
+    Returns: Path to integrated measurement set.
+
     """
     # error out if out_ms exist.
     if os.path.exists(out_ms):

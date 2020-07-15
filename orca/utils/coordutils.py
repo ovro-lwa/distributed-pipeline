@@ -1,3 +1,6 @@
+""" Coordinates utilities having to do with local coordinates.
+For image plane pixel numbers, use the fits header and astropy.WCS.
+"""
 from datetime import datetime
 from os import path
 from typing import Union
@@ -7,10 +10,6 @@ from astropy.time import Time
 from astropy.coordinates import SkyCoord, EarthLocation, ICRS, get_sun, AltAz, Angle
 from astropy import units as u
 
-"""
-Coordinates utilities having to do with local coordinates. For image plane pixel numbers, use the fits header and 
-astropy.WCS.
-"""
 
 # Google Earth
 OVRO_LWA_LOCATION = EarthLocation(lat=37.2398 * u.deg, lon=-118.282 * u.deg, height=1216 * u.m)
@@ -30,14 +29,16 @@ def sun_icrs(utc_time: datetime) -> SkyCoord:
 
 def is_visible(coordinates: Union[SkyCoord, ICRS], utc_time: datetime, altitude_limit: u.Quantity = 5 * u.degree,
                check_mountain: bool = True) -> bool:
-    """
-    Check if a source with coord is altitude_limit (default to 5 deg)
-    above the horizon (and optionally the mountains)
-    :param coordinates: coordinates of the object to check for visibility
-    :param utc_time: utc time
-    :param altitude_limit: altitude limit above the horizon/mountain top
-    :param check_mountain: determines whether to take the altitude of the mountain into account
-    :return:
+    """Check if a source with coord is altitude_limit (default to 5 deg) above the horizon (and optionally the mountains)
+
+    Args:
+        coordinates: coordinates of the object to check for visibility
+        utc_time: utc timestamp for the time of observation
+        altitude_limit: altitude limit above the horizon/mountain top
+        check_mountain: determines whether to take the altitude of the mountain into account
+
+    Returns: whether the coordinate is visible
+
     """
     altaz = get_altaz_at_ovro(coordinates, utc_time)
     # get the mountain stuff
@@ -48,6 +49,15 @@ def is_visible(coordinates: Union[SkyCoord, ICRS], utc_time: datetime, altitude_
 
 
 def get_altaz_at_ovro(coordinates: SkyCoord, utc_time: datetime) -> SkyCoord:
+    """ Get the AltAz coordinates at OVRO.
+
+    Args:
+        coordinates: coordinates.
+        utc_time: time of observation.
+
+    Returns: SkyCoord that is in AltAz.
+
+    """
     # TODO Cache the AltAz object
     return coordinates.transform_to(AltAz(location=OVRO_LWA_LOCATION, obstime=Time(utc_time, scale='utc')))
 

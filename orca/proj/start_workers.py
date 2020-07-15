@@ -1,5 +1,4 @@
-"""
-Convenience executable to start celery worker across the cluster.
+"""Convenience executable to start celery worker across the cluster.
 """
 from fabric import ThreadingGroup
 import argparse

@@ -1,5 +1,4 @@
-"""
-By Marin Anderson
+"""Image subtraction util by Marin Anderson
 """
 from astropy.io import fits
 import os

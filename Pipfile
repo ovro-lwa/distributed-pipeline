@@ -16,7 +16,7 @@ python-casacore = "*"
 matplotlib = '*'
 scikit-image = '*'
 celery = '~=4.3'
-tornado = '~=4.2'
+tornado = '*'
 pyyaml = "*"
 fabric = "*"
 flower = '*'
@@ -33,6 +33,8 @@ mock = '*'
 scikit-learn = '*'
 mypy = "*"
 seaborn = "*"
+sphinxcontrib-napoleon = "*"
+sphinx-rtd-theme = '*'
 
 [requires]
 python_version = "3.6"

@@ -1,3 +1,5 @@
+""" Wrappers for TTCal.
+"""
 import subprocess
 import logging
 import os
@@ -8,11 +10,14 @@ TTCAL_EXEC = '/opt/astro/mwe/bin/ttcal-0.3.0'
 
 
 def peel_with_ttcal(ms: str, sources: str):
-    """
-    Use TTCal to peel sources.
-    :param ms: Path to the measurement set.
-    :param sources: Path to the sources.json file.
-    :return:
+    """Use TTCal to peel sources.
+
+    Args:
+        ms: Path to the measurement set.
+        sources: Path to the sources.json file.
+
+    Returns: The path to the measurement set because TTCal reads from and writes to it.
+
     """
     new_env = dict(os.environ, LD_LIBRARY_PATH='/opt/astro/mwe/usr/lib64:/opt/astro/lib/',
                    AIPSPATH='/opt/astro/casa-data dummy dummy')
