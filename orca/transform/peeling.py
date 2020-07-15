@@ -1,3 +1,5 @@
+"""Peeling related transforms
+"""
 import logging
 
 from orca.utils.sourcemodels import RFI_B, CYG_A_UNPOLARIZED_RESOLVED, CAS_A_UNPOLARIZED_RESOLVED
@@ -17,6 +19,17 @@ DATA = 'DATA'
 
 
 def ttcal_peel_from_data_to_corrected_data(ms: str, utc_time: datetime, include_rfi_source: bool = True) -> str:
+    """ Use TTCal to peel. Read from DATA column and write to CORRECTED_DATA
+    If the CORRECTED_DATA column exists, it does not do anything.
+
+    Args:
+        ms: Path to measurement set.
+        utc_time: datetime object to figure out what sources are up.
+        include_rfi_source: Include near-field generic RFI sources in peel.
+
+    Returns: The output measurement set (which is the same thing as the input measurement set).
+
+    """
     with tables.table(ms, readonly=False) as t:
         # Copied from https://github.com/casacore/python-casacore/blob/master/casacore/tables/msutil.py#L48
         column_names = t.colnames()
@@ -33,13 +46,13 @@ def ttcal_peel_from_data_to_corrected_data(ms: str, utc_time: datetime, include_
     log.info(f'Generating sources.json for {ms}')
     with tempfile.TemporaryDirectory() as tmpdir:
         sources_json = path.join(tmpdir, 'sources.json')
-        if write_peeling_sources_json(utc_time, sources_json, include_rfi_source=include_rfi_source):
+        if _write_peeling_sources_json(utc_time, sources_json, include_rfi_source=include_rfi_source):
             # This reads from the just-created CORRECTED_DATA column and writes to CORRECTED_DATA column.
             ttcal.peel_with_ttcal(ms, sources_json)
     return ms
 
 
-def write_peeling_sources_json(utc_timestamp: datetime, out_json: str, include_rfi_source: bool) -> Optional[str]:
+def _write_peeling_sources_json(utc_timestamp: datetime, out_json: str, include_rfi_source: bool) -> Optional[str]:
     sources = _get_peeling_sources_list(utc_timestamp, include_rfi_source)
     if sources:
         log.info(f'{len(sources)} sources to peel for {utc_timestamp.isoformat()}.')

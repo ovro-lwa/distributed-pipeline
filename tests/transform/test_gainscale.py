@@ -24,6 +24,6 @@ def test_apply_gain_scale():
             expected[aggregate_index, :, 3] = data[aggregate_index, :, 3] * scale_spectrum[i, :, 1] * \
                                               scale_spectrum[j, :, 1]
             aggregate_index += 1
-    actual = gainscaling.apply_gain_scale(data, scale_spectrum)
+    actual = gainscaling.apply_gain_scale_in_place(data, scale_spectrum)
     assert actual == approx(expected)
 

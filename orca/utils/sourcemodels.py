@@ -1,3 +1,5 @@
+"""Just a bunch of dictionaries of source models.
+"""
 RFI_B = {
     "name": "Noise Power Lines2",
     "sys": "WGS84",

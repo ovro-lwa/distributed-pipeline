@@ -1,3 +1,5 @@
+"""fits related utilities.
+"""
 from astropy.io import fits
 import numpy as np
 from typing import Tuple, List
@@ -17,16 +19,21 @@ def write_image_fits(fn, header, data, overwrite=False):
 
 def write_fits_mask_with_box_xy_coordindates(output_fits_path: str, imsize: int,
                                              center_list: List[Tuple[int, int]], width_list: List[int]) -> str:
-    """
+    """Writes a fits mask with a list of boxes to file.
     Writes a fits mask with a list of boxes to file. Both im+list and center_list are in
     WCS X Y coordindates (i.e. transpose of the numpy array
     from astropy.fits. The fits will NOT have a header that is accurate since only the pixels will be used.
-    :param output_fits_path: The fits file path.
-    :param imsize: size of the image
-    :param center_list: A list of enters of the boxes. Must be in XY index (i.e. what ds9 shows)
-    :param width_list: A list of widths of the boxes in pixels, with each element being the width of the corresponding
-    center_list element
-    :return: The fits file path.
+    If you only need one box you can use one-element lists for the arguments.
+
+    Args:
+        output_fits_path:  The fits file path.
+        imsize: size of the image.
+        center_list: A list of enters of the boxes. Must be in XY index (i.e. what ds9 shows).
+        width_list: A list of widths of the boxes in pixels, with each element being the width of the corresponding
+    center_list element.
+
+    Returns: The fits mask path.
+
     """
     image = np.zeros(shape=(imsize, imsize))
     for i, center in enumerate(center_list):
