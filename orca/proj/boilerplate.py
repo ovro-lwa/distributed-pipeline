@@ -9,9 +9,9 @@ import orca.transform.imaging
 from orca.flagging import flagoperations, flag_bad_chans
 from orca.proj.celery import app
 from orca.wrapper import dada2ms, change_phase_centre, wsclean
-from orca.transform import peeling, integrate, gainscaling, spectrum
 from preprocessing import flagging
 from qa import metrics
+from orca.transform import peeling, integrate, gainscaling, spectrum
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
@@ -80,11 +80,7 @@ def run_integrate_with_concat(ms_list: str, out_ms: str, phase_center: Optional[
 
 
 @app.task
-<<<<<<< HEAD
 def run_correct_scaling(baseline_ms: str, target_ms: str, data_column='CORRECTED_DATA') -> str:
-=======
-def run_correct_scaling(baseline_ms: str, tar<get_ms: str, data_column='CORRECTED_DATA') -> str:
->>>>>>> merging?
     return gainscaling.correct_scaling(baseline_ms, target_ms, data_column=data_column)
 
 
