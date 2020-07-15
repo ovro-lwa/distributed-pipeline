@@ -23,10 +23,15 @@ def concat_dada2ms(dadafile_dir: str, BCALdadafile: str, outputdir: str):
     return f'{outputdir}/{msfileconcat}'
                     
 
-def flag_bad_ants(msfile: str):
-    """
-    Input: msfile
-    Returns list of antennas to be flagged based on autocorrelations.
+def flag_bad_ants(msfile: str) -> str:
+    """Generates a text file containing the bad antennas.
+    DOES NOT ACTUALLY APPLY FLAGS.
+
+    Args:
+        msfile: msfile to generate
+
+    Returns:
+        Path to the text file with list of antennas flagged.
     """
     t       = tables.table(msfile, readonly=True)
     tautos  = t.query('ANTENNA1=ANTENNA2')

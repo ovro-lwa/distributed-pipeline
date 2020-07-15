@@ -5,11 +5,12 @@ from casacore import tables
 
 BEAM_FILE_PATH = os.path.abspath('/lustre/mmanders/LWA/modules/beam')
 
+
 class beam:
-    '''
+    """
     For loading and returning LWA dipole beam values (derived from DW beam simulations) on the ASTM.
     Last edit: 08 August 2016
-    '''
+    """
     def __init__(self,msfile):
         self.CRFREQ = float(tables.table(msfile+'/SPECTRAL_WINDOW', ack=False).getcell('NAME', 0))/1.e6 # center frequency in MHz
         self.path   = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe()))) # absolute path to module
@@ -31,11 +32,14 @@ class beam:
 
 
     def srcIQUV(self,az,el):
-        '''
-        INPUT:  az - azimuth of source in degrees
-                el - elevation of source in degrees
-        OUTPUT: [I,Q,U,V] flux factors, where for an unpolarized source [I,Q,U,V] = [1,0,0,0]
-        '''
+        """Compute beam scaling factor
+        Args:
+            az: azimuth in degrees
+            el: elevation in degrees
+
+        Returns: [I,Q,U,V] flux factors, where for an unpolarized source [I,Q,U,V] = [1,0,0,0]
+
+        """
         def knn_search(arr,grid):
             '''
             Find 'nearest neighbor' of array of points in multi-dimensional grid

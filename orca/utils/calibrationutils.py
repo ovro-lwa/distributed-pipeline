@@ -11,13 +11,17 @@ from casatools import componentlist
 
 
 def BCAL_dadaname_list(utc_times_txt_path: str, duration_min: float = 20):
-    """
+    """Get dada file names based on Cygnus A transit for calibration.
     Get list of .dada file names to use for calibration. Selects .dada files that
     span {duration_min} centered on transit of Cygnus A.
-    :param utc_times_txt_path: Path to utc_times.txt file.
-    :param duration_min: In minutes, amount of time used for calibration.
+
+    Args:
+        utc_times_txt_path: Path to utc_times.txt file.
+        duration_min: In minutes, amount of time used for calibration.
         Default is 20 minutes.
-    :return: List of .dada file names to use for calibration.
+
+    Returns:
+        List of dada file names to be used for calibration.
     """
     # If the utc_times.txt file contains multiple transits of Cygnus A, will select the
     # first transit.
@@ -54,12 +58,15 @@ def flux80_47(flux_hi, sp, output_freq, ref_freq):
 
 
 def gen_model_ms_stokes(ms: str, zest: bool = False):
-    """
-    Generate component lists for calibration / polarized peeling in CASA. Currently only
-        includes Cas A & Cyg A.
-    :param ms: The measurement set.
-    :param zest: For supplying component lists for polarized peeling. Default is False.
-    :return: Returns path to component list(s). If zest=True, will return a list of paths
+    """ Generate component lists for calibration / polarized peeling in CASA.
+    Currently only includes Cas A & Cyg A.
+
+    Args:
+        ms: Measurement set to generate model for.
+        zest: For supplying component lists for polarized peeling. Default is False.
+
+    Returns:
+        Returns path to component list(s). If zest=True, will return a list of paths
         to single-source component lists.
     """
     t0    = tables.table(ms, ack=False).getcell('TIME', 0)
@@ -73,7 +80,7 @@ def gen_model_ms_stokes(ms: str, zest: bool = False):
     outbeam = beam(ms)
     
     for s,src in enumerate(cal_srcs):
-        src_position: str = src.get('position') # type: ignore
+        src_position: str = src.get('position')    # type: ignore
         ra  = src_position.split(' ')[1]
         dec = src_position.split(' ')[2]
         if is_visible(SkyCoord(ra, dec, frame=ICRS), utctime):
@@ -85,7 +92,7 @@ def gen_model_ms_stokes(ms: str, zest: bool = False):
     
     cl = componentlist()
     if zest:
-        fluxIvals  = [src.get('Stokes')[0] for src in cal_srcs] # type: ignore
+        fluxIvals  = [src.get('Stokes')[0] for src in cal_srcs]    # type: ignore
         sortedinds = np.argsort(fluxIvals)[::-1]
         cllist     = []
         counter    = 0
@@ -117,4 +124,3 @@ def gen_model_ms_stokes(ms: str, zest: bool = False):
         cl.rename(clname)
         cl.done()
         return clname
-    

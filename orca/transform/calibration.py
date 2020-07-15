@@ -1,17 +1,21 @@
 import numpy as np
 import pylab
 from os import path
-from orca.proj.celery import app
 from orca.utils.calibrationutils import gen_model_ms_stokes
 from casatasks import clearcal, ft, bandpass, polcal, applycal
 from casacore import tables
 
 
-def calibration_steps(ms: str):
-    """
-    Perform basic calibration steps on measurement set, including generating model
-    component list. Takes visibilities from the DATA column, and writes calibrated
+def calibration_steps(ms: str) -> str:
+    """ Perform full Stokes DI calibration steps on measurement set.
+    Generates model component list. Takes visibilities from the DATA column, and writes calibrated
     visibilities to CORRECTED_DATA.
+
+    Args:
+        ms: Measurement set.
+
+    Returns: Path to the measurement set.
+
     """
     # generate component list
     clfile = gen_model_ms_stokes(ms)
@@ -33,11 +37,14 @@ def calibration_steps(ms: str):
     
 
 def bandpass_correction(spectrumfile: str, bcalfile: str = None, plot: bool = False):
-    """
-    Generate calibration tables to correct bandpass flux scale based on Cyg A spectrum.
-    :param spectrumfile: .npz file output by orca.transform.spectrum
-    :param bcalfile: .bcal table to duplicate and fill with bandpass amplitude correction.
-    :return: path to -spec.bcal file if {bcalfile} specified. Otherwise returns None.
+    """Generate calibration tables to correct bandpass flux scale based on Cyg A spectrum.
+    Args:
+        spectrumfile: .npz file output by orca.transform.spectrum
+        bcalfile:  .bcal table to duplicate and fill with bandpass amplitude correction.
+        plot: whether to make a plot.
+
+    Returns:
+        path to -spec.bcal file if {bcalfile} specified. Otherwise returns None.
     """
     spec = np.load(spectrumfile)
     # spec.files = {frqarr, timearr, speccorr, specI, specV}

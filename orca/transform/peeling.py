@@ -152,12 +152,18 @@ def cal_reverse(bcalfile: str, dcalfile: str):
 
 
 def zest_with_casa(ms: str, reverse: bool = False):
-    """
-    Polarized peeling with CASA. Currently, peeling list will only include at most CasA & CygA.
+    """Polarized peeling with CASA.
+    Currently, peeling list will only include at most CasA & CygA.
     The peeled visibilities will be placed in CORRECTED_DATA.
-    :param ms: The measurement set.
-    :param reverse: Reverse the peeling process. Default is False.
+
+    Args:
+        ms: The measurement set.
+        reverse: Reverse the peeling process. Default is False.
+
+    Returns:
+        Path to measurement set that was modified.
     """
+
     cllist = gen_model_ms_stokes(ms, zest=True)
     for srcind, clfile in enumerate(cllist):
         dcalfile        = path.splitext(path.abspath(ms))[0]+'_'+str(srcind)+'.dcal'

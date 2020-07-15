@@ -12,11 +12,22 @@ import logging
 from scipy.ndimage import filters
 
 
-def flag_bad_chans(msfile, band, usedatacol=False, generate_plot=False, apply_flag=False, crosshand=False, uvcut_m: float = None):
-    """
-    Input: msfile
+def flag_bad_chans(msfile: str, band: str, usedatacol=False, generate_plot=False, apply_flag=False, crosshand=False,
+                   uvcut_m: float = None):
+    """Flag bad channels.
     Finds remaining bad channels and flags those in the measurement set. Also writes out text file that lists
     flags that were applied.
+
+    Args:
+        msfile: measurement set to flag.
+        band: spectral window.
+        usedatacol: If True, uses DATA column, else use CORRECTED_DATA.
+        generate_plot: generate a plot or not.
+        apply_flag: Whether to apply the flags.
+        crosshand: If true, it will use the XY and YX correlations when determining flags.
+            Otherwise, it will ignore the flags that are in flaglist[:,1] and flaglist[:,2].
+        uvcut_m:  uvcut in meters before doing thresholding to suppress short baseline flux
+
     """
     with pt.table(msfile, readonly=False) as t:
         tcross  = t.query('ANTENNA1!=ANTENNA2')
