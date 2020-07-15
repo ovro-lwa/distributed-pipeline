@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO)
 @app.task
 def run_average(ms_file_list, ref_ms_index, out_ms, fault_tolerant=True):
     temp_ms = '/dev/shm/yuping/' + os.path.basename(out_ms)
-    average_ms(ms_file_list, ref_ms_index, temp_ms, 'DATA', fault_tolerant=fault_tolerant)
+    average_ms(ms_file_list, ref_ms_index, temp_ms, 'DATA', tolerate_ms_io_error=fault_tolerant)
     logging.info('Finished averaging. Copying the final measurement set from /dev/shm back.')
     shutil.copytree(temp_ms, out_ms)
     shutil.rmtree(temp_ms)

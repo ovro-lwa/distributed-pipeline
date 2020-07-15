@@ -8,6 +8,13 @@ import copy
 
 
 class PathsManager(object):
+    """Base PathsManager class.
+    It contains functionality to manipulate datetime objects and find dada files. Maybe in the future it will evolve
+    into an interface with abstract methods.
+
+    Attributes:
+        utc_times_mapping: An ordered dictionary mapping datetime objects to dada files.
+    """
     def __init__(self, utc_times_txt_path: str, dadafile_dir: Optional[str]):
         self.dadafile_dir = dadafile_dir
         # do the mapping thing
@@ -23,6 +30,7 @@ class PathsManager(object):
     def time_filter(self, start_time: datetime, end_time: datetime) -> 'PathsManager':
         """
         Returns another PathsManager object with only utc_times between start_time (inclusive) and end_time (exclusive).
+
         Args:
             start_time:
             end_time:
@@ -43,6 +51,7 @@ class OfflinePathsManager(PathsManager):
     file into this object.
 
     Assumes that the bandpass calibration table is named like bcal_dir/00.bcal'
+
     """
     def __init__(self, utc_times_txt_path: str, dadafile_dir: Optional[str] = None, working_dir: Optional[str] = None,
                  gaintable_dir: str = None, flag_npy_paths: Optional[Union[str, Dict[date, str]]] = None):
@@ -56,8 +65,8 @@ class OfflinePathsManager(PathsManager):
         self.flag_npy_paths: Union[str, Dict[date, str], None] = flag_npy_paths
 
     def get_bcal_path(self,  bandpass_date: date, spw: str) -> str:
-        """
-        Return bandpass calibration path in /gaintable/path/2018-03-02/00.bcal
+        """Return bandpass calibration path in /gaintable/path/2018-03-02/00.bcal.
+
         Args:
             bandpass_date: Date of the bandpass solution requested.
             spw: Spectral window
@@ -68,8 +77,8 @@ class OfflinePathsManager(PathsManager):
         return self.get_gaintable_path(bandpass_date, spw, 'bcal')
 
     def get_gaintable_path(self, gaintable_date: date, spw: str, extension: str) -> str:
-        """
-        Get the path to a certain CASA gaintable. This 
+        """Get the path to a certain CASA gaintable.
+
         Args:
             gaintable_date: date of the table requested
             spw: spw of the gaintable requested
@@ -81,12 +90,12 @@ class OfflinePathsManager(PathsManager):
         return f'{self.gaintable_dir}/{gaintable_date.isoformat()}/{spw}.{extension}'
 
     def get_ms_path(self, timestamp: datetime, spw: str) -> str:
-        """
-        Generate measurement set paths that look like
+        """Generate measurement set paths that look like
         /path/to/working_dir/msfiles/2018-03-02/hh=02/2018-03-02T02:02:02/00_2018-03-02T02:02:02.ms.
+
         Args:
-            timestamp:
-            spw:
+            timestamp: Timestamp of the ms.
+            spw: Spectral window of the ms.
 
         Returns:
             Path to the measurement set.
@@ -94,12 +103,13 @@ class OfflinePathsManager(PathsManager):
         return self.get_data_product_path(timestamp, spw, product='msfiles', file_suffix='.ms')
 
     def get_data_product_path(self, timestamp: datetime, spw: str, product: str, file_suffix: str) -> str:
-        """
-        /path/to/working_dir/<product>/2018-03-02/hh=02/00_2018-03-02T02:02:02<file_suffix>
+        """Generate path for generic data product.
+        Looks like /path/to/working_dir/<product>/2018-03-02/hh=02/00_2018-03-02T02:02:02<file_suffix>.
+
         Args:
             product: Name of the data product to be used for top-level directory
             file_suffix: Suffix to data file. For example for fits file it'd be '.fits'.
-                You can also have something like '_v2.fits'
+            You can also have something like '_v2.fits'
             timestamp: Timestamp of observation.
             spw: Spectral window.
 
@@ -111,8 +121,8 @@ class OfflinePathsManager(PathsManager):
                f'{spw}_{timestamp.isoformat()}{file_suffix}'
 
     def get_flag_npy_path(self, timestamp: datetime) -> str:
-        """
-        Return the a priori npy for the flags column for a given time.
+        """ Return the a priori npy for the flags column for a given time.
+
         Args:
             timestamp:
 

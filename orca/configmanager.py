@@ -1,3 +1,7 @@
+"""Manages configuration
+
+It's effectively a singleton using module imports.
+"""
 from os import path
 import getpass
 import logging

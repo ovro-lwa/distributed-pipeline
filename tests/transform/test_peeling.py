@@ -16,7 +16,7 @@ def test_get_peeling_sources_dict():
 def test_write_peeling_sources_json():
     with tempfile.TemporaryDirectory() as dir:
         out_json = f'{dir}/sources.json'
-        peeling.write_peeling_sources_json(datetime(2018, 9, 22, 2, 30, 0), out_json, True)
+        peeling._write_peeling_sources_json(datetime(2018, 9, 22, 2, 30, 0), out_json, True)
         with open(out_json) as f:
             json.load(f)
 
@@ -26,4 +26,4 @@ def test_write_peeling_sources_json_returns_none_with_no_sources(is_visible):
     is_visible.return_value = False
     with tempfile.TemporaryDirectory() as dir:
         out_json = f'{dir}/sources.json'
-        assert peeling.write_peeling_sources_json(datetime(2018, 9, 22, 2, 30, 0), out_json, False) is None
+        assert peeling._write_peeling_sources_json(datetime(2018, 9, 22, 2, 30, 0), out_json, False) is None

@@ -1,3 +1,5 @@
+"""Visibility subtraction (not tested)
+"""
 import argparse
 import logging
 from casacore.tables import table, tablecopy
