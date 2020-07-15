@@ -3,7 +3,6 @@ from os import path
 import math, shutil
 from astropy.time import Time
 from astropy.coordinates import SkyCoord, ICRS
-from orca.utils.constants import LWA_LON
 from orca.utils.coordutils import CYG_A, OVRO_LWA_LOCATION, is_visible, get_altaz_at_ovro
 from orca.utils.beam import beam
 from casacore import tables
@@ -26,7 +25,7 @@ def BCAL_dadaname_list(utc_times_txt_path: str, duration_min: float = 20):
     utctimes, dadafiles = np.genfromtxt(utc_times_txt_path, delimiter=' \t ', \
         dtype='str', unpack=True)
     # Convert {utctimes} to array of LSTs and MJDs
-    lsttimes = Time(utctimes, scale='utc').sidereal_time('apparent', LWA_LON)
+    lsttimes = Time(utctimes, scale='utc').sidereal_time('apparent', OVRO_LWA_LOCATION.lon)
     mjdtimes = Time(utctimes, scale='utc').mjd
     # Select {duration_min} range of LSTs where CygA is closest to zenith
     CygA_HA        = CYG_A.ra.hourangle
