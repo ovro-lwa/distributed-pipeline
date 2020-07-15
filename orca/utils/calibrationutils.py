@@ -65,8 +65,7 @@ def gen_model_ms_stokes(ms: str, zest: bool = False):
         zest: For supplying component lists for polarized peeling. Default is False.
 
     Returns:
-        Returns path to component list(s). If zest=True, will return a list of paths
-        to single-source component lists.
+        Returns path to component list(s). If zest=True, will return a list of paths to single-source component lists.
     """
     t0    = tables.table(ms, ack=False).getcell('TIME', 0)
     me    = measures.measures()
