@@ -10,6 +10,7 @@ log = logging.getLogger(__name__)
 def average_ms(ms_list: List[str], ref_ms_index: int, out_ms: str, column: str, tolerate_ms_io_error: bool = False) \
         -> str:
     """ Average the list of measurement sets' select column.
+
     Args:
         ms_list: the list of the measurement set.
         ref_ms_index: the index of the measurement set in ``ms_list`` to create the averaged measurement set from.

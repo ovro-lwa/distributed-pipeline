@@ -86,8 +86,8 @@ def small_imaging_test():
 
 def calibration_pipeline():
     cal_date = date(2018, 3, 22)
-    pm = pm_whole.time_filter(start_time=datetime(2018, 3, 22, 11, 56, 4),
-                              end_time=datetime(2018, 3, 22, 17, 56, 4))
+    pm = pm_whole.time_filter(start_time=datetime(2018, 3, 23, 11, 52, 8),
+                              end_time=datetime(2018, 3, 23, 17, 52, 8))
     group([
         run_dada2ms.s(pm.get_dada_path(f'{s:02d}', t), out_ms=pm.get_ms_path(t, f'{s:02d}'),
                       gaintable=pm.get_bcal_path(cal_date, f'{s:02d}')) |

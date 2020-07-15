@@ -17,8 +17,7 @@ def BCAL_dadaname_list(utc_times_txt_path: str, duration_min: float = 20):
 
     Args:
         utc_times_txt_path: Path to utc_times.txt file.
-        duration_min: In minutes, amount of time used for calibration.
-        Default is 20 minutes.
+        duration_min: In minutes, amount of time used for calibration. Default is 20 minutes.
 
     Returns:
         List of dada file names to be used for calibration.

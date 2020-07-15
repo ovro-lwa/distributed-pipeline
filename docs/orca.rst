@@ -1,5 +1,5 @@
-orca package API Documentation
-==============================
+orca package
+============
 
 Subpackages
 -----------
@@ -9,6 +9,7 @@ Subpackages
 
    orca.flagging
    orca.metadata
+   orca.transform
    orca.utils
    orca.wrapper
 

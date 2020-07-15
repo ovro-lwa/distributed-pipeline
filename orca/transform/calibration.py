@@ -38,6 +38,7 @@ def calibration_steps(ms: str) -> str:
 
 def bandpass_correction(spectrumfile: str, bcalfile: str = None, plot: bool = False):
     """Generate calibration tables to correct bandpass flux scale based on Cyg A spectrum.
+
     Args:
         spectrumfile: .npz file output by orca.transform.spectrum
         bcalfile:  .bcal table to duplicate and fill with bandpass amplitude correction.
