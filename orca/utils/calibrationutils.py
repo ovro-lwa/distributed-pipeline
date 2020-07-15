@@ -73,7 +73,7 @@ def gen_model_ms_stokes(ms: str, zest: bool = False):
     outbeam = beam(ms)
     
     for s,src in enumerate(cal_srcs):
-        src_position: str = src.get('position')
+        src_position: str = src.get('position') # type: ignore
         ra  = src_position.split(' ')[1]
         dec = src_position.split(' ')[2]
         if is_visible(SkyCoord(ra, dec, frame=ICRS), utctime):
@@ -85,7 +85,7 @@ def gen_model_ms_stokes(ms: str, zest: bool = False):
     
     cl = componentlist()
     if zest:
-        fluxIvals  = [src.get('Stokes')[0] for src in cal_srcs]
+        fluxIvals  = [src.get('Stokes')[0] for src in cal_srcs] # type: ignore
         sortedinds = np.argsort(fluxIvals)[::-1]
         cllist     = []
         counter    = 0
