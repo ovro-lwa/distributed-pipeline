@@ -3,7 +3,7 @@ import os
 import logging
 from datetime import datetime
 import sys
-from typing import Optional
+from typing import Optional, List
 
 import orca.transform.imaging
 from orca.flagging import flagoperations, flag_bad_chans
@@ -76,11 +76,13 @@ def make_first_image(prefix: str, datetime_string: str, out_dir: str) -> str:
     logging.info(f'Glob statement is {prefix}/{datetime_string}/??_{datetime_string}.ms')
     os.makedirs(out_dir,exist_ok=True)
     ms_list = sorted(glob.glob(f'{prefix}/{datetime_string}/??_{datetime_string}.ms'))
-    return orca.transform.imaging.make_dirty_image(ms_list, out_dir, datetime_string)
+    out = orca.transform.imaging.make_dirty_image(ms_list, out_dir, datetime_string)
+    assert isinstance(out, str)
+    return out
 
 
 @app.task
-def run_integrate_with_concat(ms_list: str, out_ms: str, phase_center: Optional[str] = None) -> str:
+def run_integrate_with_concat(ms_list: List[str], out_ms: str, phase_center: Optional[str] = None) -> str:
     return integrate.integrate(ms_list, out_ms, phase_center)
 
 
@@ -102,3 +104,4 @@ def add(x: int, y: int) -> int:
 @app.task
 def str_concat(first, second, third=''):
     return f'{first}{second}{third}'
+

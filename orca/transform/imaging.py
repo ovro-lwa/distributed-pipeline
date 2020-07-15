@@ -82,6 +82,7 @@ def make_residual_image_with_source_removed(ms_list: List[str], timestamp: datet
                   '-no-update-model-required',
                   '-j', str(n_thread), '-niter', '4000', '-tempdir', tmp_dir]
     taper_args = ['-taper-inner-tukey', str(inner_tukey)] if inner_tukey else []
+    assert isinstance(dirty_image, str)
     im, header = fitsutils.read_image_fits(dirty_image)
     im_T = im.T
     fits_mask = f'{output_dir}/{output_prefix}-mask.fits'
@@ -107,7 +108,7 @@ def make_residual_image_with_source_removed(ms_list: List[str], timestamp: datet
                                                            width_list=fits_mask_width_list)
         if channelsout:
             wsclean.wsclean(ms_list, output_dir, output_prefix, extra_arg_list=extra_args +
-                            ['-channelsout', channelsout, '-fitsmask', fits_mask,
+                            ['-channelsout', str(channelsout), '-fitsmask', fits_mask,
                              '-threshold', str(CLEAN_THRESHOLD_JY),
                              '-mgain', str(CLEAN_MGAIN)] +
                             taper_args)
