@@ -9,7 +9,7 @@ import orca.transform.imaging
 from orca.flagging import flagoperations, flag_bad_chans
 from orca.proj.celery import app
 from orca.wrapper import dada2ms, change_phase_centre, wsclean
-from orca.transform import peeling, integrate, gainscaling, spectrum
+from orca.transform import peeling, integrate, gainscaling, spectrum, calibration
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
@@ -18,8 +18,8 @@ logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 Celery adapter on top of transforms.
 """
 @app.task
-def run_dada2ms(dada_file: str, out_ms: str, gaintable: Optional[str] = None) -> str:
-    dada2ms.dada2ms(dada_file, out_ms, gaintable)
+def run_dada2ms(dada_file: str, out_ms: str, gaintable: Optional[str] = None, addspw: bool = False) -> str:
+    dada2ms.dada2ms(dada_file, out_ms, gaintable, addspw)
     return out_ms
 
 
@@ -33,15 +33,32 @@ def peel(ms_file: str, utc_datetime: str) -> str:
     return peeling.ttcal_peel_from_data_to_corrected_data(ms_file,
                                                           datetime.strptime(utc_datetime, "%Y-%m-%dT%H:%M:%S"))
 
+@app.task
+def zest(ms_file):
+    return peeling.zest_with_casa(ms_file)
 
 @app.task
 def get_spectrum(ms_file: str, source: str, data_column: str = 'CORRECTED_DATA', timeavg: bool = False) -> str:
     return spectrum.gen_spectrum(ms_file, source, data_column, timeavg)
 
+@app.task
+def do_calibration(ms_file):
+    return calibration.calibration_steps(ms_file)
+    
+@app.task
+def do_bandpass_correction(spectrum_file, bcal_file=None, plot=False):
+    return calibration.bandpass_correction(spectrum_file, bcal_file, plot)
 
 @app.task
 def apply_a_priori_flags(ms_file: str, flag_npy_path: str) -> str:
     return flagoperations.write_to_flag_column(ms_file, flag_npy_path)
+
+@app.task
+def apply_ant_flag(ms_file: str, ants: list) -> str:
+    from casacore.tables import table, taql
+    t = table(ms_file)
+    taql(f"update $t set FLAG=True where any(ANTENNA1==$ants || ANTENNA2==$ants)")
+    return ms_file
 
 
 @app.task

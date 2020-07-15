@@ -12,11 +12,22 @@ import logging
 from scipy.ndimage import filters
 
 
-def flag_bad_chans(msfile, band, usedatacol=False, generate_plot=False, apply_flag=False):
-    """
-    Input: msfile
+def flag_bad_chans(msfile: str, band: str, usedatacol=False, generate_plot=False, apply_flag=False, crosshand=False,
+                   uvcut_m: float = None):
+    """Flag bad channels.
     Finds remaining bad channels and flags those in the measurement set. Also writes out text file that lists
     flags that were applied.
+
+    Args:
+        msfile: measurement set to flag.
+        band: spectral window.
+        usedatacol: If True, uses DATA column, else use CORRECTED_DATA.
+        generate_plot: generate a plot or not.
+        apply_flag: Whether to apply the flags.
+        crosshand: If true, it will use the XY and YX correlations when determining flags.
+            Otherwise, it will ignore the flags that are in flaglist[:,1] and flaglist[:,2].
+        uvcut_m:  uvcut in meters before doing thresholding to suppress short baseline flux
+
     """
     with pt.table(msfile, readonly=False) as t:
         tcross  = t.query('ANTENNA1!=ANTENNA2')
@@ -25,46 +36,32 @@ def flag_bad_chans(msfile, band, usedatacol=False, generate_plot=False, apply_fl
         else:
             datacol = tcross.getcol('CORRECTED_DATA')
         flagcol = tcross.getcol('FLAG')
+        
+        if uvcut_m:
+            uvw          = tcross.getcol('UVW')
+            uvdist       = np.sqrt( uvw[:,0]**2. + uvw[:,1]**2. )
+            indsbyuvdist = np.where(uvdist > uvcut_m)
+            datacol      = datacol[indsbyuvdist]
+            flagcol      = flagcol[indsbyuvdist]
 
-        datacolxx = datacol[:,:,0]
-        datacolyy = datacol[:,:,3]
+        datacolamp      = np.abs(datacol)
+        datacolamp_mask = ma.masked_array(datacolamp, mask=flagcol, fill_value=np.nan)
 
-        datacolxxamp = np.sqrt( np.real(datacolxx)**2. + np.imag(datacolxx)**2. )
-        datacolyyamp = np.sqrt( np.real(datacolyy)**2. + np.imag(datacolyy)**2. )
+        maxamps              = np.max(datacolamp_mask, axis=0)
+        meanamps             = np.mean(datacolamp_mask, axis=0)
+        maxamps_medfilt      = filters.median_filter(maxamps, size=10)
+        maxamps_norm         = maxamps / maxamps_medfilt
+        maxamps_norm_stdfilt = filters.generic_filter(maxamps_norm, np.std, size=25)
+        maxamps_lower        = 1 - 10*np.min(maxamps_norm_stdfilt, axis=0)
+        maxamps_upper        = 1 + 10*np.min(maxamps_norm_stdfilt, axis=0)
+        meanamps_stdfilt     = filters.generic_filter(meanamps, np.std, size=25)
 
-        flagarr = flagcol[:,:,0] | flagcol[:,:,3]   # probably unnecessary since flags are never pol-specific,
-                                                    # but doing this just in cases
-
-        datacolxxamp_mask = ma.masked_array(datacolxxamp, mask=flagarr, fill_value=np.nan)
-        datacolyyamp_mask = ma.masked_array(datacolyyamp, mask=flagarr, fill_value=np.nan)
-
-        skewxx = np.max(datacolxxamp_mask,axis=0)
-        skewyy = np.max(datacolyyamp_mask,axis=0)
-        meanxx = np.mean(datacolxxamp_mask,axis=0)
-        meanyy = np.mean(datacolyyamp_mask,axis=0)
-
-        skewxx_medfilt = filters.median_filter(skewxx,size=10)
-        skewyy_medfilt = filters.median_filter(skewyy,size=10)
-
-        skewxx_norm = skewxx/skewxx_medfilt
-        skewyy_norm = skewyy/skewyy_medfilt
-
-        skewxx_norm_stdfilt = filters.generic_filter(skewxx_norm, np.std, size=25)
-        skewyy_norm_stdfilt = filters.generic_filter(skewyy_norm, np.std, size=25)
-        skewvalxx = 1 - 10*np.min(skewxx_norm_stdfilt)
-        skewval2xx = 1 + 10*np.min(skewxx_norm_stdfilt)
-        skewvalyy = 1 - 10*np.min(skewyy_norm_stdfilt)
-        skewval2yy = 1 + 10*np.min(skewyy_norm_stdfilt)
-        meanxx_stdfilt = filters.generic_filter(meanxx, np.std, size=25)
-        meanyy_stdfilt = filters.generic_filter(meanyy, np.std, size=25)
-
-        # bad channels tend to have skewness values close to zero or slightly negative, compared to
-        # good channels, which have significantly positive skews, or right-skewed distributions.
-        #flaglist = np.where( (skewxx < 1) | (skewyy < 1)  )
-        flaglist = np.where( (skewxx_norm < skewvalxx) | (skewyy_norm < skewvalyy) |   \
-                             (skewxx_norm > skewval2xx) | (skewyy_norm > skewval2yy) | \
-                             (meanxx > np.median(meanxx)+100*np.min(meanxx_stdfilt))  | \
-                             (meanyy > np.median(meanyy)+100*np.min(meanyy_stdfilt)) )
+        flaglist = np.where( (maxamps_norm < maxamps_lower) | (maxamps_norm > maxamps_upper) | 
+                             (meanamps > np.median(meanamps, axis=0)+100*np.min(meanamps_stdfilt, axis=0)) )
+        if not crosshand:
+            flaglist = np.unique(flaglist[0][np.where( (flaglist[1] == 0) | (flaglist[1] == 3) )])
+        else:
+            flaglist = np.unique(flaglist[0])
         #import pylab
         #pylab.ion()
         #pylab.plot(skewxx_norm, '.', color='Blue')
@@ -95,10 +92,10 @@ def flag_bad_chans(msfile, band, usedatacol=False, generate_plot=False, apply_fl
             plt.figure(figsize=(5,10))
             chans = np.arange(0,109)
             for chan in chans:
-                if chan not in flaglist[0]:
-                    chanpts = np.zeros(len(datacolxxamp_mask[:,chan]))+chan
-                    plt.plot(datacolxxamp_mask[:,chan],chanpts, '.', color='Blue', markersize=0.5)
-                    plt.plot(datacolyyamp_mask[:,chan],chanpts, '.', color='Green', markersize=0.5)
+                if chan not in flaglist:
+                    chanpts = np.zeros(len(datacolamp_mask[:,chan,0]))+chan
+                    plt.plot(datacolamp_mask[:,chan,0],chanpts, '.', color='Blue', markersize=0.5)
+                    plt.plot(datacolamp_mask[:,chan,3],chanpts, '.', color='Green', markersize=0.5)
             plt.ylim([0,108])
             plt.ylabel('channel')
             plt.xlabel('Amp')
@@ -108,8 +105,8 @@ def flag_bad_chans(msfile, band, usedatacol=False, generate_plot=False, apply_fl
 
         ################################################
 
-        logging.info('Flaglist size is %i' % flaglist[0].size)
-        if flaglist[0].size > 0:
+        logging.info('Flaglist size is %i' % flaglist.size)
+        if flaglist.size > 0:
             # turn flaglist into text file of channel flags
             textfile = os.path.splitext(os.path.abspath(msfile))[0]+'.chans'
             chans    = np.arange(0,109)
@@ -127,7 +124,6 @@ def flag_bad_chans(msfile, band, usedatacol=False, generate_plot=False, apply_fl
     return msfile
 
 
-
 def main():
     parser = argparse.ArgumentParser(description="Flag bad channels and write out list of channels that were \
                                                   flagged into text file of same name as ms. MUST BE RUN ON \
@@ -137,9 +133,12 @@ def main():
     parser.add_argument("--usedatacol", action="store_true", default=False, help="Grab DATA column, not CORRECTED_DATA.")
     parser.add_argument('--plot', action='store_true', default=False, help='Generate plot of amp vs channel.')
     parser.add_argument('--apply-flag', action='store_true', default=False, help='Apply flags to measurement set.')
+    parser.add_argument('--crosshand', action='store_true', default=False, help='Use the cross-hand visibilities also.')
+    parser.add_argument('--uvcut_m', action='store', default=None, help='Only use visibilities greater than {uvcut_m} in meters when determining channel flags. Default is None.')
     args = parser.parse_args()
     flag_bad_chans(args.msfile, args.band, usedatacol=args.usedatacol,
-                   generate_plot=args.plot, apply_flag=args.apply_flag)
+                   generate_plot=args.plot, apply_flag=args.apply_flag,
+                   crosshand=args.crosshand, uvcut_m=args.uvcut_m)
 
 
 if __name__ == '__main__':
