@@ -20,12 +20,12 @@ logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 Celery adapter on top of transforms.
 """
 @app.task
-def run_flagfrac_chans(ms_file):
+def run_flagfrac_chans(ms_file: str) -> array:
     return metrics.flagfrac_chans(ms_file)
 
 
 @app.task
-def run_flagfrac(ms_file):
+def run_flagfrac(ms_file: str) -> array:
     return metrics.flagfrac(ms_file)
 
 
@@ -80,7 +80,11 @@ def run_integrate_with_concat(ms_list: str, out_ms: str, phase_center: Optional[
 
 
 @app.task
+<<<<<<< HEAD
 def run_correct_scaling(baseline_ms: str, target_ms: str, data_column='CORRECTED_DATA') -> str:
+=======
+def run_correct_scaling(baseline_ms: str, tar<get_ms: str, data_column='CORRECTED_DATA') -> str:
+>>>>>>> merging?
     return gainscaling.correct_scaling(baseline_ms, target_ms, data_column=data_column)
 
 
