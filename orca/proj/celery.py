@@ -11,12 +11,13 @@ app = Celery(CELERY_APP_NAME,
                       'orca.transform',
                       'orca.proj.onedayaverage',
                       'orca.proj.gainvariation',
-                      'orca.proj.pipeline'])
+                      ])
 
 # Optional configuration, see the application user guide.
 app.conf.update(
     result_expires=3600,
-    worker_prefetch_multiplier=1
+    worker_prefetch_multiplier=1,
+    task_serializer='json'
 )
 
 task_routes = {'*': queue_config['prefix']}

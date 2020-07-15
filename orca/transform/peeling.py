@@ -2,8 +2,11 @@ import logging
 
 from orca.utils.sourcemodels import RFI_B, CYG_A_UNPOLARIZED_RESOLVED, CAS_A_UNPOLARIZED_RESOLVED
 from orca.wrapper import ttcal
-from typing import List
+from typing import List, Optional
 from datetime import datetime
+import tempfile
+from os import path
+import json
 
 import casacore.tables as tables
 from orca.utils import coordutils
@@ -13,7 +16,7 @@ CORRECTED_DATA = 'CORRECTED_DATA'
 DATA = 'DATA'
 
 
-def peel_with_ttcal(ms: str, sources_json: str):
+def ttcal_peel_from_data_to_corrected_data(ms: str, utc_time: datetime, include_rfi_source: bool = True) -> str:
     with tables.table(ms, readonly=False) as t:
         # Copied from https://github.com/casacore/python-casacore/blob/master/casacore/tables/msutil.py#L48
         column_names = t.colnames()
@@ -27,16 +30,28 @@ def peel_with_ttcal(ms: str, sources_json: str):
         else:
             log.info(f'{ms} already has {CORRECTED_DATA} column. Not peeling.')
             return ms
-    # This reads from the just-created CORRECTED_DATA column and writes to CORRECTED_DATA column.
-    ttcal.peel_with_ttcal(ms, sources_json)
+    log.info(f'Generating sources.json for {ms}')
+    with tempfile.TemporaryDirectory() as tmpdir:
+        sources_json = path.join(tmpdir, 'sources.json')
+        if write_peeling_sources_json(utc_time, sources_json, include_rfi_source=include_rfi_source):
+            # This reads from the just-created CORRECTED_DATA column and writes to CORRECTED_DATA column.
+            ttcal.peel_with_ttcal(ms, sources_json)
     return ms
 
 
-def write_peeling_sources_json(utc_timestamp: datetime, out_json: str, include_rfi_source: bool):
-    pass
+def write_peeling_sources_json(utc_timestamp: datetime, out_json: str, include_rfi_source: bool) -> Optional[str]:
+    sources = _get_peeling_sources_list(utc_timestamp, include_rfi_source)
+    if sources:
+        log.info(f'{len(sources)} sources to peel for {utc_timestamp.isoformat()}.')
+        with open(out_json, 'w') as out_file:
+            json.dump(sources, out_file)
+        return out_json
+    else:
+        log.info(f'No sources to peel for {utc_timestamp.isoformat()}')
+        return None
 
 
-def _get_peeling_sources_dict(utc_timestamp: datetime, include_rfi_source: bool) -> List[dict]:
+def _get_peeling_sources_list(utc_timestamp: datetime, include_rfi_source: bool) -> List[dict]:
     sources = []
 
     if coordutils.is_visible(coordutils.CYG_A, utc_timestamp):

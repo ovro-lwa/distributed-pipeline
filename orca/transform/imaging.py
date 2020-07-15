@@ -3,23 +3,19 @@ import subprocess
 import os
 import logging
 from os import path
+from datetime import datetime
 from tempfile import TemporaryDirectory
 
 from matplotlib import colors as mpl_colors
 from matplotlib import pyplot as plt
 from astropy import wcs
-from astropy.coordinates import SkyCoord, get_sun
-import astropy.time as ap_time
+from astropy.coordinates import SkyCoord
 import numpy as np
 
-from orca.utils import fitsutils
+from orca.utils import fitsutils, coordutils
 from orca.wrapper import wsclean
 
 log = logging.getLogger(__name__)
-
-CRAB = 'CRAB'
-CRAB_COORDINATES = SkyCoord('05h34m31s +22deg00m52s')
-SUN = 'SUN'
 
 CLEAN_THRESHOLD_JY = 5
 CLEAN_THRESHOLD_JY_CRAB = 20
@@ -58,15 +54,15 @@ def make_movie_from_fits(fits_tuple: Tuple[str], output_dir: str, scale: float,
     return output_path
 
 
-def make_residual_image_with_source_removed(ms_list: List[str], output_dir: str, output_prefix: str,
-                                            source_to_remove: str, tmp_dir: str,
+def make_residual_image_with_source_removed(ms_list: List[str], timestamp: datetime, output_dir: str,
+                                            output_prefix: str, tmp_dir: str,
                                             inner_tukey: Optional[int] = None, n_thread: int = 10) -> str:
     """
 
     :param ms_list:
+    :param timestamp:
     :param output_dir:
     :param output_prefix:
-    :param source_to_remove:
     :param tmp_dir: tmpdir for wsclean to put the re-ordered visibility.
     :param inner_tukey:
     :param n_thread:
@@ -74,6 +70,7 @@ def make_residual_image_with_source_removed(ms_list: List[str], output_dir: str,
     """
     log.info(f'ms_list is {ms_list}')
     dirty_image = make_dirty_image(ms_list, output_dir, output_prefix, inner_tukey=inner_tukey)
+
     extra_args = ['-size', str(IMSIZE), str(IMSIZE), '-scale', str(IM_SCALE_DEGREE),
                   '-weight', 'briggs', '0',
                   '-no-update-model-required',
@@ -82,33 +79,43 @@ def make_residual_image_with_source_removed(ms_list: List[str], output_dir: str,
     im, header = fitsutils.read_image_fits(dirty_image)
     im_T = im.T
     fits_mask = f'{output_dir}/{output_prefix}-mask.fits'
-    if source_to_remove is SUN:
-        sun_coords_gcrs = get_sun(ap_time.Time(header['DATE-OBS'], format='isot', scale='utc'))
-        sun_direction_icrs = SkyCoord(ra=sun_coords_gcrs.ra, dec=sun_coords_gcrs.dec)
-        fitsutils.write_fits_mask_with_box_xy_coordindates(
-            fits_mask,
-            imsize=im_T.shape[0],
-            center=get_peak_around_source(im_T, sun_direction_icrs, wcs.WCS(header)),
-            width=81)
-        wsclean.wsclean(ms_list, output_dir, output_prefix, extra_arg_list=extra_args +
-                        ['-channelsout', str(SUN_CHANNELS_OUT), '-fitsmask', fits_mask,
-                         '-threshold', str(CLEAN_THRESHOLD_JY),
-                         '-mgain', str(CLEAN_MGAIN)] +
-                        taper_args)
-        os.renames(f'{output_dir}/{output_prefix}-MFS-residual.fits', f'{output_dir}/{output_prefix}-image.fits')
-    elif source_to_remove is CRAB:
-        fitsutils.write_fits_mask_with_box_xy_coordindates(
-            fits_mask,
-            imsize=IMSIZE,
-            center=get_peak_around_source(im_T, CRAB_COORDINATES, wcs.WCS(header)),
-            width=3)  # 3 because point source
-        wsclean.wsclean(ms_list, output_dir, output_prefix, extra_arg_list=extra_args +
-                        ['-fitsmask', fits_mask, '-threshold', str(CLEAN_THRESHOLD_JY_CRAB),
-                         '-mgain', str(CLEAN_MGAIN)] +
-                        taper_args)
-        os.renames(f'{output_dir}/{output_prefix}-residual.fits', f'{output_dir}/{output_prefix}-image.fits')
+
+    fits_mask_center_list = []
+    fits_mask_width_list = []
+    channelsout = 0
+
+    if coordutils.is_visible(coordutils.TAU_A, timestamp):
+        fits_mask_center_list.append(get_peak_around_source(im_T, coordutils.TAU_A, wcs.WCS(header)))
+        fits_mask_width_list.append(3)
+
+    sun_icrs = coordutils.sun_icrs(timestamp)
+    if coordutils.is_visible(sun_icrs, timestamp):
+        fits_mask_center_list.append(get_peak_around_source(im_T, sun_icrs, wcs.WCS(header)))
+        fits_mask_width_list.append(81)
+        channelsout = SUN_CHANNELS_OUT
+
+    if fits_mask_width_list:
+
+        fitsutils.write_fits_mask_with_box_xy_coordindates(fits_mask, imsize=im.T.shape[0],
+                                                           center_list=fits_mask_center_list,
+                                                           width_list=fits_mask_width_list)
+        if channelsout:
+            wsclean.wsclean(ms_list, output_dir, output_prefix, extra_arg_list=extra_args +
+                            ['-channelsout', channelsout, '-fitsmask', fits_mask,
+                             '-threshold', str(CLEAN_THRESHOLD_JY),
+                             '-mgain', str(CLEAN_MGAIN)] +
+                            taper_args)
+            os.renames(f'{output_dir}/{output_prefix}-MFS-residual.fits', f'{output_dir}/{output_prefix}-image.fits')
+        else:
+            wsclean.wsclean(ms_list, output_dir, output_prefix,
+                            extra_arg_list=extra_args +
+                                           ['-fitsmask', fits_mask, '-threshold',
+                                            str(CLEAN_THRESHOLD_JY_CRAB),
+                                            '-mgain', str(CLEAN_MGAIN)] +
+                                           taper_args)
+            os.renames(f'{output_dir}/{output_prefix}-residual.fits', f'{output_dir}/{output_prefix}-image.fits')
     else:
-        raise Exception(f'Unknown source to subtract {source_to_remove}.')
+        log.info(f'No sources to remove for {ms_list}')
     return f'{output_dir}/{output_prefix}-image.fits'
 
 
@@ -139,7 +146,6 @@ def make_dirty_image(ms_list: List[str], output_dir: str, output_prefix: str, ma
                       '-no-update-model-required', '-no-reorder', '-make-psf-only',
                       '-j', str(n_thread)] + taper_args
         wsclean.wsclean(ms_list, output_dir, output_prefix, extra_arg_list=extra_args)
-        os.remove(f'{output_dir}/{output_prefix}-dirty.fits')
         return f'{output_dir}/{output_prefix}-image.fits', f'{output_dir}/{output_prefix}-psf.fits'
     else:
         return f'{output_dir}/{output_prefix}-image.fits'

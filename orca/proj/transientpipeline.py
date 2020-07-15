@@ -7,7 +7,7 @@ from ..wrapper import change_phase_centre, wsclean
 from ..flagging import flagoperations
 from ..metadata.pathsmanagers import OfflinePathsManager
 from ..utils import image_sub
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import os
 import sys
 import logging
@@ -18,11 +18,11 @@ import uuid
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
-pm = OfflinePathsManager(utc_times_txt_path='/home/yuping/utc_times.txt',
-                         dadafile_dir='/lustre/data/2018-03-20_100hr_run',
-                         msfile_dir='/lustre/yuping/0-100-hr-reduction/salf/msfiles',
-                         bcal_dir='/lustre/yuping/2019-10-100-hr-take-two/bandpass/2018-03-22',
-                         flag_npy_path='/home/yuping/100-hr-a-priori-flags/20191125-consolidated-flags/20200602-consolidated-flags.npy')
+pm_whole = OfflinePathsManager(utc_times_txt_path='/home/yuping/utc_times.txt',
+                               dadafile_dir='/lustre/data/2018-03-20_100hr_run',
+                               working_dir='/lustre/yuping/0-100-hr-reduction/final/',
+                               gaintable_dir='/lustre/yuping/2019-10-100-hr-take-two/bandpass/',
+                               flag_npy_paths='/home/yuping/100-hr-a-priori-flags/20191125-consolidated-flags/20200602-consolidated-flags.npy')
 
 
 @app.task
@@ -45,10 +45,10 @@ def sidereal_subtraction(dir1, dir2, datetime_1, datetime_2, out_dir1, out_dir2,
 
         im1 = imaging.make_residual_image_with_source_removed(sorted(glob.glob(f'{tree1}/??_{datetime_1}.ms')),
                                                               temp_tree,
-                                                              datetime_1, imaging.CRAB, temp_tree, inner_tukey='20')
+                                                              datetime_1, imaging.CRAB, temp_tree, inner_tukey=20)
         im2 = imaging.make_residual_image_with_source_removed(sorted(glob.glob(f'{tree2}/??_{datetime_2}.ms')),
                                                               temp_tree,
-                                                              datetime_2, imaging.CRAB, temp_tree, inner_tukey='20')
+                                                              datetime_2, imaging.CRAB, temp_tree, inner_tukey=20)
         image_sub.image_sub(im1, im2, diff_out_dir)
         shutil.copy(im1, out_dir1)
         shutil.copy(im2, out_dir2)
@@ -82,3 +82,24 @@ def small_imaging_test():
         out_dir2=out_dir2,
         diff_out_dir=diff_out_dir)
           for p in pairs)()
+
+
+def calibration_pipeline():
+    cal_date = date(2018, 3, 22)
+    pm = pm_whole.time_filter(start_time=datetime(2018, 3, 22, 11, 56, 4),
+                              end_time=datetime(2018, 3, 22, 17, 56, 4))
+    group([
+        run_dada2ms.s(pm.get_dada_path(f'{s:02d}', t), out_ms=pm.get_ms_path(t, f'{s:02d}'),
+                      gaintable=pm.get_bcal_path(cal_date, f'{s:02d}')) |
+        apply_a_priori_flags.s(flag_npy_path=pm.get_flag_npy_path(t)) |
+        peel.s(t) |
+        flag_chans.s(spw=s)
+        for t in pm.utc_times_mapping.keys() for s in range(22)])()
+
+
+def imaging_steps():
+    cal_date = date(2018, 3, 22)
+    pm = pm_whole.time_filter(start_time=datetime(2018, 3, 22, 11, 56, 4),
+                              end_time=datetime(2018, 3, 22, 12, 5, 4))
+    # One giant imaging task?
+    pass

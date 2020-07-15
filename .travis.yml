@@ -2,18 +2,19 @@ language: python
 
 cache: pip
 
-# whitelist
+# only CI on the following branches 
 branches:
   only:
-    - master
-    - prod
+    - main
 
-matrix:
+jobs:
   include:
     python: 3.6
     dist: xenial
-    sudo: true
 
+git:
+  lfs_skip_smudge: true
+  
 before_install:
   - sudo apt-get -y install libgfortran3
 
@@ -22,6 +23,8 @@ install:
   - pipenv sync --dev
 
 script:
+  - wget --no-check-certificate http://www.astro.caltech.edu/~yuping/resources.tar.gz
+  - tar -xvzf resources.tar.gz -C $TRAVIS_BUILD_DIR/tests
   - pytest --cov=orca
   - mypy --ignore-missing-imports orca
 
