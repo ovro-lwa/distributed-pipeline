@@ -1,6 +1,7 @@
 # orca
 [![Build Status](https://travis-ci.com/ovro-lwa/distributed-pipeline.svg?branch=master)](https://travis-ci.com/ovro-lwa/distributed-pipeline)
 [![codecov](https://codecov.io/gh/ovro-lwa/distributed-pipeline/branch/master/graph/badge.svg)](https://codecov.io/gh/ovro-lwa/distributed-pipeline)
+[![Documentation Status](https://readthedocs.org/projects/distributed-pipeline/badge/?version=latest)](https://distributed-pipeline.readthedocs.io/en/latest/?badge=latest)
 ## Set up development environment
 Before you start, it's important to make sure that other installations of casacore are not
 in your `LD_LIBRARY_PATH`; otherwise it may mess up casa6.
