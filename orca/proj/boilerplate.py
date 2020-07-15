@@ -9,6 +9,8 @@ import orca.transform.imaging
 from orca.flagging import flagoperations, flag_bad_chans
 from orca.proj.celery import app
 from orca.wrapper import dada2ms, change_phase_centre, wsclean
+from preprocessing import flagging
+from qa import metrics
 from orca.transform import peeling, integrate, gainscaling, spectrum
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
@@ -17,6 +19,16 @@ logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 """
 Celery adapter on top of transforms.
 """
+@app.task
+def run_flagfrac_chans(ms_file: str) -> array:
+    return metrics.flagfrac_chans(ms_file)
+
+
+@app.task
+def run_flagfrac(ms_file: str) -> array:
+    return metrics.flagfrac(ms_file)
+
+
 @app.task
 def run_dada2ms(dada_file: str, out_ms: str, gaintable: Optional[str] = None) -> str:
     dada2ms.dada2ms(dada_file, out_ms, gaintable)
