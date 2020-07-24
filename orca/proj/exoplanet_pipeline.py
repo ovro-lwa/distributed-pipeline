@@ -1,4 +1,4 @@
-from orca.proj.boilerplate import run_dada2ms, flag_chans, apply_ant_flag, apply_bl_flag, zest, run_chgcentre, run_integrate_with_concat, do_calibration, get_spectrum, do_bandpass_correction
+from orca.proj.boilerplate import run_dada2ms, flag_chans, apply_ant_flag, apply_bl_flag, zest, run_chgcentre, run_integrate_with_concat, do_calibration, get_spectrum, do_bandpass_correction, do_applycal
 from orca.utils.calibrationutils import BCAL_dadaname_list
 from orca.utils.coordutils import CYG_A
 from orca.flagging.flag_bad_chans import flag_bad_chans
@@ -12,14 +12,15 @@ from os import path
 import numpy as np
 import glob
 import pdb
+from datetime import datetime
 from casatasks import applycal
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
-#pm = OfflinePathsManager(utc_times_txt_path='/lustre/mmanders/exoplanet/orca_test/LST_wpeel/utc_times.txt',
-#                         dadafile_dir='/lustre/data/exoplanet_20200117',
-#                         msfile_dir='/lustre/mmanders/exoplanet/orca_test/LST_wpeel',
-#                         bcal_dir='/lustre/mmanders/exoplanet/BCAL/20200123_multiintStokesV_take2')
+pm_20200117 = OfflinePathsManager(utc_times_txt_path='/lustre/data/exoplanet_20200117/utc_times.txt',
+                                  dadafile_dir='/lustre/data/exoplanet_20200117',
+                                  working_dir='/lustre/mmanders/exoplanet/orca_testwpm/LST_nopeel',
+                                  gaintable_dir='/lustre/mmanders/exoplanet/orca_test/LST_nopeel/BCAL')
 user = os.getlogin()
 utc_times_txt_path = '/lustre/mmanders/exoplanet/orca_test/LST_nopeel/utc_times.txt'
 utc_times_txt_pathcal = '/lustre/mmanders/exoplanet/orca_test/LST_nopeel/utc_times_24hr.txt'
@@ -65,8 +66,28 @@ def calibration_pipeline(utc_times_txt_path: str):
     spectrafiles = group( [get_spectrum.s(msfile, 'CygA', timeavg=True) for msfile in BCALmslist.get()] )()
     # bandpass correction tables
     bpasscorrlist = group( [do_bandpass_correction.s(spectrumfile, path.splitext(msfile)[0]+'.bcal', plot=True) for spectrumfile,msfile in zip(spectrafiles.get(),BCALmslist.get())] )()
-    
-    
+
+def processing_pipeline2():
+    pm = pm_20200117.time_filter(start_time=datetime(2020, 1, 22, 9, 30, 0),
+                                 end_time=datetime(2020, 1, 22, 11, 30, 0))
+    # for applycal
+    bcal    = f'{bcal_dir}/07-T1al.bcal'
+    Xcal    = f'{bcal_dir}/07-T1al.X'
+    dcal    = f'{bcal_dir}/07-T1al.dcal'
+    cygacal = f'{bcal_dir}/07-T1al-spec.bcal'
+    ants = np.genfromtxt(f'{bcal_dir}/flag_bad_ants.ants', dtype=int, delimiter=',')
+    blfile1 = '/home/mmanders/imaging_scripts/flagfiles/defaults/expansion2expansion.bl'
+    blfile2 = '/home/mmanders/imaging_scripts/flagfiles/defaults/flagsRyan_adjacent.bl'
+    group([
+        run_dada2ms.s(pm.get_dada_path(f'{s:02d}', t), out_ms=pm.get_ms_path(t, f'{s:02d}')) | 
+        do_applycal.s(bcal,Xcal,dcal,cygacal) | 
+        apply_ant_flag.s(ants.tolist()) | 
+        apply_bl_flag.s(blfile1) | 
+        apply_bl_flag.s(blfile2) | 
+        flag_chans.s(f'{s:02d}', crosshand=True, uvcut_m=50)
+        for t in pm.utc_times_mapping.keys() for s in range(7,8)
+    ])()
+
 @app.task
 def processing_pipeline(dadafile: str, subband: int):
     spw    = '%02d' % subband

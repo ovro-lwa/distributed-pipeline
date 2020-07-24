@@ -50,6 +50,12 @@ def do_bandpass_correction(spectrum_file, bcal_file=None, plot=False):
     return calibration.bandpass_correction(spectrum_file, bcal_file, plot)
 
 @app.task
+def do_applycal(ms_file, bcal_file, Xcal_file, dcal_file, spec_file):
+    from casatasks import applycal
+    applycal(ms_file, gaintable=[bcal_file,Xcal_file,dcal_file,spec_file], flagbackup=False)
+    return ms_file
+
+@app.task
 def apply_a_priori_flags(ms_file: str, flag_npy_path: str) -> str:
     return flagoperations.write_to_flag_column(ms_file, flag_npy_path)
 
@@ -67,8 +73,8 @@ def apply_bl_flag(ms_file: str, bl_file: str) -> str:
 
 
 @app.task
-def flag_chans(ms: str, spw: str) -> str:
-    return flag_bad_chans.flag_bad_chans(ms, spw, apply_flag=True)
+def flag_chans(ms: str, spw: str, crosshand: bool = False, uvcut_m: float = None) -> str:
+    return flag_bad_chans.flag_bad_chans(ms, spw, apply_flag=True, crosshand=crosshand, uvcut_m=uvcut_m)
 
 
 @app.task
