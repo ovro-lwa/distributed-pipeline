@@ -17,6 +17,7 @@ class PathsManager(object):
     """
     def __init__(self, utc_times_txt_path: str, dadafile_dir: Optional[str]):
         self.dadafile_dir = dadafile_dir
+        self.utc_times_txt_path = utc_times_txt_path
         # do the mapping thing
         self.utc_times_mapping = OrderedDict()
         with open(utc_times_txt_path) as f:

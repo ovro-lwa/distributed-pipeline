@@ -50,9 +50,9 @@ def do_bandpass_correction(spectrum_file, bcal_file=None, plot=False):
     return calibration.bandpass_correction(spectrum_file, bcal_file, plot)
 
 @app.task
-def do_applycal(ms_file, bcal_file, Xcal_file, dcal_file, spec_file):
+def do_applycal(ms_file: str, cal_tables: List[str]):
     from casatasks import applycal
-    applycal(ms_file, gaintable=[bcal_file,Xcal_file,dcal_file,spec_file], flagbackup=False)
+    applycal(ms_file, gaintable=cal_tables, flagbackup=False)
     return ms_file
 
 @app.task

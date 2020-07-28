@@ -1,6 +1,7 @@
 import numpy as np
 from os import path
 import math, shutil
+from datetime import datetime
 from astropy.time import Time
 from astropy.coordinates import SkyCoord, ICRS
 from orca.utils.coordutils import CYG_A, OVRO_LWA_LOCATION, is_visible, get_altaz_at_ovro
@@ -10,17 +11,23 @@ from casacore import measures
 from casatools import componentlist
 
 
-def BCAL_dadaname_list(utc_times_txt_path: str, duration_min: float = 20):
+def calibration_time_range(utc_times_txt_path: str, start_time: datetime, end_time: datetime, 
+                       duration_min: float = 20):
     """Get dada file names based on Cygnus A transit for calibration.
     Get list of .dada file names to use for calibration. Selects .dada files that
     span {duration_min} centered on transit of Cygnus A.
 
     Args:
         utc_times_txt_path: Path to utc_times.txt file.
-        duration_min: In minutes, amount of time used for calibration. Default is 20 minutes.
+        start_time: Start time of data for which to derive calibration tables,
+            datetime format.
+        end_time: End time of data for which to derive calibration tables, 
+            datetime format.
+        duration_min: In minutes, amount of time used for calibration. Default is 20 min.
 
     Returns:
-        List of dada file names to be used for calibration.
+        cal_start_time and cal_end_time covering {duration_min} calibration range, 
+            in datetime format.
     """
     # If the utc_times.txt file contains multiple transits of Cygnus A, will select the
     # first transit.
@@ -34,14 +41,17 @@ def BCAL_dadaname_list(utc_times_txt_path: str, duration_min: float = 20):
     CygA_HA        = CYG_A.ra.hourangle
     CygA_HA_start  = CygA_HA - duration_min/2./60.
     CygA_HA_stop   = CygA_HA + duration_min/2./60.
-    first_24_hrs   = np.where( (mjdtimes - mjdtimes[0]) <= 1. )
-    rel_starttimes = np.abs(lsttimes.value[first_24_hrs] - CygA_HA_start)
-    rel_stoptimes  = np.abs(lsttimes.value[first_24_hrs] - CygA_HA_stop)
+    centermjd      = Time(datetime.fromtimestamp( 
+                         (start_time.timestamp() + end_time.timestamp()) / 2. )).mjd
+    rel_starttimes = np.abs(lsttimes.value - CygA_HA_start) + np.abs(mjdtimes - centermjd)
+    rel_stoptimes  = np.abs(lsttimes.value - CygA_HA_stop) + np.abs(mjdtimes - centermjd)
     cyga_start_ind = list(rel_starttimes).index(min(rel_starttimes))
     cyga_stop_ind  = list(rel_stoptimes).index(min(rel_stoptimes))
     #
-    BCALdadafiles   = dadafiles[first_24_hrs[0][cyga_start_ind]:first_24_hrs[0][cyga_stop_ind]+1]
-    return BCALdadafiles
+    cal_start_time = Time(utctimes[cyga_start_ind]).to_datetime()
+    cal_end_time   = Time(utctimes[cyga_stop_ind]).to_datetime()
+    #
+    return cal_start_time, cal_end_time
 
 
 cal_srcs = [{'label': 'CasA', 'flux': 16530, 'alpha': -0.72, 'ref_freq': 80.0,

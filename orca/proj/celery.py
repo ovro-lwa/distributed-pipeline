@@ -10,8 +10,7 @@ app = Celery(CELERY_APP_NAME,
              include=['orca.proj.boilerplate',
                       'orca.transform',
                       'orca.proj.onedayaverage',
-                      'orca.proj.gainvariation',
-                      'orca.proj.exoplanet_pipeline'])
+                      'orca.proj.gainvariation'])
 
 # Optional configuration, see the application user guide.
 app.conf.update(

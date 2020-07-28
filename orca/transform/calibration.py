@@ -45,7 +45,7 @@ def bandpass_correction(spectrumfile: str, bcalfile: str = None, plot: bool = Fa
         plot: whether to make a plot.
 
     Returns:
-        path to -spec.bcal file if {bcalfile} specified. Otherwise returns None.
+        path to .bcal2 file if {bcalfile} specified. Otherwise returns None.
     """
     spec = np.load(spectrumfile)
     # spec.files = {frqarr, timearr, speccorr, specI, specV}
@@ -75,13 +75,13 @@ def bandpass_correction(spectrumfile: str, bcalfile: str = None, plot: bool = Fa
         factorfull[idx]    = factor
         factorfull[idnans] = 1
         # open bcal file to populate CPARAM column
-        tables.tablecopy(bcalfile, f'{path.splitext(bcalfile)[0]}-spec.bcal')
-        t = tables.table(f'{path.splitext(bcalfile)[0]}-spec.bcal',readonly=False)
+        tables.tablecopy(bcalfile, f'{path.splitext(bcalfile)[0]}.bcal2')
+        t = tables.table(f'{path.splitext(bcalfile)[0]}.bcal2',readonly=False)
         # fill column
         gains    = t.getcol('CPARAM') # gains.shape = [Nants,Nchans,Npol]
         gains[:] = np.array([factorfull+0*1.j, factorfull+0*1.j], dtype=complex).T
         t.putcol('CPARAM', gains)
         t.close()
-        return f'{path.splitext(bcalfile)[0]}-spec.bcal'
+        return f'{path.splitext(bcalfile)[0]}.bcal2'
     else:
         return None
