@@ -50,16 +50,18 @@ def calibration_pipeline_20200122():
     phase_center = change_phase_centre.get_phase_center(msfileantflags)
     BCALmsfiles  = group([
                        run_dada2ms.s(pm_cal.get_dada_path(f'{s:02d}', t), 
-                                     pm_cal.get_ms_path(t,f'{s:02d}')) |
-                       run_chgcentre.s(phase_center)
+        f'{pm_cal.gaintable_dir}/{middleBCALdate.date().isoformat()}/msfiles/' \
+        f'{s:02d}_{t.isoformat()}.ms')
                        for t in pm_cal.utc_times_mapping.keys() for s in range(2,8)
                    ])()
     #
     blfile1 = '/home/mmanders/imaging_scripts/flagfiles/defaults/expansion2expansion.bl'
     blfile2 = '/home/mmanders/imaging_scripts/flagfiles/defaults/flagsRyan_adjacent.bl'
-    group([run_integrate_with_concat.s([pm_cal.get_ms_path(t,f'{s:02d}') 
-                                        for t in pm_cal.utc_times_mapping.keys()], 
-            pm_cal.get_gaintable_path(middleBCALdate.date(), f'{s:02d}', 'ms')) |
+    group([run_integrate_with_concat.s([
+        f'{pm_cal.gaintable_dir}/{middleBCALdate.date().isoformat()}/msfiles/' \
+        f'{s:02d}_{t.isoformat()}.ms' for t in pm_cal.utc_times_mapping.keys()], 
+            pm_cal.get_gaintable_path(middleBCALdate.date(), f'{s:02d}', 'ms'),
+            phase_center=phase_center) |
         apply_ant_flag.s(ants.tolist()) |
         apply_bl_flag.s(blfile1) | apply_bl_flag.s(blfile2) |
         do_calibration.s() |
@@ -84,7 +86,7 @@ def processing_pipeline_testLSTnopeel(CALdate: date):
     pm      = pm_20200117.time_filter(start_time=start_time_testLSTnopeel,
                                       end_time=end_time_testLSTnopeel)
     ants    = np.genfromtxt(
-                  f'{pm.gaintable_dir}/{CALdate.date().isoformat()}/flag_bad_ants.ants', 
+                  f'{pm.gaintable_dir}/{CALdate.isoformat()}/flag_bad_ants.ants', 
                   dtype=int, delimiter=',')
     blfile1 = '/home/mmanders/imaging_scripts/flagfiles/defaults/expansion2expansion.bl'
     blfile2 = '/home/mmanders/imaging_scripts/flagfiles/defaults/flagsRyan_adjacent.bl'

@@ -48,8 +48,8 @@ def calibration_time_range(utc_times_txt_path: str, start_time: datetime, end_ti
     cyga_start_ind = list(rel_starttimes).index(min(rel_starttimes))
     cyga_stop_ind  = list(rel_stoptimes).index(min(rel_stoptimes))
     #
-    cal_start_time = Time(utctimes[cyga_start_ind]).to_datetime()
-    cal_end_time   = Time(utctimes[cyga_stop_ind]).to_datetime()
+    cal_start_time = Time(utctimes[cyga_start_ind-1]).to_datetime()
+    cal_end_time   = Time(utctimes[cyga_stop_ind+1]).to_datetime()
     #
     return cal_start_time, cal_end_time
 
