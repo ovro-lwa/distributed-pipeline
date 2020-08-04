@@ -11,8 +11,8 @@ from casacore import measures
 from casatools import componentlist
 
 
-def calibration_time_range(utc_times_txt_path: str, start_time: datetime, end_time: datetime, 
-                       duration_min: float = 20):
+def calibration_time_range(utc_times_txt_path: str, start_time: datetime, 
+                           end_time: datetime, duration_min: float = 20):
     """Get dada file names based on Cygnus A transit for calibration.
     Get list of .dada file names to use for calibration. Selects .dada files that
     span {duration_min} centered on transit of Cygnus A.
@@ -35,7 +35,7 @@ def calibration_time_range(utc_times_txt_path: str, start_time: datetime, end_ti
     utctimes, dadafiles = np.genfromtxt(utc_times_txt_path, delimiter=' \t ', \
         dtype='str', unpack=True)
     # Convert {utctimes} to array of LSTs and MJDs
-    lsttimes = Time(utctimes, scale='utc').sidereal_time('apparent', OVRO_LWA_LOCATION.lon)
+    lsttimes = Time(utctimes, scale='utc').sidereal_time('apparent',OVRO_LWA_LOCATION.lon)
     mjdtimes = Time(utctimes, scale='utc').mjd
     # Select {duration_min} range of LSTs where CygA is closest to zenith
     CygA_HA        = CYG_A.ra.hourangle
@@ -54,18 +54,6 @@ def calibration_time_range(utc_times_txt_path: str, start_time: datetime, end_ti
     return cal_start_time, cal_end_time
 
 
-cal_srcs = [{'label': 'CasA', 'flux': 16530, 'alpha': -0.72, 'ref_freq': 80.0,
-     'position': 'J2000 23h23m24s +58d48m54s'},
-        {'label': 'CygA', 'flux': 16300, 'alpha': -0.58, 'ref_freq': 80.0,
-     'position': 'J2000 19h59m28.35663s +40d44m02.0970s'}]
-
-
-def flux80_47(flux_hi, sp, output_freq, ref_freq):
-    # given a flux at 80 MHz and a sp_index,
-    # return the flux at MS center-frequency.
-    return flux_hi * 10 ** (sp * math.log(output_freq/ref_freq, 10))
-
-
 def gen_model_ms_stokes(ms: str, zest: bool = False):
     """ Generate component lists for calibration / polarized peeling in CASA.
     Currently only includes Cas A & Cyg A.
@@ -75,29 +63,40 @@ def gen_model_ms_stokes(ms: str, zest: bool = False):
         zest: For supplying component lists for polarized peeling. Default is False.
 
     Returns:
-        Returns path to component list(s). If zest=True, will return a list of paths to single-source component lists.
+        Returns path to component list(s). If zest=True, will return a list of paths to 
+        single-source component lists.
     """
+    src_list = [{'label': 'CasA', 'flux': 16530, 'alpha': -0.72, 'ref_freq': 80.0,
+                 'position': 'J2000 23h23m24s +58d48m54s'},
+                {'label': 'CygA', 'flux': 16300, 'alpha': -0.58, 'ref_freq': 80.0,
+                 'position': 'J2000 19h59m28.35663s +40d44m02.0970s'}]    
     t0    = tables.table(ms, ack=False).getcell('TIME', 0)
     me    = measures.measures()
     time  = me.epoch('UTC', '%fs' % t0)
     timeT = Time(time['m0']['value'], format='mjd', scale='utc')
     timeT.format = 'datetime'
     utctime = timeT.value
+    lsttime = timeT.sidereal_time('apparent', OVRO_LWA_LOCATION.lon).value
     freq = float(tables.table(ms+'/SPECTRAL_WINDOW', ack=False).getcell('NAME', 0))/1.e6
     #
     outbeam = beam(ms)
-    
-    for s,src in enumerate(cal_srcs):
+
+    cal_srcs = []
+    for s,src in enumerate(src_list):
         src_position: str = src.get('position')    # type: ignore
         ra  = src_position.split(' ')[1]
         dec = src_position.split(' ')[2]
-        if is_visible(SkyCoord(ra, dec, frame=ICRS), utctime):
+        if is_visible(SkyCoord(ra, dec, frame=ICRS), utctime) and \
+        (not zest or (zest and (lsttime < 8 or lsttime > 13))):
             altaz = get_altaz_at_ovro(SkyCoord(ra, dec, frame=ICRS), utctime)
             scale = np.array(outbeam.srcIQUV(altaz.az.deg, altaz.alt.deg))
-            cal_srcs[s]['Stokes'] = list(flux80_47(src['flux'], src['alpha'], freq, src['ref_freq']) * scale)
-        else:
-            del cal_srcs[s]
-    
+            src_list[s]['Stokes'] = list(_flux80_47(src['flux'], src['alpha'], freq, 
+                                                    src['ref_freq']) * scale)
+            cal_srcs.append(src_list[s])
+
+    if not cal_srcs:
+        return
+
     cl = componentlist()
     if zest:
         fluxIvals  = [src.get('Stokes')[0] for src in cal_srcs]    # type: ignore
@@ -112,8 +111,10 @@ def gen_model_ms_stokes(ms: str, zest: bool = False):
             except OSError:
                 pass
             cl.done()
-            cl.addcomponent(flux=src['Stokes'], polarization='Stokes', dir=src['position'], label=src['label'])
-            cl.setstokesspectrum(which=0, type='spectral index', index=[src['alpha'], 0, 0, 0], reffreq='%sMHz' % freq)            
+            cl.addcomponent(flux=src['Stokes'], polarization='Stokes', 
+                            dir=src['position'], label=src['label'])
+            cl.setstokesspectrum(which=0, type='spectral index', 
+                                 index=[src['alpha'], 0, 0, 0], reffreq='%sMHz' % freq)            
             cl.rename(clname)
             cl.done()
             cllist.append(clname)
@@ -127,8 +128,16 @@ def gen_model_ms_stokes(ms: str, zest: bool = False):
         except OSError:
             pass
         for s,src in enumerate(cal_srcs):
-            cl.addcomponent(flux=src['Stokes'], polarization='Stokes', dir=src['position'], label=src['label'])
-            cl.setstokesspectrum(which=s, type='spectral index', index=[src['alpha'], 0, 0, 0], reffreq='%sMHz' % freq)
+            cl.addcomponent(flux=src['Stokes'], polarization='Stokes', 
+                            dir=src['position'], label=src['label'])
+            cl.setstokesspectrum(which=s, type='spectral index', 
+                                 index=[src['alpha'], 0, 0, 0], reffreq='%sMHz' % freq)
         cl.rename(clname)
         cl.done()
         return clname
+
+
+def _flux80_47(flux_hi, sp, output_freq, ref_freq):
+    # given a flux at 80 MHz and a sp_index,
+    # return the flux at MS center-frequency.
+    return flux_hi * 10 ** (sp * math.log(output_freq/ref_freq, 10))
