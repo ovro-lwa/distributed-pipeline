@@ -28,6 +28,8 @@ pm_20200117 = OfflinePathsManager(
 
 start_time_testLSTnopeel = datetime(2020,1,22,9,30,0)
 end_time_testLSTnopeel   = datetime(2020,1,22,11,30,0)
+start_time_testLSTwpeel  = datetime(2020,1,22,18,30,0)
+end_time_testLSTwpeel    = datetime(2020,1,22,20,30,0)
 
 def calibration_pipeline_20200122():
     # identify calibration integrations
@@ -82,7 +84,7 @@ def calibration_pipeline_20200122():
     return middleBCALdate.date()
 
 
-def processing_pipeline_testLSTnopeel(CALdate: date):
+def processing_pipeline_test(CALdate: date):
     pm      = pm_20200117.time_filter(start_time=start_time_testLSTnopeel,
                                       end_time=end_time_testLSTnopeel)
     ants    = np.genfromtxt(
@@ -98,10 +100,7 @@ def processing_pipeline_testLSTnopeel(CALdate: date):
         apply_ant_flag.s(ants.tolist()) | 
         apply_bl_flag.s(blfile1) | 
         apply_bl_flag.s(blfile2) | 
-        flag_chans.s(f'{s:02d}', crosshand=True, uvcut_m=50)
+        flag_chans.s(f'{s:02d}', crosshand=True, uvcut_m=50) |
+        zest.s()
         for t in pm.utc_times_mapping.keys() for s in range(2,8)
     ])()
-
-    
-#@app.task
-#def exoplanet_reverse_pipeline():
