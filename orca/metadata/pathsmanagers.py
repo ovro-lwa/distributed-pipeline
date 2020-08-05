@@ -28,22 +28,6 @@ class PathsManager(object):
     def get_dada_path(self, spw: str, timestamp: datetime):
         return f'{self.dadafile_dir}/{spw}/{self.utc_times_mapping[timestamp]}'
 
-    def time_filter(self, start_time: datetime, end_time: datetime) -> 'PathsManager':
-        """
-        Returns another PathsManager object with only utc_times between start_time (inclusive) and end_time (exclusive).
-
-        Args:
-            start_time:
-            end_time:
-
-        Returns:
-            new_paths_manager: New PathsManager object with time filtered.
-        """
-        new_paths_manager = copy.deepcopy(self)
-        new_paths_manager.utc_times_mapping = OrderedDict((k, v) for k, v in self.utc_times_mapping.items()
-                                                          if start_time < k < end_time)
-        return new_paths_manager
-
 
 class OfflinePathsManager(PathsManager):
     """PathsManager for offline transient processing.
@@ -138,4 +122,20 @@ class OfflinePathsManager(PathsManager):
             return self.flag_npy_paths[find_closest(timestamp, self.flag_npy_paths.keys())]
         else:
             raise ValueError(f'flag_npy_paths can only be str or dict. It is type {type(self.flag_npy_paths)}.')
+
+    def time_filter(self, start_time: datetime, end_time: datetime) -> 'OfflinePathsManager':
+        """
+        Returns another PathsManager object with only utc_times between start_time (inclusive) and end_time (exclusive).
+
+        Args:
+            start_time:
+            end_time:
+
+        Returns:
+            new_paths_manager: New PathsManager object with time filtered.
+        """
+        new_paths_manager = copy.deepcopy(self)
+        new_paths_manager.utc_times_mapping = OrderedDict((k, v) for k, v in self.utc_times_mapping.items()
+                                                          if start_time < k < end_time)
+        return new_paths_manager
 
