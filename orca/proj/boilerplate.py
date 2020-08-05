@@ -11,6 +11,8 @@ from orca.proj.celery import app
 from orca.wrapper import dada2ms, change_phase_centre, wsclean
 from orca.transform import peeling, integrate, gainscaling, spectrum, calibration
 
+import billiard
+
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
 
@@ -50,9 +52,9 @@ def do_bandpass_correction(spectrum_file, bcal_file=None, plot=False):
     return calibration.bandpass_correction(spectrum_file, bcal_file, plot)
 
 @app.task
-def do_applycal(ms_file: str, cal_tables: List[str]):
+def do_applycal(ms_file, bcal_file, Xcal_file, dcal_file, spec_file):
     from casatasks import applycal
-    applycal(ms_file, gaintable=cal_tables, flagbackup=False)
+    applycal(ms_file, gaintable=[bcal_file,Xcal_file,dcal_file,spec_file], flagbackup=False)
     return ms_file
 
 @app.task
@@ -111,3 +113,12 @@ def add(x: int, y: int) -> int:
 def str_concat(first, second, third=''):
     return f'{first}{second}{third}'
 
+
+@app.task
+def test_multiprocessing():
+    def worker(num):
+        return num
+
+    for i in range(5):
+        p = billiard.Process(target=worker, args=(i,))
+        p.start()
