@@ -4,7 +4,7 @@ import os
 
 log = logging.getLogger(__name__)
 
-TTCAL_EXEC = '/opt/astro/mwe/bin/ttcal-0.3.0'
+TTCAL_EXEC = '/opt/astro/devel/pberger/bin/ttcal-0.5.0'
 
 
 def peel_with_ttcal(ms: str, sources: str):
@@ -14,7 +14,9 @@ def peel_with_ttcal(ms: str, sources: str):
     :param sources: Path to the sources.json file.
     :return:
     """
-    new_env = dict(os.environ, LD_LIBRARY_PATH='/opt/astro/mwe/usr/lib64:/opt/astro/lib/',
+
+    lib_path = '/opt/astro/mwe/usr/lib64:/opt/astro/lib/:/opt/astro/casacore-2.0.3/lib/'
+    new_env = dict(os.environ, LD_LIBRARY_PATH=lib_path,
                    AIPSPATH='/opt/astro/casa-data dummy dummy')
     proc = subprocess.Popen([TTCAL_EXEC, 'peel', ms, sources, '--beam', 'sine', '--maxiter', '50',
                              '--tolerance', '1e-4', '--minuvw', '10'], env=new_env,
