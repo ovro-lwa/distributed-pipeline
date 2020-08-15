@@ -23,11 +23,13 @@ def test_get_peak_around_source():
     assert yp == y_ans
 
 
-@pytest.mark.parametrize('timestamp, expected_subtract_source_count, extra_args_check', [
-    (datetime(2018, 3, 22, 2, 7, 0), 1, lambda extra_args: '-channelsout' not in extra_args),  # Crab only
-    (datetime(2018, 3, 22, 16, 30, 0), 1, lambda extra_args: '-channelsout' in extra_args),  # Sun only
-    (datetime(2018, 9, 22, 16, 30, 0), 2, lambda extra_args: '-channelsout' in extra_args),  # Crab and Sun
-    (datetime(2018, 9, 22, 2, 30, 0), 0, lambda extra_args: '-channelsout' not in extra_args),  # no Crab or Sun
+@pytest.mark.parametrize('timestamp, expected_subtract_source_count, more_args, extra_args_check', [
+    (datetime(2018, 3, 22, 2, 7, 0), 1, None, lambda extra_args: '-channelsout' not in extra_args),  # Crab only
+    (datetime(2018, 3, 22, 16, 30, 0), 1, None, lambda extra_args: '-channelsout' in extra_args),  # Sun only
+    (datetime(2018, 9, 22, 16, 30, 0), 2, None, lambda extra_args: '-channelsout' in extra_args),  # Crab and Sun
+    (datetime(2018, 9, 22, 2, 30, 0), 0, None, lambda extra_args: '-channelsout' not in extra_args),  # no Crab or Sun
+    (datetime(2018, 9, 22, 2, 30, 0), 0, ['-beep'],
+        lambda extra_args: '-channelsout' not in extra_args and '-beep' in extra_args),  # no Crab or Sun
 ])
 @patch('orca.utils.fitsutils.write_fits_mask_with_box_xy_coordindates')
 @patch('orca.transform.imaging.get_peak_around_source')
@@ -36,7 +38,8 @@ def test_get_peak_around_source():
 @patch('orca.wrapper.wsclean.wsclean')
 def test_make_residual_image_with_source_removed(wsclean, os_renames, make_dirty_image, get_peak_around_source,
                                                  write_fits_mask_with_box_xy_coordindates,
-                                                 timestamp, expected_subtract_source_count, extra_args_check):
+                                                 timestamp, expected_subtract_source_count, more_args,
+                                                 extra_args_check):
     # Set up mocked functions since they're initialized lazily
     wsclean.return_value = None
     os_renames.return_value = None
@@ -46,9 +49,14 @@ def test_make_residual_image_with_source_removed(wsclean, os_renames, make_dirty
     make_dirty_image.return_value = f'{path.dirname(__file__)}/../resources/2018-03-22T02:07:54-dirty.fits'
 
     # Actual run
-    imaging.make_residual_image_with_source_removed([], timestamp, output_dir='/tmp/',
-                                                    output_prefix='blah',
-                                                    tmp_dir='/tmp/')
+    if more_args:
+        imaging.make_residual_image_with_source_removed([], timestamp, output_dir='/tmp/',
+                                                        output_prefix='blah',
+                                                        tmp_dir='/tmp/')
+    else:
+        imaging.make_residual_image_with_source_removed([], timestamp, output_dir='/tmp/',
+                                                        output_prefix='blah',
+                                                        tmp_dir='/tmp/', more_args=more_args)
     # Verify
     if expected_subtract_source_count:
         assert len(write_fits_mask_with_box_xy_coordindates.call_args.kwargs['center_list']) == \

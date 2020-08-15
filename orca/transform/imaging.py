@@ -59,7 +59,7 @@ def make_movie_from_fits(fits_tuple: Tuple[str], output_dir: str, scale: float,
 def make_residual_image_with_source_removed(ms_list: List[str], timestamp: datetime, output_dir: str,
                                             output_prefix: str, tmp_dir: str,
                                             inner_tukey: Optional[int] = None, n_thread: int = 10,
-                                            more_args: List[str] = []) -> str:
+                                            more_args: Optional[List[str]] = None) -> str:
     """Make images with bright source(s) removed.
     Makes a dirty image. Remove the Sun and/or the Crab when they are up.
 
@@ -71,6 +71,7 @@ def make_residual_image_with_source_removed(ms_list: List[str], timestamp: datet
         tmp_dir: Temporary directory to hold wsclean re-ordered files.
         inner_tukey: Inner Tukey Parameter.
         n_thread: Number of threads for wsclean to use.
+        more_args: Extra parameters for imaging.
 
     Returns: Path to the output image (residing in output_dir).
 
@@ -81,7 +82,10 @@ def make_residual_image_with_source_removed(ms_list: List[str], timestamp: datet
     extra_args = ['-size', str(IMSIZE), str(IMSIZE), '-scale', str(IM_SCALE_DEGREE),
                   '-weight', 'briggs', '0',
                   '-no-update-model-required',
-                  '-j', str(n_thread), '-niter', '4000', '-tempdir', tmp_dir] + more_args
+                  '-j', str(n_thread), '-niter', '4000', '-tempdir', tmp_dir]
+    if more_args:
+        extra_args = extra_args + more_args
+
     taper_args = ['-taper-inner-tukey', str(inner_tukey)] if inner_tukey else []
     assert isinstance(dirty_image, str)
     im, header = fitsutils.read_image_fits(dirty_image)
