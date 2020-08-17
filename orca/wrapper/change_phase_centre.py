@@ -16,6 +16,8 @@ def change_phase_center(ms: str, center_dir: str) -> str:
         p.communicate()
     except subprocess.CalledProcessError as e:
         raise e
+    finally:
+        p.terminate()
     return ms
 
 
