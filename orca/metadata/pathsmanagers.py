@@ -1,10 +1,12 @@
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from os import path
-from typing import Optional, Union, Dict
+from typing import Optional, Union, Dict, List
 from collections import OrderedDict
 
 from orca.utils.datetimeutils import find_closest
 import copy
+
+SIDEREAL_DAY = timedelta(hours=23, minutes=56, seconds=4)
 
 
 class PathsManager(object):
@@ -139,3 +141,35 @@ class OfflinePathsManager(PathsManager):
                                                           if start_time < k < end_time)
         return new_paths_manager
 
+    def chunks_by_integration(self, chunk_size: int) -> List[List[datetime]]:
+        """
+        Chunk the datetime array by number of integrations such that each chunk contains data spanning equal or
+        less than the chunk size. Note that the last chunk may be smaller, if the total number of
+        integrations is not divisible by the chunk size.
+
+        Args:
+            chunk_size: number of integrations per chunk
+
+        Returns: A list whose elements are the ordered chunks, which are each a list of ordered timestamps.
+
+        """
+        datetimes = list(self.utc_times_mapping.keys())
+        return [datetimes[i:i+chunk_size] for i in range(0, len(datetimes), chunk_size)]
+
+    def chunks_by_time(self, chunk_time: timedelta) -> List[List[datetime]]:
+        """
+        Chunk the datetime array by time such that each chunk contains data spanning equal or less than chunk_time
+        amount of time. All of the data will be chunked. Note that
+
+        1) The last chunk may be smaller, if the span of the data is not divisible by the chunk time
+
+        2) Chunking is based on time and not by the number of integrations. Therefore, some chunks might have more or
+        fewer integrations than some other chunks, if the chunk time is not divisible by the integration time.
+
+        Args:
+            chunk_time: a timedelta object for the chunk time.
+
+        Returns: A list whose elements are the ordered chunks, which are each a list of ordered timestamps.
+
+        """
+        raise NotImplementedError

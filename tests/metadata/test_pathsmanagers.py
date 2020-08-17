@@ -3,6 +3,7 @@ from orca.metadata.pathsmanagers import OfflinePathsManager
 from os import path
 from datetime import datetime, date
 
+import itertools
 
 def test_read_utc_times():
     pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt', '.')
@@ -63,3 +64,14 @@ def test_get_flag_npy_flag_multiple_npy():
     pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt',
                              flag_npy_paths=npy)
     assert pm.get_flag_npy_path(date(2018, 3, 2)) == '/tmp/something.npy'
+
+
+def test_chunks_by_integration():
+    pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt')
+    for n in range(1, len(pm.utc_times_mapping.keys())):
+        chunks = pm.chunks_by_integration(n)
+        for c in chunks[:-1]:
+            assert len(c) == n
+        assert len(chunks[-1]) <= n
+        for ans, expected in zip(itertools.chain.from_iterable(chunks), list(pm.utc_times_mapping.keys())):
+            assert ans == expected
