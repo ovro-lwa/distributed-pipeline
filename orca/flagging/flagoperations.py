@@ -34,7 +34,7 @@ def merge_group_flags(ms_list: List[str]) -> List[str]:
 
 
 def write_to_flag_column(ms: str, flag_npy: str) -> str:
-    with pt.table(ms, readonly=False) as t:
+    with pt.table(ms, readonly=False, ack=False) as t:
         flagcol = np.load(flag_npy)
         assert flagcol.shape == t.getcol('FLAG').shape, 'Flag file and measurement set have different shapes'
         t.putcol('FLAG', flagcol | t.getcol('FLAG'))
@@ -42,7 +42,7 @@ def write_to_flag_column(ms: str, flag_npy: str) -> str:
 
 
 def save_to_flag_npy(ms: str, flag_npy: str) -> str:
-    with pt.table(ms) as t:
+    with pt.table(ms, ack=False) as t:
         flagcol = t.getcol('FLAG')
     np.save(flag_npy, flagcol)
     return flag_npy
@@ -53,7 +53,7 @@ def flag_bls(msfile: str, blfile: str) -> str:
     Input: msfile, .bl file
     Applies baseline flags to FLAG column.
     """
-    with pt.table(msfile, readonly=False) as t:
+    with pt.table(msfile, readonly=False, ack=False) as t:
         flagcol = t.getcol('FLAG')  # flagcol.shape = (N*(N-1)/2 + N)*Nspw*Nints,Nchans,Ncorrs
         Nants = t.getcol('ANTENNA1')[-1] + 1
         Nbls = int((Nants*(Nants-1)/2.) + Nants)
