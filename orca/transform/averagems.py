@@ -24,7 +24,7 @@ def average_ms(ms_list: List[str], ref_ms_index: int, out_ms: str, column: str, 
     count = float(len(ms_list))
     tables.tablecopy(ms_list[ref_ms_index], out_ms)
     log.info('Reading reference measurement set.')
-    with tables.table(out_ms, readonly=False) as out_table:
+    with tables.table(out_ms, readonly=False, ack=False) as out_table:
         averaged_data = out_table.getcol(column) / count
         for i, ms in enumerate(ms_list):
             if i != ref_ms_index:

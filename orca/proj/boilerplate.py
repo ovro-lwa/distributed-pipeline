@@ -64,8 +64,8 @@ def apply_a_priori_flags(ms_file: str, flag_npy_path: str) -> str:
 @app.task
 def apply_ant_flag(ms_file: str, ants: list) -> str:
     from casacore.tables import table, taql
-    t = table(ms_file)
-    taql(f"update $t set FLAG=True where any(ANTENNA1==$ants || ANTENNA2==$ants)")
+    with table(ms_file, ack=False) as t:
+        taql(f"update $t set FLAG=True where any(ANTENNA1==$ants || ANTENNA2==$ants)")
     return ms_file
 
 

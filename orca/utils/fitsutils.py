@@ -2,7 +2,7 @@
 """
 from astropy.io import fits
 import numpy as np
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 
 
 def read_image_fits(fn: str) -> Tuple[np.array, fits.Header]:
@@ -42,6 +42,17 @@ def write_fits_mask_with_box_xy_coordindates(output_fits_path: str, imsize: int,
         image[(center[0] - width//2):(center[0] + width//2 + 1), (center[1] - width//2):(center[1] + width//2 + 1)] = \
             np.ones(shape=(width, width))
         write_image_fits(output_fits_path, get_sample_header(), image.T, overwrite=True)
+    return output_fits_path
+
+
+def co_add(fits_list, output_fits_path: str, header_index: Optional[int] = None) -> str:
+    im, header = read_image_fits(fits_list[header_index if header_index else len(fits_list) // 2])
+    averaged_im = np.zeros(shape=im.shape)
+    n = len(fits_list)
+    for fn in fits_list:
+        im, _ = read_image_fits(fn)
+        averaged_im += (im / n)
+    write_image_fits(output_fits_path, header, averaged_im)
     return output_fits_path
 
 

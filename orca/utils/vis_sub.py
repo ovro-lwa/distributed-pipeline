@@ -7,7 +7,7 @@ import numpy as np
 
 
 def diff(early_vis, late_vis, out_vis):
-    late_vis_table = table(late_vis)
+    late_vis_table = table(late_vis, ack=False)
     diff_table = tablecopy(early_vis, out_vis)
     # Validating that the two vis sets have the same antenna pairs for each row
     assert np.equal(late_vis_table.getcol('ANTENNA1'), diff_table.getcol('ANTENNA1')).all(), \
@@ -16,7 +16,7 @@ def diff(early_vis, late_vis, out_vis):
         'The visibility files are ordered differently'
     diff_vis = late_vis_table.getcol('CORRECTED_DATA') - diff_table.getcol('CORRECTED_DATA')
     diff_table.close()
-    diff_table = table(out_vis, readonly=False)
+    diff_table = table(out_vis, readonly=False, ack=False)
     diff_table.putcol('DATA', diff_vis)
     diff_table.putcol('CORRECTED_DATA', diff_vis)
     late_vis_table.close()
