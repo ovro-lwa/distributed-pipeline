@@ -27,7 +27,8 @@ def dada2ms(dada_file: str, out_ms: str, gaintable: str = None, addspw: bool = F
     Returns: Path to the output ms. The same as out_ms
 
     """
-    os.makedirs(out_ms)
+    if not addspw:
+        os.makedirs(out_ms, exist_ok=False)
 
     if gaintable and (not addspw):
         proc = subprocess.Popen(
