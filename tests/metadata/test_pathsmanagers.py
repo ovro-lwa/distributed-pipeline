@@ -57,6 +57,13 @@ def test_get_data_product_path_no_suffix():
     './images/2019-10-28/hh=23/2019-10-28T23:04:44/00_2019-10-28T23:04:44'
 
 
+def test_get_ms_parent_path():
+    pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt',
+                             working_dir='/tmp')
+    assert pm.get_ms_parent_path(datetime(2019, 10, 28, 23, 4, 44)) == \
+        '/tmp/msfiles/2019-10-28/hh=23/2019-10-28T23:04:44'
+
+
 def test_get_flag_npy_flag_multiple_npy():
     npy = {date(2018, 3, 2): '/tmp/something.npy',
            date(2018, 3, 3): '/tmp/something_else.npy'
