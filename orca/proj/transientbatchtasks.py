@@ -118,14 +118,14 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
         os.makedirs(tmp1)
         start_chan = str(51 - narrow_chan_width // 2)
         end_chan = str(51 + narrow_chan_width // 2 + 1)
-        narrow_snapshots1 = _parallel_wsclean_snapshot_sources_removed(small_pool,
-                                                                       copied_ms_parent_list, tmp1,
-                                                                       snapshot_narrow_dir, ['06'],
-                                                                       more_args=['-channelrange', start_chan, end_chan])
-        narrow_snapshots2 = _parallel_wsclean_snapshot_sources_removed(small_pool,
-                                                                       copied_ms_parent_day2_list, tmp1,
-                                                                       snapshot_narrow_dir, ['06'],
-                                                                       more_args=['-channelrange', start_chan, end_chan])
+        narrow_snapshots1, _ = _parallel_wsclean_snapshot_sources_removed(small_pool,
+                                                                          copied_ms_parent_list, tmp1,
+                                                                          snapshot_narrow_dir, ['06'],
+                                                                          more_args=['-channelrange', start_chan, end_chan])
+        narrow_snapshots2, _ = _parallel_wsclean_snapshot_sources_removed(small_pool,
+                                                                          copied_ms_parent_day2_list, tmp1,
+                                                                          snapshot_narrow_dir, ['06'],
+                                                                          more_args=['-channelrange', start_chan, end_chan])
     finally:
         small_pool.close()
         large_pool.close()
