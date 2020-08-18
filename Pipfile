@@ -15,7 +15,7 @@ ipykernel = "*"
 python-casacore = "*"
 matplotlib = '*'
 scikit-image = '*'
-celery = '~=4.3'
+celery = '==4.4.6'
 tornado = '*'
 pyyaml = "*"
 fabric = "*"
