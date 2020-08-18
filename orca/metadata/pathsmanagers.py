@@ -89,6 +89,18 @@ class OfflinePathsManager(PathsManager):
         """
         return self.get_data_product_path(timestamp, spw, product='msfiles', file_suffix='.ms')
 
+    def get_ms_parent_path(self, timestamp: datetime) -> str:
+        """Generate measurement set parent paths that look like
+        /path/to/working_dir/msfiles/2018-03-02/hh=02/2018-03-02T02:02:02/.
+
+        Args:
+            timestamp: Timestamp of the ms.
+
+        Returns:
+            Path to the measurement set.
+        """
+        return path.dirname(self.get_ms_path(timestamp, '00'))
+
     def get_data_product_path(self, timestamp: datetime, spw: str, product: str, file_suffix: str) -> str:
         """Generate path for generic data product.
         Looks like /path/to/working_dir/<product>/2018-03-02/hh=02/00_2018-03-02T02:02:02<file_suffix>.
