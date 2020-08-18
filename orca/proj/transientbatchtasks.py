@@ -1,3 +1,8 @@
+"""An experimental imaging module that uses the scratch disk.
+
+This might be retired later, but is useful in the meantime for benchmarking purposes. In general, tasks should be as
+small as possible, but if using local scratch speeds things up, then it might be necessary to have bigger tasks.
+"""
 from .celery import app
 from datetime import datetime
 from typing import List, Optional, Tuple
@@ -7,7 +12,6 @@ from itertools import chain
 import os
 import shutil
 from glob import glob
-import subprocess
 import logging
 import uuid
 from billiard.pool import Pool
@@ -23,20 +27,37 @@ log = logging.getLogger(__name__)
 @app.task
 def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str],
                         ms_parent_after_end: str, ms_parent_after_end_day2: str,
-                        snapshot_image_dir: str, snapshot_narrow_dir: str, snapshot_outdir: str,
+                        snapshot_image_dir: str, snapshot_narrow_dir: str, snapshot_diff_outdir: str,
                         scratch_dir: str, narrow_chan_width: int = 30,
-                        spw_list: Optional[List[str]] = None):
+                        spw_list: Optional[List[str]] = None) -> Tuple[List[str], List[str], List[str], List[str]]:
     """
-    Make subsequently SUBTEACTED images, and bright sources removed snapshot images that are ready for
-    sidereal subtraction.
+    Make snapshot images for two chunks of data separated by 1 sidereal day that are sidereal subtraction ready.
+    Also makes subsequent frame subtraction images.
 
-    1. Copy day1 and day2
-    2. chgcentre everything
+    1. Copy day1 and day2 measurement sets to scratch
+    2. chgcentre everything to a common phase center
     3. merge flags in everything
-    4. dirty images for snapshot and subtract -> output only subtracted image
-    5. gain corr from two sidereal days.
-    6. Make each snapshot with source removed
+    4. gain corr from two sidereal days.
+    6. Make each snapshot with source removed.
     7. Repeat but only for narrow-band
+
+    Args:
+        ms_parent_list: list of parent directories containing all the measurement sets (by spw) for single integrations
+            for day 1 (not modified).
+        ms_parent_day2_list: list of parent directories containing all the measurement sets (by spw) for single
+            for single integrations for day 2 (not modified).
+        ms_parent_after_end: parent directory containing all the measurement sets (by spw) for the single integration
+            after the end of the ms_parent_list for day 1. For image subtraction purpose.
+        ms_parent_after_end_day2: parent directory containing all the measurement sets (by spw) for the single integration
+            after the end of the ms_parent_list for day 2.
+        snapshot_image_dir: Output base directory for fullband snapshot image
+        snapshot_narrow_dir: Output base directory for narrow-band snapshot image
+        snapshot_diff_outdir: Output base directory for fullband subsequent diff images.
+        scratch_dir: Scratch directory to put the copied ms and other intermediate data products.
+        narrow_chan_width: frequency width in number of channels for the narrow-band image around 60 MHz.
+        spw_list: list of spectral windows.
+
+    Returns:
 
     """
     assert len(ms_parent_list) == len(ms_parent_day2_list)
@@ -81,8 +102,8 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
                                                                              temp, snapshot_image_dir, spw_list)
 
         for i in range(len(snapshots1[:-1])):
-            outdir1 = f'{snapshot_outdir}/{timestamps1[-1].date()}/hh={timestamps1[-1].hour:02d}'
-            outdir2 = f'{snapshot_outdir}/{timestamps2[-1].date()}/hh={timestamps2[-1].hour:02d}'
+            outdir1 = f'{snapshot_diff_outdir}/{timestamps1[-1].date()}/hh={timestamps1[-1].hour:02d}'
+            outdir2 = f'{snapshot_diff_outdir}/{timestamps2[-1].date()}/hh={timestamps2[-1].hour:02d}'
             os.makedirs(outdir1, exist_ok=True)
             os.makedirs(outdir2, exist_ok=True)
             image_sub.image_sub(snapshots1[i], snapshots1[i], outdir1)
@@ -113,11 +134,6 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
         shutil.rmtree(temp)
 
     return snapshots1, snapshots2, narrow_snapshots1, narrow_snapshots2
-
-
-@app.task
-def sidereal_subtract_and_coadd():
-    raise NotImplementedError
 
 
 def _parallel_chgcentre(pool: Pool, ms_parent_list: List[str], phase_center: str):
