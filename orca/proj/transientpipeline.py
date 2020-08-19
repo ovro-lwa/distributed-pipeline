@@ -44,7 +44,7 @@ def calibration_pipeline_redo():
 
 def imaging_steps():
     pm = pm_whole.time_filter(start_time=datetime(2018, 3, 22, 11, 56, 9),
-                              end_time=datetime(2018, 3, 22, 12, 57, 15))
+                              end_time=datetime(2018, 3, 22, 12, 57, 27))
 
     # One giant imaging task?
     timestamp_chunks = pm.chunks_by_integration(47)
@@ -61,7 +61,7 @@ def imaging_steps():
                                  f'{pm.working_dir}/snapshot',
                                  f'{pm.working_dir}/narrow',
                                  f'{pm.working_dir}/subsequent_diff',
-                                 '/lustre/yuping/scratch/')
+                                 '/pipedata/workdir/yuping/')
            for i, (c1, c2) in enumerate(zip(ms_parent_chunks[:-1], ms_parent_chunks_day2[:-1]))
            ])()
     make_image_products.delay(ms_parent_chunks[-1][:-1], ms_parent_chunks_day2[-1][:-1],
@@ -69,7 +69,7 @@ def imaging_steps():
                               f'{pm.working_dir}/snapshot',
                               f'{pm.working_dir}/narrow',
                               f'{pm.working_dir}/subsequent_diff',
-                              '/lustre/yuping/scratch')
+                              '/pipedata/workdir/yuping/')
 
 
 def subtraction_step():

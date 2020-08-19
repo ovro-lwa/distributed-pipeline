@@ -76,7 +76,7 @@ def make_residual_image_with_source_removed(ms_list: List[str], timestamp: datet
     Returns: Path to the output image (residing in output_dir).
 
     """
-    log.info(f'ms_list is {ms_list}')
+    log.info(f'Imaging ms_list with length {len(ms_list)}.')
     dirty_image = make_dirty_image(ms_list, output_dir, output_prefix, inner_tukey=inner_tukey)
 
     extra_args = ['-size', str(IMSIZE), str(IMSIZE), '-scale', str(IM_SCALE_DEGREE),
@@ -99,12 +99,14 @@ def make_residual_image_with_source_removed(ms_list: List[str], timestamp: datet
     if coordutils.is_visible(coordutils.TAU_A, timestamp):
         fits_mask_center_list.append(get_peak_around_source(im_T, coordutils.TAU_A, wcs.WCS(header)))
         fits_mask_width_list.append(3)
+        log.info('Removing the Crab.')
 
     sun_icrs = coordutils.sun_icrs(timestamp)
     if coordutils.is_visible(sun_icrs, timestamp):
         fits_mask_center_list.append(get_peak_around_source(im_T, sun_icrs, wcs.WCS(header)))
         fits_mask_width_list.append(81)
         channelsout = SUN_CHANNELS_OUT
+        log.info(f'Removing the Sun by splitting in {channelsout} bands.')
 
     if fits_mask_width_list:
 
@@ -117,6 +119,7 @@ def make_residual_image_with_source_removed(ms_list: List[str], timestamp: datet
                              '-threshold', str(CLEAN_THRESHOLD_JY),
                              '-mgain', str(CLEAN_MGAIN)] +
                             taper_args)
+            log.info('Renaming the MFS-residual fits file to image after source removal.')
             os.renames(f'{output_dir}/{output_prefix}-MFS-residual.fits', f'{output_dir}/{output_prefix}-image.fits')
         else:
             wsclean.wsclean(ms_list, output_dir, output_prefix,
@@ -125,9 +128,10 @@ def make_residual_image_with_source_removed(ms_list: List[str], timestamp: datet
                                             str(CLEAN_THRESHOLD_JY_CRAB),
                                             '-mgain', str(CLEAN_MGAIN)] +
                                            taper_args)
+            log.info('Renaming the residual fits file to image after source removal.')
             os.renames(f'{output_dir}/{output_prefix}-residual.fits', f'{output_dir}/{output_prefix}-image.fits')
     else:
-        log.info(f'No sources to remove for {ms_list}')
+        log.info(f'No sources to remove.')
     return f'{output_dir}/{output_prefix}-image.fits'
 
 

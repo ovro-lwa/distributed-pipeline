@@ -87,7 +87,7 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
         phase_center = change_phase_centre.get_phase_center(middle_ms)
 
         log.info(f'Change chunk phase center to {phase_center}.')
-        _parallel_chgcentre(large_pool, copied_ms_parent_list + copied_ms_parent_day2_list, phase_center)
+        _parallel_chgcentre(small_pool, copied_ms_parent_list + copied_ms_parent_day2_list, phase_center)
 
         # gain correction
         log.info('Start pair-wise gain correction.')
@@ -102,12 +102,12 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
                                                                              temp, snapshot_image_dir, spw_list)
 
         for i in range(len(snapshots1[:-1])):
-            outdir1 = f'{snapshot_diff_outdir}/{timestamps1[-1].date()}/hh={timestamps1[-1].hour:02d}'
-            outdir2 = f'{snapshot_diff_outdir}/{timestamps2[-1].date()}/hh={timestamps2[-1].hour:02d}'
+            outdir1 = f'{snapshot_diff_outdir}/{timestamps1[i].date()}/hh={timestamps1[i].hour:02d}'
+            outdir2 = f'{snapshot_diff_outdir}/{timestamps2[i].date()}/hh={timestamps2[i].hour:02d}'
             os.makedirs(outdir1, exist_ok=True)
             os.makedirs(outdir2, exist_ok=True)
-            image_sub.image_sub(snapshots1[i], snapshots1[i], outdir1)
-            image_sub.image_sub(snapshots2[i], snapshots2[i], outdir2)
+            image_sub.image_sub(snapshots1[i], snapshots1[i+1], outdir1)
+            image_sub.image_sub(snapshots2[i], snapshots2[i+1], outdir2)
         os.remove(snapshots1[-1])
         os.remove(snapshots2[-1])
         snapshots1 = snapshots1[:-1]
