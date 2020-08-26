@@ -66,13 +66,13 @@ def flag_bls(msfile: str, blfile: str) -> str:
         flagmat = np.zeros((Nants,Nants,Nspw,Nchans,Ncorrs))
         tiuinds = np.triu_indices(Nants)
         # put the FLAG column into the correlation matrix
-        flagmat[tiuinds] = flagcol.reshape(Nbls,Nspw,Nchans,Ncorrs)
+        flagmat[tiuinds] = flagcol.reshape(Nspw,Nbls,Nchans,Ncorrs).transpose(1,0,2,3)
         # read in baseline flags
         ant1,ant2 = np.genfromtxt(blfile,delimiter='&',unpack=True,dtype=int)
         # flag the correlation matrix
         flagmat[(ant1,ant2)] = 1
         # reshape correlation matrix into FLAG column
-        newflagcol = flagmat[tiuinds].reshape(Nbls*Nspw,Nchans,Ncorrs)
+        newflagcol = flagmat[tiuinds].transpose(1,0,2,3).reshape(Nbls*Nspw,Nchans,Ncorrs)
         #
         t.putcol('FLAG',newflagcol)
     return msfile
