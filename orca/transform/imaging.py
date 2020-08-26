@@ -76,7 +76,7 @@ def make_residual_image_with_source_removed(ms_list: List[str], timestamp: datet
     Returns: Path to the output image (residing in output_dir).
 
     """
-    log.info(f'Imaging ms_list with length {len(ms_list)}.')
+    log.info(f'Imaging {ms_list[0]}... with length {len(ms_list)}.')
     dirty_image = make_dirty_image(ms_list, output_dir, output_prefix, inner_tukey=inner_tukey)
 
     extra_args = ['-size', str(IMSIZE), str(IMSIZE), '-scale', str(IM_SCALE_DEGREE),
