@@ -82,3 +82,10 @@ def test_chunks_by_integration():
         assert len(chunks[-1]) <= n
         for ans, expected in zip(itertools.chain.from_iterable(chunks), list(pm.utc_times_mapping.keys())):
             assert ans == expected
+
+
+def test_chunks_by_integration_multiple():
+    pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt')
+    chunks = pm.chunks_by_integration(2)
+    for l in chunks:
+        print(l)
