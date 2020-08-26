@@ -50,11 +50,11 @@ def test_make_residual_image_with_source_removed(wsclean, os_renames, make_dirty
 
     # Actual run
     if more_args:
-        imaging.make_residual_image_with_source_removed([], timestamp, output_dir='/tmp/',
+        imaging.make_residual_image_with_source_removed(['beep'], timestamp, output_dir='/tmp/',
                                                         output_prefix='blah',
                                                         tmp_dir='/tmp/')
     else:
-        imaging.make_residual_image_with_source_removed([], timestamp, output_dir='/tmp/',
+        imaging.make_residual_image_with_source_removed(['beep'], timestamp, output_dir='/tmp/',
                                                         output_prefix='blah',
                                                         tmp_dir='/tmp/', more_args=more_args)
     # Verify
