@@ -18,7 +18,7 @@ class PathsManager(object):
         utc_times_mapping: An ordered dictionary mapping datetime objects to dada files.
     """
     def __init__(self, utc_times_txt_path: str, dadafile_dir: Optional[str]):
-        self.dadafile_dir = dadafile_dir
+        self._dadafile_dir = dadafile_dir
         self.utc_times_txt_path = utc_times_txt_path
         # do the mapping thing
         self.utc_times_mapping = OrderedDict()
@@ -26,6 +26,13 @@ class PathsManager(object):
             for line in f:
                 l = line.split()
                 self.utc_times_mapping[datetime.strptime(f'{l[0]}T{l[1]}', "%Y-%m-%dT%H:%M:%S")] = l[2].rstrip('\n')
+
+    @property
+    def dadafile_dir(self) -> str:
+        if self._dadafile_dir:
+            return self._dadafile_dir
+        else:
+            raise ValueError('dadafile_dir not set.')
 
     def get_dada_path(self, spw: str, timestamp: datetime):
         return f'{self.dadafile_dir}/{spw}/{self.utc_times_mapping[timestamp]}'
@@ -46,10 +53,23 @@ class OfflinePathsManager(PathsManager):
             if d and not path.exists(d):
                 raise FileNotFoundError(f"File not found or path does not exist: {d}.")
         super().__init__(utc_times_txt_path, dadafile_dir)
-        self.working_dir: Optional[str] = working_dir
-        self.gaintable_dir: Optional[str] = gaintable_dir
+        self._working_dir: Optional[str] = working_dir
+        self._gaintable_dir: Optional[str] = gaintable_dir
+        self._flag_npy_paths: Union[str, Dict[date, str], None] = flag_npy_paths
 
-        self.flag_npy_paths: Union[str, Dict[date, str], None] = flag_npy_paths
+    @property
+    def working_dir(self) -> str:
+        if self._working_dir:
+            return self._working_dir
+        else:
+            raise ValueError('working_dir not set.')
+
+    @property
+    def gaintable_dir(self) -> str:
+        if self._gaintable_dir:
+            return self._gaintable_dir
+        else:
+            raise ValueError('gaintable_dir not set.')
 
     def get_bcal_path(self,  bandpass_date: date, spw: str) -> str:
         """Return bandpass calibration path in /gaintable/path/2018-03-02/00.bcal.
@@ -129,13 +149,13 @@ class OfflinePathsManager(PathsManager):
             If only one flag_npy was supplied, the flag_npy; if a Dict[datetime, str] is supplied, the closest one in
             time to the supplied timestamp.
         """
-        assert self.flag_npy_paths is not None
-        if isinstance(self.flag_npy_paths, str):
-            return self.flag_npy_paths
-        elif isinstance(self.flag_npy_paths, dict):
-            return self.flag_npy_paths[find_closest(timestamp, self.flag_npy_paths.keys())]
+        assert self._flag_npy_paths is not None
+        if isinstance(self._flag_npy_paths, str):
+            return self._flag_npy_paths
+        elif isinstance(self._flag_npy_paths, dict):
+            return self._flag_npy_paths[find_closest(timestamp, self._flag_npy_paths.keys())]
         else:
-            raise ValueError(f'flag_npy_paths can only be str or dict. It is type {type(self.flag_npy_paths)}.')
+            raise ValueError(f'flag_npy_paths can only be str or dict. It is type {type(self._flag_npy_paths)}.')
 
     def time_filter(self, start_time: datetime, end_time: datetime) -> 'OfflinePathsManager':
         """
