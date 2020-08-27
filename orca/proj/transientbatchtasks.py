@@ -4,6 +4,7 @@ This might be retired later, but is useful in the meantime for benchmarking purp
 small as possible, but if using local scratch speeds things up, then it might be necessary to have bigger tasks.
 """
 from .celery import app
+from celery.exceptions import WorkerLostError
 from datetime import datetime
 from typing import List, Optional, Tuple
 from functools import partial
@@ -24,7 +25,7 @@ from orca.flagging.flagoperations import merge_group_flags
 log = logging.getLogger(__name__)
 
 
-@app.task
+@app.task(autoretry_for=(WorkerLostError,), retry_kwargs={'max_retries': 1, 'countdown': 2})
 def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str],
                         ms_parent_after_end: str, ms_parent_after_end_day2: str,
                         snapshot_image_dir: str, snapshot_narrow_dir: str, snapshot_diff_outdir: str,
