@@ -73,13 +73,18 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
         middle_ms = glob(f'{ms_parent_list[len(ms_parent_list) // 2]}/??_*.ms')[0]
         phase_center = change_phase_centre.get_phase_center(middle_ms)
 
-        log.info(f'Start copying and chgcentre for size {len(ms_parent_list)} starting at {ms_parent_list[0]}.')
-        copied_ms_parent_list = _parallel_copy_and_chgcentre(large_pool,
-                                                             ms_parent_list + [ms_parent_after_end],
-                                                             temp, phase_center, spw_list)
-        copied_ms_parent_day2_list = _parallel_copy_and_chgcentre(large_pool,
-                                                                  ms_parent_day2_list + [ms_parent_after_end_day2],
-                                                                  temp, phase_center, spw_list)
+        log.info(f'Start copying and chgcentre and gainscale for size {len(ms_parent_list)} '
+                 f'starting at {ms_parent_list[0]}.')
+        copied_ms_parent_list = _parallel_copy_chgcentre_gainscale(
+            large_pool,
+            ms_parent_list + [ms_parent_after_end],
+            temp, phase_center, spw_list,
+            gainscale_target_parents=ms_parent_day2_list + [ms_parent_after_end_day2])
+        log.info(f'Start copying and chgcentre for size {len(ms_parent_day2_list)} '
+                 f'starting at {ms_parent_day2_list[0]}.')
+        copied_ms_parent_day2_list = _parallel_copy_chgcentre_gainscale(large_pool,
+                                                                        ms_parent_day2_list + [ms_parent_after_end_day2],
+                                                                        temp, phase_center, spw_list)
         # Just so I don't overwrite the original files.
         ms_parent_list, ms_parent_day2_list, ms_parent_after_end, ms_parent_after_end_day2 = [], [], '', ''
 
@@ -91,10 +96,6 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
 
         log.info('Merging flags.')
         _parallel_merge_flags(large_pool, copied_ms_parent_list + copied_ms_parent_day2_list, spw_list)
-
-        # gain correction
-        log.info('Start pair-wise gain correction.')
-        _parallel_gain_correction(large_pool, copied_ms_parent_day2_list, copied_ms_parent_list, spw_list)
 
         log.info('Start imaging.')
         snapshots1, timestamps1 = _parallel_wsclean_snapshot_sources_removed(small_pool,
@@ -174,8 +175,23 @@ def _parallel_copy(pool, directories: List[str], dest_directory: str) -> List[st
     return dests
 
 
-def _parallel_copy_and_chgcentre(pool, directories: List[str], dest_directory: str,
-                                 phase_center: str, spw_list: List[str]) -> List[str]:
+def _parallel_copy_chgcentre_gainscale(pool, directories: List[str], dest_directory: str,
+                                       phase_center: str, spw_list: List[str],
+                                       gainscale_target_parents: Optional[List[str]] = None) -> List[str]:
+    """
+    COllapse a bunch of IO/compute heavy jobs so that they can be done while the data are still in the OS cache.
+    Args:
+        pool:
+        directories:
+        dest_directory:
+        phase_center:
+        spw_list:
+        gainscale_target_parents: If not None. do gainscale as well. The measurement sets in this argument will be
+            read. The copied measurement sets will be altered.
+
+    Returns:
+
+    """
     timestamps = [os.path.basename(d) for d in directories]
     dests = [f'{dest_directory}/{os.path.basename(d)}' for d in directories]
     for i, t in enumerate(timestamps):
@@ -185,6 +201,14 @@ def _parallel_copy_and_chgcentre(pool, directories: List[str], dest_directory: s
         ))
         pool.starmap(change_phase_centre.change_phase_center,
                      ((f'{dests[i]}/{s}_{t}.ms', phase_center) for s in spw_list))
+        if gainscale_target_parents:
+            target_parent = gainscale_target_parents[i]
+            # Do gain scale: FIRST ARGUMENT ARE THE MS TO SCALE
+            pool.starmap(gainscaling.correct_scaling,
+                         ((f'{dests[i]}/{s}_{t}.ms',
+                           f'{target_parent}/{s}_{os.path.basename(target_parent)}.ms')
+                          for s in spw_list
+                          ))
     return dests
 
 
