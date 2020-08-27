@@ -18,8 +18,8 @@ def auto_corr_data_and_flag(ms: str, data_column: str) -> Tuple[np.ndarray, np.n
     return data, flag
 
 
-def calculate_gain_scale(baseline_ms: str, target_ms: str, data_column: str = 'CORRECTED_DATA'):
-    baseline_data, baseline_flag = auto_corr_data_and_flag(baseline_ms, data_column)
+def calculate_gain_scale(to_scale_ms: str, target_ms: str, data_column: str = 'CORRECTED_DATA'):
+    baseline_data, baseline_flag = auto_corr_data_and_flag(to_scale_ms, data_column)
     target_data, target_flag = auto_corr_data_and_flag(target_ms, data_column)
     quotient = np.sqrt(baseline_data/target_data)
     return np.where(np.logical_or(baseline_flag, target_flag), 1., quotient)
@@ -53,19 +53,20 @@ def apply_gain_scale_in_place(data: np.ndarray, scale_spectrum: np.ndarray) -> N
              scale_spectrum[upper_triangle_matrix_indices[1], :, np.newaxis, :]).reshape(data.shape)
 
 
-def correct_scaling(baseline_ms: str, target_ms: str, data_column: str = 'CORRECTED_DATA'):
+def correct_scaling(to_scale_ms: str, target_ms: str, data_column: str = 'CORRECTED_DATA'):
     """ Correct for per-antenna per-pol per-channel scaling between two measurement sets.
     Scales data in target_ms such that the autocorrelation for baseline_ms and target_ms are the same.
 
     Args:
-        baseline_ms: Measurement set to scale to
+        to_scale_ms: Measurement set to scale to
         target_ms: Measurement set that this function modifies so that the autocorr is the same as baseline_ms
         data_column: The data column to apply this operation to.
 
     Returns:
 
     """
-    scale_spectrum = calculate_gain_scale(baseline_ms, target_ms, data_column)
+    log.info(f'Applying gainscaling change to {to_scale_ms}.')
+    scale_spectrum = calculate_gain_scale(to_scale_ms, target_ms, data_column)
     with table(target_ms, readonly=False, ack=False) as t:
         data = t.getcol(data_column)
         apply_gain_scale_in_place(data, scale_spectrum[:, :, (0, 3)])
