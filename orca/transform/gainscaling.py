@@ -5,6 +5,10 @@ from typing import Tuple
 import numpy as np
 from casacore.tables import table
 
+import logging
+
+log = logging.getLogger(__name__)
+
 
 def auto_corr_data_and_flag(ms: str, data_column: str) -> Tuple[np.ndarray, np.ndarray]:
     with table(ms) as t:
@@ -20,7 +24,7 @@ def calculate_gain_scale(baseline_ms: str, target_ms: str, data_column: str = 'C
     return np.sqrt(np.where(baseline_flag, np.nan, baseline_data)/np.where(target_flag, np.nan, target_data))
 
 
-def apply_gain_scale_in_place(data: np.ndarray, scale_spectrum: np.ndarray) -> np.ndarray:
+def apply_gain_scale_in_place(data: np.ndarray, scale_spectrum: np.ndarray) -> None:
     """ Apply single pol scaling factor per antenna to cross-correlated data.
     This is similar to applycal in CASA. It multiples a cross-correlation by the scaling factor that corresponds to
     the two antennas (each of which has 2 polarizations) involved.
@@ -46,7 +50,6 @@ def apply_gain_scale_in_place(data: np.ndarray, scale_spectrum: np.ndarray) -> n
     # This computes the outer product along the last axis
     data *= (scale_spectrum[upper_triangle_matrix_indices[0], :, :, np.newaxis] *
              scale_spectrum[upper_triangle_matrix_indices[1], :, np.newaxis, :]).reshape(data.shape)
-    return data
 
 
 def correct_scaling(baseline_ms: str, target_ms: str, data_column: str = 'CORRECTED_DATA'):
@@ -62,6 +65,7 @@ def correct_scaling(baseline_ms: str, target_ms: str, data_column: str = 'CORREC
 
     """
     scale_spectrum = calculate_gain_scale(baseline_ms, target_ms, data_column)
-    with table(target_ms, readonly=False) as t:
-        data = apply_gain_scale_in_place(t.getcol(data_column), scale_spectrum[:, :, (0, 3)])
+    with table(target_ms, readonly=False, ack=False) as t:
+        data = t.getcol(data_column)
+        apply_gain_scale_in_place(data, scale_spectrum[:, :, (0, 3)])
         t.putcol(data_column, data)

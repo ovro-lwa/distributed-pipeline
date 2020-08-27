@@ -94,7 +94,7 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
 
         # gain correction
         log.info('Start pair-wise gain correction.')
-        _parallel_gain_correction(large_pool, copied_ms_parent_day2_list, ms_parent_list, spw_list)
+        _parallel_gain_correction(large_pool, copied_ms_parent_day2_list, copied_ms_parent_list, spw_list)
 
         log.info('Start imaging.')
         snapshots1, timestamps1 = _parallel_wsclean_snapshot_sources_removed(small_pool,
@@ -189,6 +189,7 @@ def _parallel_copy_and_chgcentre(pool, directories: List[str], dest_directory: s
 
 
 def _parallel_gain_correction(pool, baseline_parents, target_parents, spw_list):
+    log.info(f'Correcting gain scaling for {len(baseline_parents)} pairs of ms starting at {baseline_parents[0]}.')
     pool.starmap(gainscaling.correct_scaling,
                  ((f'{baseline_parent}/{spw}_{os.path.basename(baseline_parent)}.ms',
                    f'{target_parent}/{spw}_{os.path.basename(target_parent)}.ms') for spw in spw_list
