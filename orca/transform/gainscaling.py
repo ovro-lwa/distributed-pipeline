@@ -11,7 +11,7 @@ log = logging.getLogger(__name__)
 
 
 def auto_corr_data_and_flag(ms: str, data_column: str) -> Tuple[np.ndarray, np.ndarray]:
-    with table(ms) as t:
+    with table(ms, ack=False) as t:
         t_cross = t.query('ANTENNA1==ANTENNA2')
         data = t_cross.getcol(data_column)
         flag = t_cross.getcol('FLAG')
@@ -21,7 +21,8 @@ def auto_corr_data_and_flag(ms: str, data_column: str) -> Tuple[np.ndarray, np.n
 def calculate_gain_scale(baseline_ms: str, target_ms: str, data_column: str = 'CORRECTED_DATA'):
     baseline_data, baseline_flag = auto_corr_data_and_flag(baseline_ms, data_column)
     target_data, target_flag = auto_corr_data_and_flag(target_ms, data_column)
-    return np.sqrt(np.where(baseline_flag, np.nan, baseline_data)/np.where(target_flag, np.nan, target_data))
+    quotient = np.sqrt(baseline_data/target_data)
+    return np.where(np.logical_or(baseline_flag, target_flag), 1., quotient)
 
 
 def apply_gain_scale_in_place(data: np.ndarray, scale_spectrum: np.ndarray) -> None:
