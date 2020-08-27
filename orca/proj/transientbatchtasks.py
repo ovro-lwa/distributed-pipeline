@@ -70,29 +70,33 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
     small_pool = Pool(4)
     large_pool = Pool(11)
     try:
-        log.info(f'Start copying files for a size {len(ms_parent_list)}.')
-        copied_ms_parent_list = _parallel_copy(large_pool, ms_parent_list, temp)
-        copied_ms_parent_day2_list = _parallel_copy(large_pool, ms_parent_day2_list, temp)
-        copied_after_end = f'{temp}/{os.path.basename(ms_parent_after_end)}'
-        copied_after_end_day2 = f'{temp}/{os.path.basename(ms_parent_after_end_day2)}'
-        shutil.copytree(ms_parent_after_end, copied_after_end)
-        shutil.copytree(ms_parent_after_end_day2, copied_after_end_day2)
+        middle_ms = glob(f'{ms_parent_list[len(ms_parent_list) // 2]}/??_*.ms')[0]
+        phase_center = change_phase_centre.get_phase_center(middle_ms)
 
-        # Just to be safe
+        log.info(f'Start copying and chgcentre for size {len(ms_parent_list)} starting at {ms_parent_list[0]}.')
+        copied_ms_parent_list = _parallel_copy_and_chgcentre(large_pool,
+                                                             ms_parent_list + [ms_parent_after_end],
+                                                             temp, phase_center, spw_list)
+        copied_ms_parent_day2_list = _parallel_copy_and_chgcentre(large_pool,
+                                                                  ms_parent_day2_list + [ms_parent_after_end_day2],
+                                                                  temp, phase_center, spw_list)
+        # Just so I don't overwrite the original files.
         ms_parent_list, ms_parent_day2_list, ms_parent_after_end, ms_parent_after_end_day2 = [], [], '', ''
+
+        copied_after_end = copied_ms_parent_list[-1]
+        copied_ms_parent_list = copied_ms_parent_list[:-1]
+
+        copied_after_end_day2 = copied_ms_parent_day2_list[-1]
+        copied_ms_parent_day2_list = copied_ms_parent_day2_list[:-1]
 
         log.info('Merging flags.')
         _parallel_merge_flags(large_pool, copied_ms_parent_list + copied_ms_parent_day2_list, spw_list)
-        middle_ms = glob(f'{copied_ms_parent_list[len(copied_ms_parent_list) // 2]}/??_*.ms')[0]
-        phase_center = change_phase_centre.get_phase_center(middle_ms)
-
-        log.info(f'Change chunk phase center to {phase_center}.')
-        _parallel_chgcentre(small_pool, copied_ms_parent_list + copied_ms_parent_day2_list, phase_center)
 
         # gain correction
         log.info('Start pair-wise gain correction.')
         _parallel_gain_correction(large_pool, copied_ms_parent_day2_list, ms_parent_list, spw_list)
 
+        log.info('Start imaging.')
         snapshots1, timestamps1 = _parallel_wsclean_snapshot_sources_removed(small_pool,
                                                                              copied_ms_parent_list + [copied_after_end],
                                                                              temp, snapshot_image_dir, spw_list)
@@ -101,6 +105,8 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
                                                                              [copied_after_end_day2],
                                                                              temp, snapshot_image_dir, spw_list)
 
+        log.info('Start subsequent subtraction.')
+        # subsequent subtraction
         for i in range(len(snapshots1[:-1])):
             outdir1 = f'{snapshot_diff_outdir}/{timestamps1[i].date()}/hh={timestamps1[i].hour:02d}'
             outdir2 = f'{snapshot_diff_outdir}/{timestamps2[i].date()}/hh={timestamps2[i].hour:02d}'
@@ -108,12 +114,11 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
             os.makedirs(outdir2, exist_ok=True)
             image_sub.image_sub(snapshots1[i], snapshots1[i+1], outdir1)
             image_sub.image_sub(snapshots2[i], snapshots2[i+1], outdir2)
-        os.remove(snapshots1[-1])
-        os.remove(snapshots2[-1])
         snapshots1 = snapshots1[:-1]
         snapshots2 = snapshots2[:-1]
 
         # Narrow band imaging
+        log.info('Imaging narrow band.')
         tmp1 = f'{temp}/tmp1'
         os.makedirs(tmp1)
         start_chan = str(51 - narrow_chan_width // 2)
@@ -127,6 +132,7 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
                                                                           snapshot_narrow_dir, ['06'],
                                                                           more_args=['-channelrange', start_chan, end_chan])
     finally:
+        log.info('Closing down pools.')
         small_pool.close()
         large_pool.close()
         small_pool.join()
@@ -168,27 +174,25 @@ def _parallel_copy(pool, directories: List[str], dest_directory: str) -> List[st
     return dests
 
 
+def _parallel_copy_and_chgcentre(pool, directories: List[str], dest_directory: str,
+                                 phase_center: str, spw_list: List[str]) -> List[str]:
+    timestamps = [os.path.basename(d) for d in directories]
+    dests = [f'{dest_directory}/{os.path.basename(d)}' for d in directories]
+    for i, t in enumerate(timestamps):
+        os.mkdir(dests[i])
+        pool.starmap(shutil.copytree, (
+            (f'{directories[i]}/{s}_{t}.ms', f'{dests[i]}/{s}_{t}.ms') for s in spw_list
+        ))
+        pool.starmap(change_phase_centre.change_phase_center,
+                     ((f'{dests[i]}/{s}_{t}.ms', phase_center) for s in spw_list))
+    return dests
+
+
 def _parallel_gain_correction(pool, baseline_parents, target_parents, spw_list):
     pool.starmap(gainscaling.correct_scaling,
                  ((f'{baseline_parent}/{spw}_{os.path.basename(baseline_parent)}.ms',
                    f'{target_parent}/{spw}_{os.path.basename(target_parent)}.ms') for spw in spw_list
                   for baseline_parent, target_parent in zip(baseline_parents, target_parents)))
-
-"""
-def _parallel_wsclean_subsequent_diff(ms_parent_list, temp, snap_outdir, diff_outdir, spw_list, n_procs=4) -> None:
-    pool = Pool(n_procs)
-    go = partial(imaging.make_dirty_image, inner_tukey=20)
-    # need to index snap_outdir
-    args = [([f'{ms_parent_path}/{_fn(ms_parent_path, spw)}' for spw in spw_list], snap_outdir,
-             os.path.basename(ms_parent_path))
-            for ms_parent_path in ms_parent_list]
-    images = pool.starmap(go, args)
-
-    for i, fits in enumerate(images[:-1]):
-        timestamp = datetime.strptime(os.path.basename(ms_parent_list[i]), "%Y-%m-%dT%H:%M:%S")
-        indexd_out_dir = f'{out_dir}/{timestamp.date()}/hh={timestamp.hour:02d}'
-        image_sub.image_sub(images[i], images[i+1], indexd_out_dir)
-"""
 
 
 def _parallel_wsclean_snapshot_sources_removed(pool, ms_parent_list, temp, out_dir, spw_list,

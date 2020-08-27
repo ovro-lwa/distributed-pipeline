@@ -31,6 +31,7 @@ IM_SCALE_DEGREE = 0.03125
 
 def make_movie_from_fits(fits_tuple: Tuple[str], output_dir: str, scale: float,
                          output_filename: Optional[str] = None) -> str:
+    # Check this out https://github.com/will-henney/fits2image
     with TemporaryDirectory() as tmpdir:
         dpi = 200
         for i, fn in enumerate(fits_tuple):
