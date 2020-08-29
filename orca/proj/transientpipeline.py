@@ -17,10 +17,9 @@ pm_whole = OfflinePathsManager(utc_times_txt_path='/home/yuping/utc_times.txt',
                                flag_npy_paths='/home/yuping/100-hr-a-priori-flags/20191125-consolidated-flags/20200602-consolidated-flags.npy')
 
 
-def calibration_pipeline():
-    cal_date = date(2018, 3, 22)
-    pm = pm_whole.time_filter(start_time=datetime(2018, 3, 23, 11, 52, 8),
-                              end_time=datetime(2018, 3, 23, 17, 52, 8))
+def calibration_pipeline(start_time, end_time, cal_date):
+    pm = pm_whole.time_filter(start_time=start_time,
+                              end_time=end_time)
     group([
         run_dada2ms.s(pm.get_dada_path(f'{s:02d}', t), out_ms=pm.get_ms_path(t, f'{s:02d}'),
                       gaintable=pm.get_bcal_path(cal_date, f'{s:02d}')) |
