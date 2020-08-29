@@ -1,9 +1,14 @@
 import pytest
 from mock import patch
 
+import shutil
+
 import numpy as np
 from pytest import approx
 from orca.transform import gainscaling
+from casacore.tables import table
+
+from ..common import TEST_MS
 
 
 def test_apply_gain_scale():
@@ -29,13 +34,12 @@ def test_apply_gain_scale():
     assert data == approx(expected)
 
 
-@patch('orca.transform.gainscaling.auto_corr_data_and_flag')
-def test_calculate_gain_scale(auto_corr_data_and_flag):
+def test_calculate_gain_scale():
     test_shape = (10, 6, 4)
     test_scale = 0.3
-    test_baseline = np.random.rand(*test_shape)
+    test_to_scale = np.random.rand(*test_shape)
     # baseline x gain**2 = target
-    test_target = test_baseline / (test_scale ** 2)
+    test_target = test_to_scale * (test_scale ** 2)
     flag_arr1 = np.full(test_shape, False)
     flag_arr2 = np.full(test_shape, False)
     flag_arr1[0, 4, 3] = True
@@ -44,8 +48,29 @@ def test_calculate_gain_scale(auto_corr_data_and_flag):
     expected[0, 4, 3] = 1.
     expected[7, 1, 2] = 1.
 
-    # return a different value on each call
-    auto_corr_data_and_flag.side_effect = [(test_baseline, flag_arr1), (test_target, flag_arr2)]
+    ans = gainscaling.calculate_gain_scale(test_to_scale, flag_arr1, test_target, flag_arr2)
+    assert np.all((ans - expected) < 1e-16)
 
-    ans = gainscaling.calculate_gain_scale('', '')
-    assert ans == approx(expected)
+
+def test_correct_scaling(tmp_path):
+    ms_1 = (tmp_path / 'test1.ms').as_posix()
+    ms_2 = (tmp_path / 'test2.ms').as_posix()
+    scale = 2.
+    shutil.copytree(TEST_MS, ms_1)
+    shutil.copytree(TEST_MS, ms_2)
+
+    with table(ms_2, readonly=False, ack=False) as t:
+        c = t.getcol('DATA')
+        t.putcol('DATA', c * scale)
+    gainscaling.correct_scaling(to_scale_ms=ms_1, target_ms=ms_2, data_column='DATA')
+
+    with table(ms_2, ack=False) as t:
+        assert np.all((np.abs(t.getcol('DATA') - scale * c)) < 1e-16)
+
+    with table(ms_1, ack=False) as t:
+        flags = t.getcol('FLAG')
+        dat = t.getcol('DATA')
+        # No nans where there is valid data
+        assert np.all(~np.isnan(np.where(flags, 1., dat)))
+        # relative precision to 1e-5
+        assert np.all(np.where(flags, True, np.abs(dat - c * scale) < (1e-5 * np.abs(dat))))

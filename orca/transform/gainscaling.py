@@ -1,4 +1,10 @@
 """Transforms that relate to amplitude scaling.
+
+It uses autocorrelation to figure out the scaling factor between two snapshots on a per-antenna per-channel per-pol
+basis.
+
+NOTE: It uses the autocorrelation  flags to figure out which antennas are flagged and does not solve
+for those antennas.
 """
 from typing import Tuple
 
@@ -10,19 +16,28 @@ import logging
 log = logging.getLogger(__name__)
 
 
-def auto_corr_data_and_flag(ms: str, data_column: str) -> Tuple[np.ndarray, np.ndarray]:
-    with table(ms, ack=False) as t:
-        t_cross = t.query('ANTENNA1==ANTENNA2')
-        data = t_cross.getcol(data_column)
-        flag = t_cross.getcol('FLAG')
+def auto_corr_data_and_flag(t: table, data_column: str) -> Tuple[np.ndarray, np.ndarray]:
+    t_auto = t.query('ANTENNA1==ANTENNA2')
+    data = t_auto.getcol(data_column)
+    flag = t_auto.getcol('FLAG')
     return data, flag
 
 
-def calculate_gain_scale(to_scale_ms: str, target_ms: str, data_column: str = 'CORRECTED_DATA'):
-    baseline_data, baseline_flag = auto_corr_data_and_flag(to_scale_ms, data_column)
-    target_data, target_flag = auto_corr_data_and_flag(target_ms, data_column)
-    quotient = np.sqrt(baseline_data/target_data)
-    return np.where(np.logical_or(baseline_flag, target_flag), 1., quotient)
+def calculate_gain_scale(to_scale_data: np.array, to_scale_flag: np.array, target_data: np.array, target_flag: np.array):
+    """
+    Calcualte the gain scaling factor required to scale to_scale to target.
+
+    Args:
+        to_scale_data:
+        to_scale_flag:
+        target_data:
+        target_flag:
+
+    Returns:
+
+    """
+    quotient = np.sqrt(target_data/to_scale_data)
+    return np.where(np.logical_or(to_scale_flag, target_flag), 1., quotient)
 
 
 def apply_gain_scale_in_place(data: np.ndarray, scale_spectrum: np.ndarray) -> None:
@@ -66,8 +81,12 @@ def correct_scaling(to_scale_ms: str, target_ms: str, data_column: str = 'CORREC
 
     """
     log.info(f'Applying gainscaling change to {to_scale_ms}.')
-    scale_spectrum = calculate_gain_scale(to_scale_ms, target_ms, data_column)
-    with table(target_ms, readonly=False, ack=False) as t:
-        data = t.getcol(data_column)
-        apply_gain_scale_in_place(data, scale_spectrum[:, :, (0, 3)])
-        t.putcol(data_column, data)
+    with table(target_ms, ack=False) as target:
+        target_auto, target_flag = auto_corr_data_and_flag(target, data_column)
+
+    with table(to_scale_ms, readonly=False, ack=False) as to_scale:
+        to_scale_auto, to_scale_flag = auto_corr_data_and_flag(to_scale, data_column)
+        scale_spectrum = calculate_gain_scale(to_scale_auto, to_scale_flag, target_auto, target_flag)
+        to_scale_data = to_scale.getcol(data_column)
+        apply_gain_scale_in_place(to_scale_data, scale_spectrum[:, :, (0, 3)])
+        to_scale.putcol(data_column, to_scale_data)
