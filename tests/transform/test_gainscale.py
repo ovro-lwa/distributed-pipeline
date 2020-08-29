@@ -49,7 +49,7 @@ def test_calculate_gain_scale():
     expected[7, 1, 2] = 1.
 
     ans = gainscaling.calculate_gain_scale(test_to_scale, flag_arr1, test_target, flag_arr2)
-    assert np.all((ans - expected) < 1e-16)
+    assert np.all((ans - expected)/expected < 1e-7)
 
 
 def test_correct_scaling(tmp_path):
@@ -73,4 +73,4 @@ def test_correct_scaling(tmp_path):
         # No nans where there is valid data
         assert np.all(~np.isnan(np.where(flags, 1., dat)))
         # relative precision to 1e-5
-        assert np.all(np.where(flags, True, np.abs(dat - c * scale) < (1e-5 * np.abs(dat))))
+        assert np.all(np.where(flags, True, np.abs(dat - c * scale) < (1e-6 * np.abs(dat))))
