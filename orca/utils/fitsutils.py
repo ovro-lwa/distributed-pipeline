@@ -35,7 +35,7 @@ def write_fits_mask_with_box_xy_coordindates(output_fits_path: str, imsize: int,
     Returns: The fits mask path.
 
     """
-    image = np.zeros(shape=(imsize, imsize))
+    image = np.zeros(shape=(imsize, imsize), dtype='>f4')
     for i, center in enumerate(center_list):
         width = width_list[i]
         assert width % 2 == 1, 'width must be an odd number'
