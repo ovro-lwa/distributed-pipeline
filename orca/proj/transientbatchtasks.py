@@ -99,13 +99,16 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
         _parallel_merge_flags(large_pool, copied_ms_parent_list + copied_ms_parent_day2_list, spw_list)
 
         log.info('Start imaging.')
+
+        temp_im_dir = temp + '/snapshots'
+        os.makedirs(temp_im_dir)
         snapshots1, timestamps1 = _parallel_wsclean_snapshot_sources_removed(small_pool,
                                                                              copied_ms_parent_list + [copied_after_end],
-                                                                             temp, snapshot_image_dir, spw_list)
+                                                                             temp, temp_im_dir, spw_list)
         snapshots2, timestamps2 = _parallel_wsclean_snapshot_sources_removed(small_pool,
                                                                              copied_ms_parent_day2_list +
                                                                              [copied_after_end_day2],
-                                                                             temp, snapshot_image_dir, spw_list)
+                                                                             temp, temp_im_dir, spw_list)
 
         log.info('Start subsequent subtraction.')
         # subsequent subtraction
@@ -119,6 +122,15 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
         snapshots1 = snapshots1[:-1]
         snapshots2 = snapshots2[:-1]
 
+        # Copy images that we care about back to snapshot_image_dir
+        for i, (im1, im2) in enumerate(zip(snapshots1, snapshots2)):
+            outdir1 = f'{snapshot_image_dir}/{timestamps1[i].date()}/hh={timestamps1[i].hour:02d}'
+            outdir2 = f'{snapshot_image_dir}/{timestamps2[i].date()}/hh={timestamps2[i].hour:02d}'
+            os.makedirs(outdir1, exist_ok=True)
+            os.makedirs(outdir2, exist_ok=True)
+            shutil.copy(im1, outdir1)
+            shutil.copy(im2, outdir2)
+
         # Narrow band imaging
         log.info('Imaging narrow band.')
         tmp1 = f'{temp}/tmp1'
@@ -126,11 +138,11 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
         start_chan = str(51 - narrow_chan_width // 2)
         end_chan = str(51 + narrow_chan_width // 2 + 1)
         narrow_snapshots1, _ = _parallel_wsclean_snapshot_sources_removed(small_pool,
-                                                                          copied_ms_parent_list, tmp1,
+                                                                          copied_ms_parent_list[:-1], tmp1,
                                                                           snapshot_narrow_dir, ['06'],
                                                                           more_args=['-channelrange', start_chan, end_chan])
         narrow_snapshots2, _ = _parallel_wsclean_snapshot_sources_removed(small_pool,
-                                                                          copied_ms_parent_day2_list, tmp1,
+                                                                          copied_ms_parent_day2_list[:-1], tmp1,
                                                                           snapshot_narrow_dir, ['06'],
                                                                           more_args=['-channelrange', start_chan, end_chan])
     finally:
@@ -227,6 +239,7 @@ def _parallel_wsclean_snapshot_sources_removed(pool, ms_parent_list, temp, out_d
 
     args_list = []
     timestamps = []
+
     for ms_parent_path in ms_parent_list:
         timestamp_str = os.path.basename(ms_parent_path)
         timestamp = datetime.strptime(timestamp_str, "%Y-%m-%dT%H:%M:%S")
@@ -235,10 +248,9 @@ def _parallel_wsclean_snapshot_sources_removed(pool, ms_parent_list, temp, out_d
         os.makedirs(indexed_outdir, exist_ok=True)
         args_list.append(
             ([f'{ms_parent_path}/{_fn(ms_parent_path, spw)}' for spw in spw_list],
-             timestamp, indexed_outdir, timestamp_str, temp)
+             timestamp, temp, timestamp_str, temp)
         )
     images = pool.starmap(mki, args_list)
-
     return images, timestamps
 
 
