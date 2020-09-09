@@ -29,10 +29,9 @@ def calibration_pipeline(start_time, end_time, cal_date):
         for t in pm.utc_times_mapping.keys() for s in range(22)])()
 
 
-def imaging_steps():
-    pm = pm_whole.time_filter(start_time=datetime(2018, 3, 22, 11, 56, 4),
-                              end_time=datetime(2018, 3, 22, 17, 56, 4))
-    timestamp_chunks = pm.chunks_by_integration(47)
+def imaging_steps(start_time_day1: datetime, end_time_day1: datetime, chunk_size: int):
+    pm = pm_whole.time_filter(start_time=start_time_day1, end_time=end_time_day1)
+    timestamp_chunks = pm.chunks_by_integration(chunk_size)
     timestamp_chunks_day2 = [[t + SIDEREAL_DAY for t in chunk] for chunk in timestamp_chunks]
 
     ms_parent_chunks = [[pm.get_ms_parent_path(ts) for ts in c] for c in timestamp_chunks]
