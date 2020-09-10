@@ -12,7 +12,7 @@ def rot_ellipse(x,y,x0,y0,sigmax,sigmay,theta):
     return ans
 
 
-def image_sub(file1, file2, out_dir, out_prefix='diff_'):
+def image_sub(file1, file2, out_dir, out_prefix='diff_') -> str:
     hdulist1 = fits.open(file1)
     hdulist2 = fits.open(file2)
     # get image data and header information; Transpose such that the indices are consistent with ds9 and casa
@@ -27,8 +27,9 @@ def image_sub(file1, file2, out_dir, out_prefix='diff_'):
 
     # write to file
     difffits = fits.PrimaryHDU(np.reshape(diffim.T, newshape=(1, 1, *diffim.T.shape)), header=header1)
-    difffits.writeto(f'{out_dir}/{out_prefix}{os.path.basename(file1)}', overwrite=True)
-
+    out_path = f'{out_dir}/{out_prefix}{os.path.basename(file1)}'
+    difffits.writeto(out_path, overwrite=True)
+    return out_path
 
 # sequentially subtracted images for 10day-run
 # make sure to run in separate directory

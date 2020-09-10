@@ -82,16 +82,6 @@ def flag_chans(ms: str, spw: str, crosshand: bool = False, uvcut_m: float = None
 
 
 @app.task
-def make_first_image(prefix: str, datetime_string: str, out_dir: str) -> str:
-    logging.info(f'Glob statement is {prefix}/{datetime_string}/??_{datetime_string}.ms')
-    os.makedirs(out_dir,exist_ok=True)
-    ms_list = sorted(glob.glob(f'{prefix}/{datetime_string}/??_{datetime_string}.ms'))
-    out = orca.transform.imaging.make_dirty_image(ms_list, out_dir, datetime_string)
-    assert isinstance(out, str)
-    return out
-
-
-@app.task
 def run_integrate_with_concat(ms_list: List[str], out_ms: str, phase_center: Optional[str] = None) -> str:
     return integrate.integrate(ms_list, out_ms, phase_center)
 
@@ -107,13 +97,13 @@ def run_merge_flags(ms1: str, ms2: str) -> None:
 
 
 @app.task
-def run_image_sub(file1: str, file2: str, out_dir: str, out_prefix):
-    image_sub.image_sub(file1, file2, out_dir, out_prefix)
+def run_image_sub(file1: str, file2: str, out_dir: str, out_prefix) -> str:
+    return image_sub.image_sub(file1, file2, out_dir, out_prefix)
 
 
 @app.task
-def run_co_add(fits_list: List[str], output_fits_path: str, header_index: Optional[int] = None):
-    fitsutils.co_add(fits_list, output_fits_path, header_index)
+def run_co_add(fits_list: List[str], output_fits_path: str, header_index: Optional[int] = None) -> str:
+    return fitsutils.co_add(fits_list, output_fits_path, header_index)
 
 
 @app.task
