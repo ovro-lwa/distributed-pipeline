@@ -12,16 +12,13 @@ def rot_ellipse(x,y,x0,y0,sigmax,sigmay,theta):
     return ans
 
 
-def image_sub(file1,file2, out_dir, radius=0):
+def image_sub(file1, file2, out_dir, out_prefix='diff_'):
     hdulist1 = fits.open(file1)
     hdulist2 = fits.open(file2)
     # get image data and header information; Transpose such that the indices are consistent with ds9 and casa
     image1 = hdulist1[0].data[0,0].T
     image2 = hdulist2[0].data[0,0].T
     header1 = hdulist1[0].header
-    naxis = header1['NAXIS1']
-    freqval = header1['CRVAL3']
-    dateobs = header1['DATE-OBS']
     hdulist1.close()
     hdulist2.close()
 
@@ -29,22 +26,8 @@ def image_sub(file1,file2, out_dir, radius=0):
     diffim = image2 - image1
 
     # write to file
-    difffits = fits.PrimaryHDU(np.reshape(diffim.T, newshape=(1,1, *diffim.T.shape)), header=header1)
-    difffits.writeto(out_dir + '/' + 'diff_%s' % os.path.basename(file1), overwrite=True)
-    
-    if radius==0:
-        # get rms in center 1000x1000 pixels
-        rmsval = np.std(diffim[naxis//2-500:naxis//2+500, naxis//2-500:naxis//2+500])
-        medval = np.median(diffim[naxis//2-500:naxis//2+500, naxis//2-500:naxis//2+500])
-        return rmsval, medval, freqval, dateobs
-    elif radius > 0:
-        xax = np.arange(0,naxis)
-        x,y = np.meshgrid(xax,xax)
-        apertureind = np.where(rot_ellipse(x.ravel(), y.ravel(), naxis//2., naxis//2., radius, radius, 0) <= 1.)
-        imgind = zip(x.ravel()[apertureind], y.ravel()[apertureind])
-        rmsval = np.std([diffim[subset] for subset in imgind])
-        medval = np.median([diffim[subset] for subset in imgind])
-        return rmsval, medval, freqval, dateobs
+    difffits = fits.PrimaryHDU(np.reshape(diffim.T, newshape=(1, 1, *diffim.T.shape)), header=header1)
+    difffits.writeto(f'{out_dir}/{out_prefix}{os.path.basename(file1)}', overwrite=True)
 
 
 # sequentially subtracted images for 10day-run

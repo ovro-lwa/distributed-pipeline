@@ -10,6 +10,7 @@ from orca.flagging import flagoperations, flag_bad_chans
 from orca.proj.celery import app
 from orca.wrapper import dada2ms, change_phase_centre, wsclean
 from orca.transform import peeling, integrate, gainscaling, spectrum, calibration
+from orca.utils import fitsutils, image_sub
 
 import casatasks
 
@@ -96,13 +97,23 @@ def run_integrate_with_concat(ms_list: List[str], out_ms: str, phase_center: Opt
 
 
 @app.task
-def run_correct_scaling(baseline_ms: str, target_ms: str, data_column='CORRECTED_DATA') -> str:
+def run_correct_gain_scaling(baseline_ms: str, target_ms: str, data_column='CORRECTED_DATA') -> str:
     return gainscaling.correct_scaling(baseline_ms, target_ms, data_column=data_column)
 
 
 @app.task
 def run_merge_flags(ms1: str, ms2: str) -> None:
     flagoperations.merge_flags(ms1, ms2)
+
+
+@app.task
+def run_image_sub(file1: str, file2: str, out_dir: str, out_prefix):
+    image_sub.image_sub(file1, file2, out_dir, out_prefix)
+
+
+@app.task
+def run_co_add(fits_list: List[str], output_fits_path: str, header_index: Optional[int] = None):
+    fitsutils.co_add(fits_list, output_fits_path, header_index)
 
 
 @app.task

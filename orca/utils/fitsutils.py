@@ -45,7 +45,7 @@ def write_fits_mask_with_box_xy_coordindates(output_fits_path: str, imsize: int,
     return output_fits_path
 
 
-def co_add(fits_list, output_fits_path: str, header_index: Optional[int] = None) -> str:
+def co_add(fits_list: List[str], output_fits_path: str, header_index: Optional[int] = None) -> str:
     im, header = read_image_fits(fits_list[header_index if header_index else len(fits_list) // 2])
     averaged_im = np.zeros(shape=im.shape)
     n = len(fits_list)

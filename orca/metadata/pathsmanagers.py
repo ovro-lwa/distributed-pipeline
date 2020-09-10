@@ -121,23 +121,23 @@ class OfflinePathsManager(PathsManager):
         """
         return path.dirname(self.get_ms_path(timestamp, '00'))
 
-    def get_data_product_path(self, timestamp: datetime, spw: str, product: str, file_suffix: str) -> str:
+    def get_data_product_path(self, timestamp: datetime, file_prefix: str, product: str, file_suffix: str) -> str:
         """Generate path for generic data product.
-        Looks like /path/to/working_dir/<product>/2018-03-02/hh=02/00_2018-03-02T02:02:02<file_suffix>.
+        Looks like /path/to/working_dir/<product>/2018-03-02/hh=02/<file_prefix>_2018-03-02T02:02:02<file_suffix>.
 
         Args:
             product: Name of the data product to be used for top-level directory
             file_suffix: Suffix to data file. For example for fits file it'd be '.fits'.
             You can also have something like '_v2.fits'
             timestamp: Timestamp of observation.
-            spw: Spectral window.
+            file_prefix: Prefix of the file. Can be spectral window.
 
         Returns: Full path to the data product.
         """
         assert product, 'The product variable cannot be None or an empty string'
         hour = f'{timestamp.hour:02d}'
         return f'{self.working_dir}/{product}/{timestamp.date().isoformat()}/hh={hour}/{timestamp.isoformat()}/' \
-               f'{spw}_{timestamp.isoformat()}{file_suffix}'
+               f'{file_prefix}_{timestamp.isoformat()}{file_suffix}'
 
     def get_flag_npy_path(self, timestamp: datetime) -> str:
         """ Return the a priori npy for the flags column for a given time.
