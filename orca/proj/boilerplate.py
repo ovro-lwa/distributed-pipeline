@@ -102,6 +102,12 @@ def run_image_sub(file1: str, file2: str, out_dir: str, out_prefix) -> str:
 
 
 @app.task
+def run_image_sub2(file1_file2: List[str], out_dir: str, out_prefix) -> str:
+    assert len(file1_file2) == 2
+    return image_sub.image_sub(file1_file2[0], file1_file2[1], out_dir, out_prefix)
+
+
+@app.task
 def run_co_add(fits_list: List[str], output_fits_path: str, header_index: Optional[int] = None) -> str:
     return fitsutils.co_add(fits_list, output_fits_path, header_index)
 

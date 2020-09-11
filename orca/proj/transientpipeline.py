@@ -1,11 +1,13 @@
-from orca.proj.boilerplate import run_dada2ms, peel, apply_a_priori_flags, flag_chans, run_merge_flags
-from celery import group
+from orca.proj.boilerplate import run_dada2ms, peel, apply_a_priori_flags, flag_chans, run_image_sub, run_co_add
+from celery import group, chord
 from ..metadata.pathsmanagers import OfflinePathsManager, SIDEREAL_DAY
 from orca.proj.transientbatchtasks import make_image_products
+
 from datetime import datetime, date
+import itertools
 import sys
 import logging
-
+import os
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO,
                     format='%(asctime)s %(message)s', datefmt='%m/%d/%YT%I:%M:%S %p')
@@ -57,8 +59,30 @@ def imaging_steps(start_time_day1: datetime, end_time_day1: datetime, chunk_size
                               '/pipedata/workdir/yuping/')
 
 
-def subtraction_step():
-    pm = pm_whole.time_filter(start_time=datetime(2018, 3, 22, 11, 56, 9),
-                              end_time=datetime(2018, 3, 22, 17, 56, 4))
-    timestamp_chunks = pm.chunks_by_integration(47)
+def subtraction_step(start_time_day1: datetime, end_time_day1: datetime, chunksize: int):
+    pm = pm_whole.time_filter(start_time=start_time_day1,
+                              end_time=end_time_day1)
+    timestamp_chunks = pm.chunks_by_integration(chunksize)
     timestamp_chunks_day2 = [[t + SIDEREAL_DAY for t in chunk] for chunk in timestamp_chunks]
+
+    snapshot='snapshot'
+    narrow = 'narrow'
+    sid = 'sidereal_diff'
+    sid_long = 'sidereal_long_diff'
+    sid_narrow = 'sidereal_narrow_diff'
+
+    logging.info('Making directories.')
+    for out_dir in [sid, sid_long, sid_narrow]:
+        for c1, c2 in zip(timestamp_chunks, timestamp_chunks_day2):
+            for ts in itertools.chain(c1, c2):
+                os.makedirs(f'{pm.working_dir}/{out_dir}/{ts.date()}/hh={ts.hour:02d}', exist_ok=True)
+
+    logging.info('Dispatching tasks...')
+    for c1, c2 in zip(timestamp_chunks, timestamp_chunks_day2):
+        # for each image, subtract each snapshot, add subtracted images across time.
+        chord(run_image_sub.s(pm.dpp(ts1, snapshot, '.fits', 'diff'),
+                              pm.dpp(ts2, snapshot, '.fits', 'diff'),
+                              pm.dpp(ts1, sid, '.fits')) for ts1, ts2 in zip(c1, c2))(
+            run_co_add.s(output_fits_path=pm.dpp(c1[0], sid_long, '.fits')))()
+        # for narrow band, just co-add and subtract
+        pass
