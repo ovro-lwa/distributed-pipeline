@@ -107,7 +107,7 @@ class OfflinePathsManager(PathsManager):
         Returns:
             Path to the measurement set.
         """
-        return self.get_data_product_path(timestamp, product='msfiles', file_suffix='.ms', file_prefix=f'{spw}_')
+        return self.get_data_product_path(timestamp, product='msfiles', file_suffix='.ms', file_prefix=f'{spw}')
 
     def get_ms_parent_path(self, timestamp: datetime) -> str:
         """Generate measurement set parent paths that look like
