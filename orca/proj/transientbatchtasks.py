@@ -15,7 +15,7 @@ import shutil
 from glob import glob
 import logging
 import uuid
-from billiard.pool import Pool
+from billiard.pool import Pool, MapResult
 
 from orca.transform import imaging, gainscaling
 from orca.wrapper import change_phase_centre
@@ -65,10 +65,9 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
     if not spw_list:
         spw_list = [f'{i:02d}' for i in range(22)]
 
-    # TODO try-catch-finally, or tempfile
     temp = f'{scratch_dir}/{uuid.uuid4()}'
     os.makedirs(temp)
-    small_pool = Pool(4)
+    small_pool = Pool(8)
     large_pool = Pool(11)
     try:
         middle_ms = glob(f'{ms_parent_list[len(ms_parent_list) // 2]}/??_*.ms')[0]
@@ -102,14 +101,15 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
 
         temp_im_dir = temp + '/snapshots'
         os.makedirs(temp_im_dir)
-        snapshots1, timestamps1 = _parallel_wsclean_snapshot_sources_removed(small_pool,
-                                                                             copied_ms_parent_list + [copied_after_end],
-                                                                             temp, temp_im_dir, spw_list)
-        snapshots2, timestamps2 = _parallel_wsclean_snapshot_sources_removed(small_pool,
-                                                                             copied_ms_parent_day2_list +
-                                                                             [copied_after_end_day2],
-                                                                             temp, temp_im_dir, spw_list)
-
+        snapshots1, timestamps1 = _parallel_wsclean_snapshot_sources_removed_async(small_pool,
+                                                                                   copied_ms_parent_list + [copied_after_end],
+                                                                                   temp, temp_im_dir, spw_list)
+        snapshots2, timestamps2 = _parallel_wsclean_snapshot_sources_removed_async(small_pool,
+                                                                                   copied_ms_parent_day2_list +
+                                                                                   [copied_after_end_day2],
+                                                                                   temp, temp_im_dir, spw_list)
+        snapshots2 = snapshots2.get()
+        snapshots1 = snapshots1.get()
         log.info('Start subsequent subtraction.')
         # subsequent subtraction
         for i in range(len(snapshots1[:-1])):
@@ -122,29 +122,32 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
         snapshots1 = snapshots1[:-1]
         snapshots2 = snapshots2[:-1]
 
-        # Copy images that we care about back to snapshot_image_dir
-        for i, (im1, im2) in enumerate(zip(snapshots1, snapshots2)):
-            outdir1 = f'{snapshot_image_dir}/{timestamps1[i].date()}/hh={timestamps1[i].hour:02d}'
-            outdir2 = f'{snapshot_image_dir}/{timestamps2[i].date()}/hh={timestamps2[i].hour:02d}'
-            os.makedirs(outdir1, exist_ok=True)
-            os.makedirs(outdir2, exist_ok=True)
-            shutil.copy(im1, outdir1)
-            shutil.copy(im2, outdir2)
+        _copy_snapshots_back(snapshot_image_dir, snapshots1, snapshots2, timestamps1, timestamps2)
+
+        # save some disk space
+        small_pool.apply_async(shutil.rmtree, temp_im_dir)
 
         # Narrow band imaging
         log.info('Imaging narrow band.')
-        tmp1 = f'{temp}/tmp1'
-        os.makedirs(tmp1)
+        tmp_narrow_path = f'{temp}/narrow'
+        os.makedirs(tmp_narrow_path)
         start_chan = str(51 - narrow_chan_width // 2)
         end_chan = str(51 + narrow_chan_width // 2 + 1)
-        narrow_snapshots1, _ = _parallel_wsclean_snapshot_sources_removed(small_pool,
-                                                                          copied_ms_parent_list[:-1], tmp1,
-                                                                          snapshot_narrow_dir, ['06'],
-                                                                          more_args=['-channelrange', start_chan, end_chan])
-        narrow_snapshots2, _ = _parallel_wsclean_snapshot_sources_removed(small_pool,
-                                                                          copied_ms_parent_day2_list[:-1], tmp1,
-                                                                          snapshot_narrow_dir, ['06'],
-                                                                          more_args=['-channelrange', start_chan, end_chan])
+        narrow_snapshots1, timestamps1 = \
+            _parallel_wsclean_snapshot_sources_removed_async(large_pool,
+                                                             copied_ms_parent_list[:-1], temp,
+                                                             tmp_narrow_path, ['06'],
+                                                             more_args=['-channelrange', start_chan, end_chan])
+        narrow_snapshots2, timestamps2 = \
+            _parallel_wsclean_snapshot_sources_removed_async(large_pool,
+                                                             copied_ms_parent_day2_list[:-1], temp,
+                                                             tmp_narrow_path, ['06'],
+                                                             more_args=['-channelrange', start_chan, end_chan])
+        narrow_snapshots1 = narrow_snapshots1.get()
+        narrow_snapshots2 = narrow_snapshots2.get()
+
+        # Copy images that we care about back to snapshot_image_dir
+        _copy_snapshots_back(snapshot_narrow_dir, narrow_snapshots1, narrow_snapshots2, timestamps1, timestamps2)
     finally:
         log.info('Closing down pools.')
         small_pool.close()
@@ -154,6 +157,17 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
         shutil.rmtree(temp)
 
     return snapshots1, snapshots2, narrow_snapshots1, narrow_snapshots2
+
+
+def _copy_snapshots_back(snapshot_image_dir, snapshots1, snapshots2, timestamps1, timestamps2):
+    # Copy images that we care about back to snapshot_image_dir
+    for i, (im1, im2) in enumerate(zip(snapshots1, snapshots2)):
+        outdir1 = f'{snapshot_image_dir}/{timestamps1[i].date()}/hh={timestamps1[i].hour:02d}'
+        outdir2 = f'{snapshot_image_dir}/{timestamps2[i].date()}/hh={timestamps2[i].hour:02d}'
+        os.makedirs(outdir1, exist_ok=True)
+        os.makedirs(outdir2, exist_ok=True)
+        shutil.copy(im1, outdir1)
+        shutil.copy(im2, outdir2)
 
 
 def _parallel_chgcentre(pool: Pool, ms_parent_list: List[str], phase_center: str):
@@ -216,7 +230,7 @@ def _parallel_copy_chgcentre_gainscale(pool, directories: List[str], dest_direct
                      ((f'{dests[i]}/{s}_{t}.ms', phase_center) for s in spw_list))
         if gainscale_target_parents:
             target_parent = gainscale_target_parents[i]
-            # Do gain scale: FIRST ARGUMENT ARE THE MS TO SCALE
+            # Do gain scale: FIRST ARGUMENT IS THE MS TO SCALE
             pool.starmap(gainscaling.correct_scaling,
                          ((f'{dests[i]}/{s}_{t}.ms',
                            f'{target_parent}/{s}_{os.path.basename(target_parent)}.ms')
@@ -233,8 +247,8 @@ def _parallel_gain_correction(pool, baseline_parents, target_parents, spw_list):
                   for baseline_parent, target_parent in zip(baseline_parents, target_parents)))
 
 
-def _parallel_wsclean_snapshot_sources_removed(pool, ms_parent_list, temp, out_dir, spw_list,
-                                               more_args=None) -> Tuple[List[str], List[datetime]]:
+def _parallel_wsclean_snapshot_sources_removed_async(pool, ms_parent_list, temp, out_dir, spw_list,
+                                                     more_args=None) -> Tuple[MapResult, List[datetime]]:
     mki = partial(imaging.make_residual_image_with_source_removed, inner_tukey=20, more_args=more_args)
 
     args_list = []
@@ -244,13 +258,11 @@ def _parallel_wsclean_snapshot_sources_removed(pool, ms_parent_list, temp, out_d
         timestamp_str = os.path.basename(ms_parent_path)
         timestamp = datetime.strptime(timestamp_str, "%Y-%m-%dT%H:%M:%S")
         timestamps.append(timestamp)
-        indexed_outdir = f'{out_dir}/{timestamp.date()}/hh={timestamp.hour:02d}'
-        os.makedirs(indexed_outdir, exist_ok=True)
         args_list.append(
             ([f'{ms_parent_path}/{_fn(ms_parent_path, spw)}' for spw in spw_list],
-             timestamp, temp, timestamp_str, temp)
+             timestamp, out_dir, timestamp_str, temp)
         )
-    images = pool.starmap(mki, args_list)
+    images = pool.starmap_async(mki, args_list)
     return images, timestamps
 
 
