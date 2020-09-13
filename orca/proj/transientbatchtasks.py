@@ -125,7 +125,8 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
         _copy_snapshots_back(snapshot_image_dir, snapshots1, snapshots2, timestamps1, timestamps2)
 
         # save some disk space
-        small_pool.apply_async(shutil.rmtree, temp_im_dir)
+        log.info('Removing snapshot temp directory.')
+        shutil.rmtree(temp_im_dir)
 
         # Narrow band imaging
         log.info('Imaging narrow band.')
