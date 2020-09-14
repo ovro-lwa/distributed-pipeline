@@ -41,6 +41,7 @@ def image_sub(file1: Union[str, List[str]], file2: Union[str, List[str]], out_di
         image2 = fitsutils.co_add_arr(file2, im.shape)
     else:
         assert isinstance(file1, str)
+        assert isinstance(file2, str)
         image1, header1 = fitsutils.read_image_fits(file1)
         image2, _ = fitsutils.read_image_fits(file2)
         out_fn = os.path.basename(file1)
