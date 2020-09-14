@@ -33,13 +33,14 @@ def image_sub(file1: Union[str, List[str]], file2: Union[str, List[str]], out_di
     Returns:
         Output file path.
     """
-    if type(file1) is list:
-        assert type(file2) is list, 'Both input params must be the same type: list or single element.'
+    if isinstance(file1, list):
+        assert isinstance(file1, list), 'Both input params must be the same type: list or single element.'
         im, header1 = fitsutils.read_image_fits(file1[ref_index])
         out_fn = os.path.basename(file1[ref_index])
         image1 = fitsutils.co_add_arr(file1, im.shape)
         image2 = fitsutils.co_add_arr(file2, im.shape)
     else:
+        assert isinstance(file1, str)
         image1, header1 = fitsutils.read_image_fits(file1)
         image2, _ = fitsutils.read_image_fits(file2)
         out_fn = os.path.basename(file1)
