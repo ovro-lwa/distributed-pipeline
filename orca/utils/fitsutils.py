@@ -47,13 +47,18 @@ def write_fits_mask_with_box_xy_coordindates(output_fits_path: str, imsize: int,
 
 def co_add(fits_list: List[str], output_fits_path: str, header_index: Optional[int] = None) -> str:
     im, header = read_image_fits(fits_list[header_index if header_index else len(fits_list) // 2])
-    averaged_im = np.zeros(shape=im.shape)
+    averaged_im = co_add_arr(fits_list, im.shape)
+    write_image_fits(output_fits_path, header, averaged_im)
+    return output_fits_path
+
+
+def co_add_arr(fits_list, dims):
+    averaged_im = np.zeros(shape=dims)
     n = len(fits_list)
     for fn in fits_list:
         im, _ = read_image_fits(fn)
         averaged_im += (im / n)
-    write_image_fits(output_fits_path, header, averaged_im)
-    return output_fits_path
+    return averaged_im
 
 
 def get_sample_header() -> fits.Header:

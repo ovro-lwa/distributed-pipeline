@@ -17,9 +17,8 @@ import logging
 import uuid
 from billiard.pool import Pool, MapResult
 
-from orca.transform import imaging, gainscaling
+from orca.transform import imaging, gainscaling, image_sub
 from orca.wrapper import change_phase_centre
-from orca.utils import image_sub
 from orca.flagging.flagoperations import merge_group_flags
 
 log = logging.getLogger(__name__)
@@ -117,8 +116,8 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
             outdir2 = f'{snapshot_diff_outdir}/{timestamps2[i].date()}/hh={timestamps2[i].hour:02d}'
             os.makedirs(outdir1, exist_ok=True)
             os.makedirs(outdir2, exist_ok=True)
-            image_sub.image_sub(snapshots1[i], snapshots1[i+1], outdir1)
-            image_sub.image_sub(snapshots2[i], snapshots2[i+1], outdir2)
+            image_sub.image_sub(snapshots1[i], snapshots1[i + 1], outdir1)
+            image_sub.image_sub(snapshots2[i], snapshots2[i + 1], outdir2)
         snapshots1 = snapshots1[:-1]
         snapshots2 = snapshots2[:-1]
 

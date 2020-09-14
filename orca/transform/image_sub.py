@@ -5,6 +5,10 @@ import os
 from glob import glob
 import numpy as np
 
+from orca.utils import fitsutils
+
+from typing import Union, List
+
 # equation for a rotated ellipse centered at x0,y0
 def rot_ellipse(x,y,x0,y0,sigmax,sigmay,theta):
     ans = ((x-x0)*np.cos(theta) + (y-y0)*np.sin(theta))**2. / sigmax**2. \
@@ -12,55 +16,42 @@ def rot_ellipse(x,y,x0,y0,sigmax,sigmay,theta):
     return ans
 
 
-def image_sub(file1, file2, out_dir, out_prefix='diff_') -> str:
-    hdulist1 = fits.open(file1)
-    hdulist2 = fits.open(file2)
-    # get image data and header information; Transpose such that the indices are consistent with ds9 and casa
-    image1 = hdulist1[0].data[0,0].T
-    image2 = hdulist2[0].data[0,0].T
-    header1 = hdulist1[0].header
-    hdulist1.close()
-    hdulist2.close()
+def image_sub(file1: Union[str, List[str]], file2: Union[str, List[str]], out_dir,
+              out_prefix='diff_', ref_index: int = 0) -> str:
+    """
+    Image subtraction for single image for lists of images. When the input is a list, it co-adds first before
+        subtracting. Subtraction is file2 - file1. Output file is based on the basename of file1 with a prefix.
+
+    Args:
+        file1: Previous image or list of images to be co-added
+        file2: Next image or list of images to be co-added.
+        out_dir: Output directory
+        out_prefix: Output file prefix.
+        ref_index: If the input is a list, the index for the reference fits file from which the header for the output
+            is extracted.
+
+    Returns:
+        Output file path.
+    """
+    if type(file1) is list:
+        assert type(file2) is list, 'Both input params must be the same type: list or single element.'
+        im, header1 = fitsutils.read_image_fits(file1[ref_index])
+        out_fn = os.path.basename(file1[ref_index])
+        image1 = fitsutils.co_add_arr(file1, im.shape)
+        image2 = fitsutils.co_add_arr(file2, im.shape)
+    else:
+        image1, header1 = fitsutils.read_image_fits(file1)
+        image2, _ = fitsutils.read_image_fits(file2)
+        out_fn = os.path.basename(file1)
 
     # subtract images
     diffim = image2 - image1
 
     # write to file
-    difffits = fits.PrimaryHDU(np.reshape(diffim.T, newshape=(1, 1, *diffim.T.shape)), header=header1)
-    out_path = f'{out_dir}/{out_prefix}{os.path.basename(file1)}'
-    difffits.writeto(out_path, overwrite=True)
+    out_path = f'{out_dir}/{out_prefix}{out_fn}'
+    fitsutils.write_image_fits(out_path, header1, diffim, overwrite=True)
     return out_path
 
-# sequentially subtracted images for 10day-run
-# make sure to run in separate directory
-def dir_sub(filepath,savediff=False,radius=0):
-    filelist = np.sort(glob(filepath))
-    rmsarray = np.zeros(len(filelist))
-    medarray = np.copy(rmsarray)
-    frqarray = np.copy(rmsarray)
-    dateobsarray = np.copy(rmsarray)
-    for ind in range(len(filelist)-1):
-        print(ind)
-        rmsval,medval,freqval,dateobs = image_sub(filelist[ind],filelist[ind+1],savediff=savediff,radius=radius)
-        rmsarray[ind] = rmsval
-        medarray[ind] = medval
-        frqarray[ind] = freqval
-        dateobsarray[ind] = dateobs
-    return rmsarray,medarray,frqarray,dateobsarray
-
-
-# sidereally subtracted images for 10day-run
-# make sure to run in separate directory
-def sid_sub(filepath):
-    filelist = np.sort(glob(filepath))
-    int_time = 30. # seconds
-    ind_sep  = (3600 * 24. - 240.)/int_time
-    for ind in range(len(filelist)):
-        if ind+ind_sep <= len(filelist)-1:
-            image_sub(filelist[ind], filelist[ind+ind_sep])
-        else:
-            image_sub(filelist[ind], filelist[ind-(np.floor(len(filelist)/ind_sep)-1)*ind_sep])
-            
 
 # take rms of image within given box
 def getimrms(filepath,radius=0):
