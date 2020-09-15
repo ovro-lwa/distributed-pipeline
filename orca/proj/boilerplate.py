@@ -9,8 +9,14 @@ from orca.wrapper import dada2ms, change_phase_centre, wsclean
 from orca.transform import peeling, integrate, gainscaling, spectrum, calibration, image_sub
 from orca.utils import fitsutils
 
-from preprocessing import flagging
-from qa import metrics
+try:
+    from preprocessing import flagging
+except ImportError:
+    print("preprocessing not available. Skipping")
+try:
+    from qa import metrics
+except ImportError:
+    print("qa not available. Skipping")
 
 import casatasks
 import billiard
