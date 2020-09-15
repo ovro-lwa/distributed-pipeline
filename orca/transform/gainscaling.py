@@ -1,26 +1,46 @@
 """Transforms that relate to amplitude scaling.
+
+It uses autocorrelation to figure out the scaling factor between two snapshots on a per-antenna per-channel per-pol
+basis.
+
+NOTE: It uses the autocorrelation  flags to figure out which antennas are flagged and does not solve
+for those antennas.
 """
 from typing import Tuple
 
 import numpy as np
 from casacore.tables import table
 
+import logging
 
-def auto_corr_data_and_flag(ms: str, data_column: str) -> Tuple[np.ndarray, np.ndarray]:
-    with table(ms) as t:
-        t_cross = t.query('ANTENNA1==ANTENNA2')
-        data = t_cross.getcol(data_column)
-        flag = t_cross.getcol('FLAG')
+log = logging.getLogger(__name__)
+
+
+def auto_corr_data_and_flag(t: table, data_column: str) -> Tuple[np.ndarray, np.ndarray]:
+    t_auto = t.query('ANTENNA1==ANTENNA2')
+    data = t_auto.getcol(data_column)
+    flag = t_auto.getcol('FLAG')
     return data, flag
 
 
-def calculate_gain_scale(baseline_ms: str, target_ms: str, data_column: str = 'CORRECTED_DATA'):
-    baseline_data, baseline_flag = auto_corr_data_and_flag(baseline_ms, data_column)
-    target_data, target_flag = auto_corr_data_and_flag(target_ms, data_column)
-    return np.sqrt(np.where(baseline_flag, np.nan, baseline_data)/np.where(target_flag, np.nan, target_data))
+def calculate_gain_scale(to_scale_data: np.array, to_scale_flag: np.array, target_data: np.array, target_flag: np.array):
+    """
+    Calcualte the gain scaling factor required to scale to_scale to target.
+
+    Args:
+        to_scale_data:
+        to_scale_flag:
+        target_data:
+        target_flag:
+
+    Returns:
+
+    """
+    quotient = np.sqrt(target_data/to_scale_data)
+    return np.where(np.logical_or(to_scale_flag, target_flag), 1., quotient)
 
 
-def apply_gain_scale_in_place(data: np.ndarray, scale_spectrum: np.ndarray) -> np.ndarray:
+def apply_gain_scale_in_place(data: np.ndarray, scale_spectrum: np.ndarray) -> None:
     """ Apply single pol scaling factor per antenna to cross-correlated data.
     This is similar to applycal in CASA. It multiples a cross-correlation by the scaling factor that corresponds to
     the two antennas (each of which has 2 polarizations) involved.
@@ -46,22 +66,27 @@ def apply_gain_scale_in_place(data: np.ndarray, scale_spectrum: np.ndarray) -> n
     # This computes the outer product along the last axis
     data *= (scale_spectrum[upper_triangle_matrix_indices[0], :, :, np.newaxis] *
              scale_spectrum[upper_triangle_matrix_indices[1], :, np.newaxis, :]).reshape(data.shape)
-    return data
 
 
-def correct_scaling(baseline_ms: str, target_ms: str, data_column: str = 'CORRECTED_DATA'):
+def correct_scaling(to_scale_ms: str, target_ms: str, data_column: str = 'CORRECTED_DATA'):
     """ Correct for per-antenna per-pol per-channel scaling between two measurement sets.
     Scales data in target_ms such that the autocorrelation for baseline_ms and target_ms are the same.
 
     Args:
-        baseline_ms: Measurement set to scale to
+        to_scale_ms: Measurement set to scale to
         target_ms: Measurement set that this function modifies so that the autocorr is the same as baseline_ms
         data_column: The data column to apply this operation to.
 
     Returns:
 
     """
-    scale_spectrum = calculate_gain_scale(baseline_ms, target_ms, data_column)
-    with table(target_ms, readonly=False) as t:
-        data = apply_gain_scale_in_place(t.getcol(data_column), scale_spectrum[:, :, (0, 3)])
-        t.putcol(data_column, data)
+    log.info(f'Applying gainscaling change to {to_scale_ms}.')
+    with table(target_ms, ack=False) as target:
+        target_auto, target_flag = auto_corr_data_and_flag(target, data_column)
+
+    with table(to_scale_ms, readonly=False, ack=False) as to_scale:
+        to_scale_auto, to_scale_flag = auto_corr_data_and_flag(to_scale, data_column)
+        scale_spectrum = calculate_gain_scale(to_scale_auto, to_scale_flag, target_auto, target_flag)
+        to_scale_data = to_scale.getcol(data_column)
+        apply_gain_scale_in_place(to_scale_data, scale_spectrum[:, :, (0, 3)])
+        to_scale.putcol(data_column, to_scale_data)

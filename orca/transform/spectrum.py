@@ -8,11 +8,15 @@ def gen_spectrum(ms: str, sourcename: str, data_column: str = 'CORRECTED_DATA', 
     """
     Generate spectrum (I,V,XX,XY,YX,YY) from the visibilities; assumes source of interest
     is already phase center.
-    :param ms: The measurement set.
-    :param sourcename: The source for which spectrum is being generated. Used for naming output file.
-    :param data_column: MS data column on which to operate. Default is CORRECTED_DATA.
-    :param timeavg: Average in time. Default is False.
-    :return: Path to output .npz file containing spectrum.
+
+    Args:
+        ms: The measurement set.
+        sourcename: The source for which spectrum is being generated. Used for naming output file.
+        data_column: MS data column on which to operate. Default is CORRECTED_DATA.
+        timeavg: Average in time. Default is False.
+
+    Returns:
+        Path to output .npz file containing spectrum.
     """
     # open ms, SPW table, datacol, flagcol, freqcol
     t       = tables.table(ms, readonly=True)

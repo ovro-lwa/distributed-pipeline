@@ -4,6 +4,22 @@ orca.utils package
 Submodules
 ----------
 
+orca.utils.beam module
+----------------------
+
+.. automodule:: orca.utils.beam
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+orca.utils.calibrationutils module
+----------------------------------
+
+.. automodule:: orca.utils.calibrationutils
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 orca.utils.commandline module
 -----------------------------
 

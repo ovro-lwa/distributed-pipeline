@@ -3,6 +3,7 @@ from orca.metadata.pathsmanagers import OfflinePathsManager
 from os import path
 from datetime import datetime, date
 
+import itertools
 
 def test_read_utc_times():
     pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt', '.')
@@ -46,14 +47,21 @@ def test_get_flag_npy_path_single_npy():
 
 def test_get_data_product_path():
     pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt', working_dir='.')
-    assert pm.get_data_product_path(datetime(2019, 10, 28, 23, 4, 44), '00', 'images', '_diff.fits') == \
+    assert pm.get_data_product_path(datetime(2019, 10, 28, 23, 4, 44), 'images', '_diff.fits', '00') == \
     './images/2019-10-28/hh=23/2019-10-28T23:04:44/00_2019-10-28T23:04:44_diff.fits'
 
 
 def test_get_data_product_path_no_suffix():
     pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt', working_dir='.')
-    assert pm.get_data_product_path(datetime(2019, 10, 28, 23, 4, 44), '00', 'images', '') == \
+    assert pm.get_data_product_path(datetime(2019, 10, 28, 23, 4, 44), 'images', '', '00') == \
     './images/2019-10-28/hh=23/2019-10-28T23:04:44/00_2019-10-28T23:04:44'
+
+
+def test_get_ms_parent_path():
+    pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt',
+                             working_dir='/tmp')
+    assert pm.get_ms_parent_path(datetime(2019, 10, 28, 23, 4, 44)) == \
+        '/tmp/msfiles/2019-10-28/hh=23/2019-10-28T23:04:44'
 
 
 def test_get_flag_npy_flag_multiple_npy():
@@ -63,3 +71,21 @@ def test_get_flag_npy_flag_multiple_npy():
     pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt',
                              flag_npy_paths=npy)
     assert pm.get_flag_npy_path(date(2018, 3, 2)) == '/tmp/something.npy'
+
+
+def test_chunks_by_integration():
+    pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt')
+    for n in range(1, len(pm.utc_times_mapping.keys())):
+        chunks = pm.chunks_by_integration(n)
+        for c in chunks[:-1]:
+            assert len(c) == n
+        assert len(chunks[-1]) <= n
+        for ans, expected in zip(itertools.chain.from_iterable(chunks), list(pm.utc_times_mapping.keys())):
+            assert ans == expected
+
+
+def test_chunks_by_integration_multiple():
+    pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt')
+    chunks = pm.chunks_by_integration(2)
+    for l in chunks:
+        print(l)

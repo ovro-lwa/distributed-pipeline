@@ -18,7 +18,7 @@ def main(hosts, concurrency):
         results = sg.run('/opt/astro/anaconda3/bin/activate py36_orca && '
                          f'cd {ENV_DIR} && /opt/astro/bin/pipenv run celery multi start {worker_name} -A orca.proj '
                          f'-Q {queue_name} '
-                         f'--concurrency={concurrency} '
+                         f'--concurrency={concurrency} -Ofair '
                          f'-l info -n %h --pidfile=/var/run/celery/%n.pid --logfile=/var/log/celery/%n%I.log')
 
 

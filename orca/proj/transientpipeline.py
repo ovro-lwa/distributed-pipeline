@@ -1,22 +1,16 @@
-from orca.transform import imaging
-from orca.proj.boilerplate import run_dada2ms, peel, apply_a_priori_flags, flag_chans, make_first_image
-from .celery import app
-from celery import group
-from ..transform import siderealsubtraction, gainscaling
-from ..wrapper import change_phase_centre, wsclean
-from ..flagging import flagoperations
-from ..metadata.pathsmanagers import OfflinePathsManager
-from ..utils import image_sub
-from datetime import datetime, timedelta, date
-import os
+from orca.proj.boilerplate import run_dada2ms, peel, apply_a_priori_flags, flag_chans, run_image_sub, run_co_add
+from celery import group, chord
+from ..metadata.pathsmanagers import OfflinePathsManager, SIDEREAL_DAY
+from orca.proj.transientbatchtasks import make_image_products
+
+from datetime import datetime, date
+import itertools
 import sys
 import logging
-import glob
-import shutil
-from typing import List, Tuple
-import uuid
+import os
 
-logging.basicConfig(stream=sys.stdout, level=logging.INFO)
+logging.basicConfig(stream=sys.stdout, level=logging.INFO,
+                    format='%(asctime)s %(message)s', datefmt='%m/%d/%YT%I:%M:%S %p')
 
 pm_whole = OfflinePathsManager(utc_times_txt_path='/home/yuping/utc_times.txt',
                                dadafile_dir='/lustre/data/2018-03-20_100hr_run',
@@ -25,69 +19,9 @@ pm_whole = OfflinePathsManager(utc_times_txt_path='/home/yuping/utc_times.txt',
                                flag_npy_paths='/home/yuping/100-hr-a-priori-flags/20191125-consolidated-flags/20200602-consolidated-flags.npy')
 
 
-@app.task
-def sidereal_subtraction(dir1, dir2, datetime_1, datetime_2, out_dir1, out_dir2, diff_out_dir):
-    # Copy over to local disk, chgcentre, merge flag, and then subtract, write back.
-    temp_tree = f'/pipedata/workdir/yuping/{uuid.uuid4()}'
-    # I'd rather have an error thrown here if there's a UUID clash which shouldn't ever happen.
-    os.makedirs(temp_tree, exist_ok=True)
-    try:
-        tree1 = f'{temp_tree}/{datetime_1}'
-        tree2 = f'{temp_tree}/{datetime_2}'
-        shutil.copytree(f'{dir1}/{datetime_1}', tree1)
-        shutil.copytree(f'{dir2}/{datetime_2}', tree2)
-        new_phase_center = change_phase_centre.get_phase_center(f'{tree1}/00_{datetime_1}.ms')
-        spws = [f'{i:02d}' for i in range(22)]
-        for s in spws:
-            gainscaling.correct_scaling(f'{tree1}/{s}_{datetime_1}.ms', f'{tree2}/{s}_{datetime_2}.ms')
-            flagoperations.merge_flags(f'{tree1}/{s}_{datetime_1}.ms', f'{tree2}/{s}_{datetime_2}.ms')
-            change_phase_centre.change_phase_center(f'{tree2}/{s}_{datetime_2}.ms', new_phase_center)
-
-        im1 = imaging.make_residual_image_with_source_removed(sorted(glob.glob(f'{tree1}/??_{datetime_1}.ms')),
-                                                              temp_tree,
-                                                              datetime_1, imaging.CRAB, temp_tree, inner_tukey=20)
-        im2 = imaging.make_residual_image_with_source_removed(sorted(glob.glob(f'{tree2}/??_{datetime_2}.ms')),
-                                                              temp_tree,
-                                                              datetime_2, imaging.CRAB, temp_tree, inner_tukey=20)
-        image_sub.image_sub(im1, im2, diff_out_dir)
-        shutil.copy(im1, out_dir1)
-        shutil.copy(im2, out_dir2)
-    finally:
-        shutil.rmtree(temp_tree)
-
-
-def generate_datetime_pairs(hour: str) -> List[Tuple[datetime, datetime]]:
-    sday = timedelta(days=0, hours=23, minutes=56, seconds=4)
-    day_1_times = [ datetime.strptime(os.path.basename(p), "%Y-%m-%dT%H:%M:%S") for p in  # type: ignore
-                    sorted(glob.glob(f'/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-22/hh={hour}/*'))]
-    return [(one, one + sday) for one in day_1_times if one > datetime(2018, 3, 22, int(hour), 3, 56)]
-
-
-def small_imaging_test():
-    HOUR = '03'
-    pairs = generate_datetime_pairs(HOUR)
-    logging.info(f'There are {len(pairs)} pairs of sidereally separated images to process.')
-    out_dir1 = f'/lustre/yuping/0-100-hr-reduction/salf/prep-sidereal-images3/2018-03-22/hh={HOUR}',
-    out_dir2 = f'/lustre/yuping/0-100-hr-reduction/salf/prep-sidereal-images3/2018-03-23/hh={HOUR}',
-    diff_out_dir = f'/lustre/yuping/0-100-hr-reduction/salf/sidereal-diff3/2018-03-22/hh={HOUR}'
-    os.makedirs(out_dir1, exist_ok=True)
-    os.makedirs(out_dir2, exist_ok=True)
-    os.makedirs(diff_out_dir, exist_ok=True)
-    group(sidereal_subtraction.s(
-        f'/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-22/hh={HOUR}',
-        f'/lustre/yuping/0-100-hr-reduction/salf/msfiles/2018-03-23/hh={HOUR}',
-        p[0].isoformat(),
-        p[1].isoformat(),
-        out_dir1=out_dir1,
-        out_dir2=out_dir2,
-        diff_out_dir=diff_out_dir)
-          for p in pairs)()
-
-
-def calibration_pipeline():
-    cal_date = date(2018, 3, 22)
-    pm = pm_whole.time_filter(start_time=datetime(2018, 3, 22, 11, 56, 4),
-                              end_time=datetime(2018, 3, 22, 17, 56, 4))
+def calibration_pipeline(start_time, end_time, cal_date):
+    pm = pm_whole.time_filter(start_time=start_time,
+                              end_time=end_time)
     group([
         run_dada2ms.s(pm.get_dada_path(f'{s:02d}', t), out_ms=pm.get_ms_path(t, f'{s:02d}'),
                       gaintable=pm.get_bcal_path(cal_date, f'{s:02d}')) |
@@ -97,9 +31,58 @@ def calibration_pipeline():
         for t in pm.utc_times_mapping.keys() for s in range(22)])()
 
 
-def imaging_steps():
-    cal_date = date(2018, 3, 22)
-    pm = pm_whole.time_filter(start_time=datetime(2018, 3, 22, 11, 56, 4),
-                              end_time=datetime(2018, 3, 22, 12, 5, 4))
-    # One giant imaging task?
-    pass
+def imaging_steps(start_time_day1: datetime, end_time_day1: datetime, chunk_size: int):
+    pm = pm_whole.time_filter(start_time=start_time_day1, end_time=end_time_day1)
+    timestamp_chunks = pm.chunks_by_integration(chunk_size)
+    timestamp_chunks_day2 = [[t + SIDEREAL_DAY for t in chunk] for chunk in timestamp_chunks]
+
+    ms_parent_chunks = [[pm.get_ms_parent_path(ts) for ts in c] for c in timestamp_chunks]
+    ms_parent_chunks_day2 = [[pm.get_ms_parent_path(ts) for ts in c] for c in timestamp_chunks_day2]
+
+    assert len(ms_parent_chunks) == len(ms_parent_chunks_day2)
+    logging.info(f'Chunk size is {len(ms_parent_chunks)} with last chunk size {len(ms_parent_chunks[-1])}.')
+    group([make_image_products.s(c1, c2,
+                                 ms_parent_chunks[i+1][0],
+                                 ms_parent_chunks_day2[i+1][0],
+                                 f'{pm.working_dir}/snapshot',
+                                 f'{pm.working_dir}/narrow',
+                                 f'{pm.working_dir}/subsequent_diff',
+                                 '/pipedata/workdir/yuping/')
+           for i, (c1, c2) in enumerate(zip(ms_parent_chunks[:-1], ms_parent_chunks_day2[:-1]))
+           ])()
+    # TODO what if the last chunk has only one element?
+    make_image_products.delay(ms_parent_chunks[-1][:-1], ms_parent_chunks_day2[-1][:-1],
+                              ms_parent_chunks[-1][-1], ms_parent_chunks_day2[-1][-1],
+                              f'{pm.working_dir}/snapshot',
+                              f'{pm.working_dir}/narrow',
+                              f'{pm.working_dir}/subsequent_diff',
+                              '/pipedata/workdir/yuping/')
+
+
+def subtraction_step(start_time_day1: datetime, end_time_day1: datetime, chunksize: int):
+    pm = pm_whole.time_filter(start_time=start_time_day1,
+                              end_time=end_time_day1)
+    timestamp_chunks = pm.chunks_by_integration(chunksize)
+    timestamp_chunks_day2 = [[t + SIDEREAL_DAY for t in chunk] for chunk in timestamp_chunks]
+
+    snapshot='snapshot'
+    narrow = 'narrow'
+    sid = 'sidereal_diff'
+    sid_long = 'sidereal_long_diff'
+    sid_narrow = 'sidereal_narrow_diff'
+
+    logging.info('Making directories.')
+    for out_dir in [sid, sid_long, sid_narrow]:
+        for c1, c2 in zip(timestamp_chunks, timestamp_chunks_day2):
+            for ts in itertools.chain(c1, c2):
+                os.makedirs(f'{pm.working_dir}/{out_dir}/{ts.date()}/hh={ts.hour:02d}', exist_ok=True)
+
+    logging.info('Dispatching tasks...')
+    for c1, c2 in zip(timestamp_chunks, timestamp_chunks_day2):
+        # for each image, subtract each snapshot, add subtracted images across time.
+        chord(run_image_sub.s(pm.dpp(ts1, snapshot, '.fits', 'diff'),
+                              pm.dpp(ts2, snapshot, '.fits', 'diff'),
+                              pm.dpp(ts1, sid, '.fits')) for ts1, ts2 in zip(c1, c2))(
+            run_co_add.s(output_fits_path=pm.dpp(c1[0], sid_long, '.fits')))()
+        # for narrow band, just co-add and subtract
+        pass

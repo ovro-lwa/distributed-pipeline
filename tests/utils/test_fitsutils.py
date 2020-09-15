@@ -4,7 +4,7 @@ import tempfile
 import numpy as np
 
 from orca.utils import fitsutils
-
+from ..common import TEST_FITS
 
 def test_get_sample_header():
     assert fitsutils.get_sample_header()['SIMPLE']
@@ -22,6 +22,7 @@ def test_write_fits_mask_with_box():
         assert np.all(im.T[1031: 1034, 699:702] == 1.)
         assert np.sum(im.T == 0.) == 4096**2 - 9
 
+
 def test_write_fits_mask_with_multiple_boxes():
     with tempfile.NamedTemporaryFile() as f:
         fitsutils.write_fits_mask_with_box_xy_coordindates(f.name, 4096, [(1032, 700), (400, 600)], [3, 81])
@@ -29,3 +30,11 @@ def test_write_fits_mask_with_multiple_boxes():
         assert np.all(im.T[1031: 1034, 699:702] == 1.)
         assert np.all(im.T[360: 441, 560: 641] == 1.)
         assert np.sum(im.T == 0.) == 4096 ** 2 - 3 * 3 - 81 * 81
+
+
+def test_coadd():
+    with tempfile.NamedTemporaryFile() as f:
+        fitsutils.co_add([TEST_FITS] * 51, f.name)
+        av_im, _ = fitsutils.read_image_fits(f.name)
+        im, _ = fitsutils.read_image_fits(TEST_FITS)
+        np.array_equal(av_im, im)

@@ -2,7 +2,7 @@
 """
 from astropy.io import fits
 import numpy as np
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 
 
 def read_image_fits(fn: str) -> Tuple[np.array, fits.Header]:
@@ -35,7 +35,7 @@ def write_fits_mask_with_box_xy_coordindates(output_fits_path: str, imsize: int,
     Returns: The fits mask path.
 
     """
-    image = np.zeros(shape=(imsize, imsize))
+    image = np.zeros(shape=(imsize, imsize), dtype='>f4')
     for i, center in enumerate(center_list):
         width = width_list[i]
         assert width % 2 == 1, 'width must be an odd number'
@@ -43,6 +43,22 @@ def write_fits_mask_with_box_xy_coordindates(output_fits_path: str, imsize: int,
             np.ones(shape=(width, width))
         write_image_fits(output_fits_path, get_sample_header(), image.T, overwrite=True)
     return output_fits_path
+
+
+def co_add(fits_list: List[str], output_fits_path: str, header_index: Optional[int] = None) -> str:
+    im, header = read_image_fits(fits_list[header_index if header_index else len(fits_list) // 2])
+    averaged_im = co_add_arr(fits_list, im.shape)
+    write_image_fits(output_fits_path, header, averaged_im)
+    return output_fits_path
+
+
+def co_add_arr(fits_list, dims):
+    averaged_im = np.zeros(shape=dims)
+    n = len(fits_list)
+    for fn in fits_list:
+        im, _ = read_image_fits(fn)
+        averaged_im += (im / n)
+    return averaged_im
 
 
 def get_sample_header() -> fits.Header:

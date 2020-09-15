@@ -20,14 +20,6 @@ orca.flagging.flag\_bad\_chans module
    :undoc-members:
    :show-inheritance:
 
-orca.flagging.flag\_bad\_chans module
--------------------------------------
-
-.. automodule:: orca.flagging.flag_bad_chans
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 orca.flagging.flag\_bls module
 ------------------------------
 
