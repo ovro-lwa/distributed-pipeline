@@ -8,6 +8,7 @@ from orca.proj.celery import app
 from orca.wrapper import dada2ms, change_phase_centre, wsclean
 from orca.transform import peeling, integrate, gainscaling, spectrum, calibration, image_sub
 from orca.utils import fitsutils
+from numpy import array
 
 try:
     from preprocessing import flagging
