@@ -107,7 +107,8 @@ class OfflinePathsManager(PathsManager):
         Returns:
             Path to the measurement set.
         """
-        return self.get_data_product_path(timestamp, product='msfiles', file_suffix='.ms', file_prefix=f'{spw}')
+        parent = self.get_ms_parent_path(timestamp)
+        return f'{parent}/{spw}_{timestamp.isoformat()}.ms'
 
     def get_ms_parent_path(self, timestamp: datetime) -> str:
         """Generate measurement set parent paths that look like
@@ -119,7 +120,8 @@ class OfflinePathsManager(PathsManager):
         Returns:
             Path to the measurement set.
         """
-        return path.dirname(self.get_ms_path(timestamp, '00'))
+        hour = f'{timestamp.hour:02d}'
+        return f'{self.working_dir}/msfiles/{timestamp.date().isoformat()}/hh={hour}/{timestamp.isoformat()}'
 
     def get_data_product_path(self, timestamp: datetime, product: str, file_suffix: str,
                               file_prefix: Optional[str] = None) -> str:
@@ -139,10 +141,10 @@ class OfflinePathsManager(PathsManager):
         assert product, 'The product variable cannot be None or an empty string'
         hour = f'{timestamp.hour:02d}'
         if file_prefix:
-            return f'{self.working_dir}/{product}/{timestamp.date().isoformat()}/hh={hour}/{timestamp.isoformat()}/' \
+            return f'{self.working_dir}/{product}/{timestamp.date().isoformat()}/hh={hour}/' \
                    f'{file_prefix}_{timestamp.isoformat()}{file_suffix}'
         else:
-            return f'{self.working_dir}/{product}/{timestamp.date().isoformat()}/hh={hour}/{timestamp.isoformat()}/' \
+            return f'{self.working_dir}/{product}/{timestamp.date().isoformat()}/hh={hour}/' \
                    f'{timestamp.isoformat()}{file_suffix}'
 
     dpp = get_data_product_path
