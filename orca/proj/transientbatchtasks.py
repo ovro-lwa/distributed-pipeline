@@ -135,13 +135,13 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
         end_chan = str(51 + narrow_chan_width // 2 + 1)
         narrow_snapshots1, timestamps1 = \
             _parallel_wsclean_snapshot_sources_removed_async(large_pool,
-                                                             copied_ms_parent_list[:-1], temp,
-                                                             tmp_narrow_path, ['06'],
+                                                             copied_ms_parent_list, temp,
+                                                             tmp_narrow_path, ['12'],
                                                              more_args=['-channelrange', start_chan, end_chan])
         narrow_snapshots2, timestamps2 = \
             _parallel_wsclean_snapshot_sources_removed_async(large_pool,
-                                                             copied_ms_parent_day2_list[:-1], temp,
-                                                             tmp_narrow_path, ['06'],
+                                                             copied_ms_parent_day2_list, temp,
+                                                             tmp_narrow_path, ['12'],
                                                              more_args=['-channelrange', start_chan, end_chan])
         narrow_snapshots1 = narrow_snapshots1.get()
         narrow_snapshots2 = narrow_snapshots2.get()

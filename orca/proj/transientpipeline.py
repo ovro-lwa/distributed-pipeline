@@ -59,20 +59,25 @@ def imaging_steps(start_time_day1: datetime, end_time_day1: datetime, chunk_size
                               '/pipedata/workdir/yuping/')
 
 
-def subtraction_step(start_time_day1: datetime, end_time_day1: datetime, chunksize: int):
+def subtraction_step(start_time_day1: datetime, end_time_day1: datetime, chunk_size: int):
     pm = pm_whole.time_filter(start_time=start_time_day1,
                               end_time=end_time_day1)
-    timestamp_chunks = pm.chunks_by_integration(chunksize)
+    timestamp_chunks = pm.chunks_by_integration(chunk_size)
     timestamp_chunks_day2 = [[t + SIDEREAL_DAY for t in chunk] for chunk in timestamp_chunks]
 
-    snapshot='snapshot'
+    snapshot = 'snapshot'
     narrow = 'narrow'
-    sid = 'sidereal_diff'
+    narrow_long = 'narrow_long'
+    long = 'long'
+
+    sid_diff = 'sidereal_diff'
     sid_long = 'sidereal_long_diff'
     sid_narrow = 'sidereal_narrow_diff'
 
+    timestamp_chunks[-1] = timestamp_chunks[-1][:-1]
+    timestamp_chunks_day2[-1] = timestamp_chunks_day2[-1][:-1]
     logging.info('Making directories.')
-    for out_dir in [sid, sid_long, sid_narrow]:
+    for out_dir in [sid_diff, sid_long, sid_narrow, narrow_long, long]:
         for c1, c2 in zip(timestamp_chunks, timestamp_chunks_day2):
             for ts in itertools.chain(c1, c2):
                 os.makedirs(f'{pm.working_dir}/{out_dir}/{ts.date()}/hh={ts.hour:02d}', exist_ok=True)
@@ -80,9 +85,21 @@ def subtraction_step(start_time_day1: datetime, end_time_day1: datetime, chunksi
     logging.info('Dispatching tasks...')
     for c1, c2 in zip(timestamp_chunks, timestamp_chunks_day2):
         # for each image, subtract each snapshot, add subtracted images across time.
-        chord(run_image_sub.s(pm.dpp(ts1, snapshot, '.fits', 'diff'),
-                              pm.dpp(ts2, snapshot, '.fits', 'diff'),
-                              pm.dpp(ts1, sid, '.fits')) for ts1, ts2 in zip(c1, c2))(
-            run_co_add.s(output_fits_path=pm.dpp(c1[0], sid_long, '.fits')))()
-        # for narrow band, just co-add and subtract
-        pass
+        day1_snapshots = [pm.dpp(ts1, snapshot, '-image.fits') for ts1 in c1]
+        day2_snapshots = [pm.dpp(ts2, snapshot, '-image.fits') for ts2 in c2]
+        day1_narrows = [pm.dpp(ts1, narrow, '-image.fits') for ts1 in c1]
+        day2_narrows = [pm.dpp(ts2, narrow, '-image.fits') for ts2 in c2]
+        group(run_image_sub.s(pm.dpp(ts1, snapshot, '-image.fits'),
+                              pm.dpp(ts2, snapshot, '-image.fits'),
+                              os.path.dirname(pm.dpp(ts1, sid_diff, '.fits')), 'diff_') for ts1, ts2 in zip(c1, c2))()
+        run_image_sub.delay(day1_snapshots,
+                            day2_snapshots,
+                            os.path.dirname(pm.dpp(c1[0], sid_long, '.fits')), 'diff_')
+        run_image_sub.delay(day1_narrows,
+                            day2_narrows,
+                            os.path.dirname(pm.dpp(c1[0], sid_narrow, '.fits')), 'diff_')
+        # Create coadd as well since the pipeline needs it.
+        run_co_add.delay(day1_narrows, pm.dpp(c1[0], narrow_long, '-image.fits'), 0)
+        run_co_add.delay(day2_narrows, pm.dpp(c2[0], narrow_long, '-image.fits'), 0)
+        run_co_add.delay(day1_snapshots, pm.dpp(c1[0], long, '-image.fits'), 0)
+        run_co_add.delay(day2_snapshots, pm.dpp(c2[0], long, '-image.fits'), 0)
