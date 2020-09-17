@@ -1,33 +1,31 @@
-# mypy: ignore-errors
-#!/usr/bin/env python
+"""Source finding code.
+Copied from source_find.20180502.py and changed import and some statements on initial commit.
 
 # Source finding algorithm for finding transients.
 # Written to work with sequential difference images.
 # MMA - September 27 2017
+"""
 
-from __future__ import division
-import matplotlib as mpl
-#mpl.use('Agg')
-from math import *
 import numpy as np
-import argparse,sys,os,re
-from glob import glob
-import json
-import pyfits
-import scipy.ndimage.filters as filt
-import scipy.stats
+import argparse
+import sys
+import os
+import re
+import pkg_resources
+
+from astropy.io import fits as pyfits
 import scipy.cluster.hierarchy as hcluster
-import coords
-from WCS import WCS
+from orca.extra.coords import utc2jd
+from astropy.wcs import WCS
+from astropy.wcs.utils import pixel_to_skycoord
 from scipy.optimize import fmin_l_bfgs_b
-import multiprocessing
-import time
-import pdb
 
-bmajpix = 0
-bminpix = 0
-bpahdr  = 0
+from billiard.pool import Pool
 
+from typing import Optional, Tuple
+
+
+mask = np.load(pkg_resources.resource_filename('orca', 'resources/mask_4096.npy'))
 
 def fits_mask(image):
     """
@@ -38,14 +36,10 @@ def fits_mask(image):
     Assumes image dimensions are 4096!!!
     Returns image with masked (NaN) pixels.
     """
-    maskfile    = np.load('/home/mmanders/imaging_scripts/mask_4096.npz')
-    xmaskvals   = maskfile['arr_0']
-    ymaskvals   = maskfile['arr_1']
-    
-    for i in range(0,len(xmaskvals)):
-        image[xmaskvals[i],ymaskvals[i]] = np.nan
-    
+    np.place(image, mask, np.nan)
     return image
+
+
 def blockshaped(image,nrows,ncols):
     """
     Function that takes in image and returns X number of matrices corresponding to X
@@ -60,6 +54,8 @@ def blockshaped(image,nrows,ncols):
     return (image.reshape(h//nrows, nrows, -1, ncols)
                  .swapaxes(1,2)
                  .reshape(-1, nrows, ncols))
+
+
 def unblockshaped(image, h, w):
     """
     Undo the effects of blockshaped and reform image matrix.
@@ -74,13 +70,15 @@ def unblockshaped(image, h, w):
                  .swapaxes(1,2)
                  .reshape(h, w))
 
-def gauss2d((x,y), A, x0, y0, fwhmx, fwhmy, thetadeg, offset):
+
+def gauss2d(center, A, x0, y0, fwhmx, fwhmy, thetadeg, offset):
     """
     2D Gaussian function.
     fwhmx = BMAJ in pixels
     fwhmy = BMIN in pixels
     thetadeg = clock-wise rotation in degrees?
     """
+    x, y = center
     theta  = thetadeg * np.pi/180.
     sigmax = fwhmx/2.35482
     sigmay = fwhmy/2.35482
@@ -89,6 +87,8 @@ def gauss2d((x,y), A, x0, y0, fwhmx, fwhmy, thetadeg, offset):
     c   = np.sin(theta)**2 / (2*sigmax**2) + np.cos(theta)**2 / (2*sigmay**2)
     ans = offset + A * np.exp(-( a*(x-x0)**2 + 2*b*(x-x0)*(y-y0) + c*(y-y0)**2 ))
     return ans.ravel()
+
+
 def rot_ellipse(x, y, x0, y0, fwhmx, fwhmy, thetadeg):
     """
     Ellipse function, centered at x0, y0.
@@ -102,14 +102,8 @@ def rot_ellipse(x, y, x0, y0, fwhmx, fwhmy, thetadeg):
     ans = ((x-x0)*np.cos(theta) + (y-y0)*np.sin(theta))**2. / sigmax**2. \
         + (-(x-x0)*np.sin(theta) + (y-y0)*np.cos(theta))**2. / sigmay**2
     return ans
-def err_annulus(x, y, x0, y0, fwhmx, fwhmy, thetadeg):
-    """
-    Get rms within annulus surrounding source at x0,y0.
-    """
-    annulus_ind = np.where( (rot_ellipse(x,y,x0,y0,fwhmx*5,fwhmy*5,thetadeg) >= 1.) & \
-                            (rot_ellipse(x,y,x0,y0,fwhmx*7,fwhmy*7,thetadeg) <= 1.) )
-    inds        = zip(x[annulus_ind], y[annulus_ind])
-    return inds
+
+
 def gauss2d_minimization(params, *args):
     """
     Function to be used with scipy.optimize.fmin_l_bfgs_b to find best-fit
@@ -124,7 +118,8 @@ def gauss2d_minimization(params, *args):
     error                               = y - y_model
     return np.sum(error**2.)
 
-def sourcefit(imagevals,xguess,yguess,peakguess,locvals,imagecell):
+
+def sourcefit(xguess, yguess, peakguess, bmajpix, bminpix, bpahdr, locvals, imagecell):
     """
     Function that takes in image matrix (of any size), and returns the parameters for best
     fit Gaussian, in the following order:
@@ -133,11 +128,11 @@ def sourcefit(imagevals,xguess,yguess,peakguess,locvals,imagecell):
     import warnings
     warnings.filterwarnings('error')
     initialguess  = (peakguess,xguess,yguess,bmajpix,bminpix,bpahdr,0)
-    param_bounds  = [ (None,None), (0,imagecell.shape[0]-1), (0,imagecell.shape[1]-1), \
+    param_bounds  = [ (None,None), (0,imagecell.shape[0]-1), (0,imagecell.shape[1]-1),
                       (0,None), (0,None), (0,360), (None,None) ]
     locvalsx      = np.unique(locvals[0])
     locvalsy      = np.unique(locvals[1])
-    x,y           = np.meshgrid(locvalsx,locvalsy)
+    x, y           = np.meshgrid(locvalsx,locvalsy)
     image_data    = np.asarray([imagecell[pixind] for pixind in zip(x.ravel(),y.ravel())])
 
     if np.sum(np.isnan(image_data)) >= 1:
@@ -145,21 +140,22 @@ def sourcefit(imagevals,xguess,yguess,peakguess,locvals,imagecell):
         maskedarray = np.ma.fix_invalid(image_data, mask=maskvals.astype(int), fill_value=0)
         image_data  = maskedarray.data
     
-    popt,func_value,info_dict = fmin_l_bfgs_b(gauss2d_minimization, x0=initialguess, \
-                                              args=((x,y),image_data), \
+    popt,func_value,info_dict = fmin_l_bfgs_b(gauss2d_minimization, x0=initialguess,
+                                              args=((x,y),image_data),
                                               bounds=param_bounds, approx_grad=True)
     if info_dict['warnflag'] == 0:
         return popt[0],popt[1],popt[2],popt[3],popt[4],popt[5]
     if info_dict['warnflag'] in [1,2]:
-        print "Too many function evaluations or iterations, could not converge."
+        print("Too many function evaluations or iterations, could not converge.")
         return None
 
-def sourcefind(imagecell):
+
+def sourcefind(imagecell: np.array, bmajpix, bminpix, bpahdr, plotimagecell: bool = False):
     """
     Function that takes in image matrix (of any size), and returns list of identified 
     sources.
     """
-    rmscell = scipy.stats.nanstd(imagecell.ravel()) # compute (rough) noise level in cell
+    rmscell = np.nanstd(imagecell.ravel()) # compute (rough) noise level in cell
     # identify locations in cell >5*rms
     #loc = np.where(np.isfinite(imagecell) & (imagecell >= 5*rmscell))
     locold = np.where(np.isfinite(imagecell) & (np.abs(imagecell) >= 5*rmscell))
@@ -170,7 +166,7 @@ def sourcefind(imagecell):
     # get slightly "better" rms level after NaN-ing out >5sigma peaks in cell
     imagecellnopeaks         = np.copy(imagecell)
     imagecellnopeaks[locold] = np.nan
-    rmscellbetter            = scipy.stats.nanstd(imagecellnopeaks.ravel())
+    rmscellbetter            = np.nanstd(imagecellnopeaks.ravel())
     loc = np.where(np.isfinite(imagecell) & (np.abs(imagecell) >= 5*rmscellbetter))
     
     if np.asarray(loc).size == 0:
@@ -238,7 +234,6 @@ def sourcefind(imagecell):
                     clusters = hcluster.fclusterdata(X,dist,criterion='distance')
                     numclust = np.max(clusters)
             
-            plotimagecell = False
             if plotimagecell:
                 import pylab
                 sys.setrecursionlimit(10000)
@@ -253,13 +248,12 @@ def sourcefind(imagecell):
                     ax.annotate('%d' % num, fontsize=20, xy=(xval,yval), xycoords='data', color='red')
                 for num in range(1,numclusttmp+1):
                     xval,yval = np.mean(X[np.where(clusterstmp == num)],axis=0)
-                    ax.annotate('%d' % num, fontsize=15, xy=(xval,yval), xycoords='data', \
-                                xytext=(xval+25,yval+25), textcoords='data', \
-                                arrowprops=dict(arrowstyle="->",linewidth=1,color='pink'), \
+                    ax.annotate('%d' % num, fontsize=15, xy=(xval,yval), xycoords='data',
+                                xytext=(xval+25,yval+25), textcoords='data',
+                                arrowprops=dict(arrowstyle="->",linewidth=1,color='pink'),
                                 color='pink')
                 pylab.subplot(212)
-                hcluster.dendrogram(Z, leaf_rotation=90., leaf_font_size=8., color_threshold=dist)
-                pdb.set_trace()
+                hcluster.dendrogram(Z, leaf_rotation=90., leaf_font_size=8, color_threshold=dist)
     else:
         clusters = np.array([1])
         numclust = 1
@@ -294,8 +288,8 @@ def sourcefind(imagecell):
         if locvalymax >= imagecell.shape[1]:
             locvalymax = imagecell.shape[1]-1
         locvalsnewxx,locvalsnewyy = np.meshgrid(range(locvalxmin,locvalxmax),range(locvalymin,locvalymax))
-        imagevals = imagecell[locvalsnewxx.ravel(),locvalsnewyy.ravel()]
-        popt      = sourcefit(np.abs(imagevals),xguess,yguess,peakguess,[locvalsnewxx.ravel(),locvalsnewyy.ravel()],np.abs(imagecell))
+        popt = sourcefit(xguess,yguess, peakguess, bmajpix, bminpix, bpahdr,
+                         [locvalsnewxx.ravel(), locvalsnewyy.ravel()], np.abs(imagecell))
 
         if not popt:    # aka sourcefit returns None b/c it was not able to fit source
             continue
@@ -306,39 +300,42 @@ def sourcefind(imagecell):
         bmin_pix.append(popt[4])
         bpa.append(popt[5])
 
-    return pkflux,xpos_rel,ypos_rel,bmaj_pix,bmin_pix,bpa,np.zeros(len(pkflux))+rmscellbetter
+    return pkflux, xpos_rel, ypos_rel, bmaj_pix, bmin_pix, bpa, np.zeros(len(pkflux))+rmscellbetter
 
 
-def sourcefind_multithread(fitsfile, plot=False):
+def sourcefind_multithread(fitsfile: str, beam: Tuple[float, float, float], n_proc: int = 16,
+                           plot_cell: Optional[int] = None, plot_sources: bool = False):
     """
     Generate sources dictionary for input fitsfile.
-    Inputs - Path-to-fitsfile/fitsfile.fits
-    Returns a python numpy file of source "track" information for all sources identified
-        in the fits image, saved to Path-to-fitsfile/fitsfile.npz.
+
+    Args:
+        fitsfile: Path to fits file.
+        beam: (bmaj_deg, bmin_deg, bpa_deg).
+        n_proc: number of parellel source_find processes (not exceeding the number of cells).
+        plot_cell: the cell to create diagnostic plots on.
+        plot_sources: whether to make plot for detected sources.
+
+    Returns:
+
     """
-    # open fitsfile
-    hdulist = pyfits.open(fitsfile)
-    # get out image and header information
-    image   = hdulist[0].data[0,0].T
-    header  = hdulist[0].header
+    with pyfits.open(fitsfile) as hdulist:
+        image   = hdulist[0].data[0,0].T
+        header  = hdulist[0].header
     wcs     = WCS(header)
     pixscale= header['CDELT2']
     dateobs = header['date-obs']
     if header['BMAJ'] == 0:
-        bmaj    = 0.47967978178195703
-        bmin    = 0.22426370283084199
-        bpa     = 49.280091354775998
+        bmaj    = beam[0]
+        bmin    = beam[1]
+        bpa     = beam[2]
     else:
         bmaj    = header['BMAJ']
         bmin    = header['BMIN']
         bpa     = header['BPA']
-    global bmajpix
     bmajpix = bmaj/pixscale
-    global bminpix
     bminpix = bmin/pixscale
-    global bpahdr
     bpahdr  = bpa
-    jdobs   = coords.utc2jd(*filter(None,re.split('[-:T]',dateobs)))
+    jdobs   = utc2jd.utc2jd(*filter(None, re.split('[-:T]', dateobs)))
     
     # apply horizon mask -- copied pre-existing function from
     #   /home/mmanders/imaging_scripts/fits_mask.py
@@ -347,18 +344,19 @@ def sourcefind_multithread(fitsfile, plot=False):
     image_mask = fits_mask(image)
 
     # divide image into cells
-    ncells      = 16
-    nrows       = np.sqrt(image_mask.size/ncells)
-    ncols       = np.copy(nrows)
+    cell_shape = (4, 4)
+    ncells = cell_shape[0] * cell_shape[1]
+    nrows = image.shape[0] // cell_shape[0]
+    ncols = image.shape[1] // cell_shape[1]
     imagecells  = blockshaped(image_mask, nrows, ncols)
-    # divide image indices into same cells, in order to easily recover proper source 
+    # divide image indices into same cells, in order to easily recover proper source
     # location later on
-    x      = np.arange(0,image_mask.shape[0])
-    y      = np.arange(0,image_mask.shape[1])
-    x,y    = np.meshgrid(x,y)
+    x = np.arange(0,image_mask.shape[0])
+    y = np.arange(0,image_mask.shape[1])
+    x, y = np.meshgrid(x,y)
     xcells = blockshaped(x, nrows, ncols)
     ycells = blockshaped(y, nrows, ncols)
-    
+
     # tmp = sourcefind(imagecells[9])
     # pdb.set_trace()
     #for num in range(0,16):
@@ -366,14 +364,17 @@ def sourcefind_multithread(fitsfile, plot=False):
     #    tmp = sourcefind(imagecells[num])
     #    print tmp
     #    pdb.set_trace()
-    
-    
+
+
     # parallelize the source finding
-    pool = multiprocessing.Pool(ncells)
-    starttime = time.time()
-    pkflux,xpos_rel,ypos_rel,bmaj_pix,bmin_pix,bpa,rmscell = \
-            zip(*pool.map(sourcefind, imagecells))
-    print time.time() - starttime
+    if n_proc > 1:
+        pool = Pool(n_proc)
+        pkflux,xpos_rel,ypos_rel,bmaj_pix,bmin_pix,bpa,rmscell = \
+                zip(*pool.starmap(sourcefind, ((ic, bmajpix, bminpix, bpahdr) for ic in imagecells)))
+    else:
+        for imagecell in imagecells:
+            pkflux, xpos_rel, ypos_rel, bmaj_pix, bmin_pix, bpa, rmscell = \
+                sourcefind(imagecell, bmajpix, bminpix, bpahdr)
 
     pkflux_abs  = []
     ra_abs      = []
@@ -388,14 +389,18 @@ def sourcefind_multithread(fitsfile, plot=False):
         if not pkflux[cellnum]: # aka pkflux[cellnum] = []
             continue    # no sources detected in this cell
 
-        xyinds           = zip(xpos_rel[cellnum],ypos_rel[cellnum])
-        print(xyinds[0])
-        xcellnum         = xcells[cellnum]
-        ycellnum         = ycells[cellnum]
-        xpos_abs_cellnum = [ycellnum[xyind] for xyind in xyinds]
-        ypos_abs_cellnum = [xcellnum[xyind] for xyind in xyinds]
-        ra_abs_cellnum,dec_abs_cellnum = np.transpose([wcs.pix2sky(xpos,ypos) for \
-                                (xpos,ypos) in zip(xpos_abs_cellnum,ypos_abs_cellnum)])
+        # xyinds = zip(np.rint(xpos_rel[cellnum]).astype(int), np.rint(ypos_rel[cellnum]).astype(int))
+        xinds = np.rint(xpos_rel[cellnum]).astype(np.intp)
+        yinds = np.rint(ypos_rel[cellnum]).astype(np.intp)
+        xcellnum = xcells[cellnum]
+        ycellnum = ycells[cellnum]
+        xpos_abs_cellnum = ycellnum[xinds, yinds]
+        # xpos_abs_cellnum = [ycellnum[xyind] for xyind in xyinds]
+        # ypos_abs_cellnum = [xcellnum[xyind] for xyind in xyinds]
+        ypos_abs_cellnum = xcellnum[xinds, yinds]
+        skycoords = pixel_to_skycoord(xpos_abs_cellnum, ypos_abs_cellnum, wcs)
+        ra_abs_cellnum = skycoords.ra.value
+        dec_abs_cellnum = skycoords.dec.value
 
         pkflux_abs.extend(np.array(pkflux[cellnum]))
         ra_abs.extend(np.array(ra_abs_cellnum))
@@ -409,35 +414,38 @@ def sourcefind_multithread(fitsfile, plot=False):
 
     # save to numpy file
     outfilename = os.path.splitext(os.path.abspath(fitsfile))[0] + '_sfind'
-    np.savez(outfilename, xpos_abs=xpos_abs, ypos_abs=ypos_abs, ra_abs=ra_abs, \
-             dec_abs=dec_abs, pkflux_abs=pkflux_abs, bmaj_abs=bmaj_abs, bmin_abs=bmin_abs, \
+    np.savez(outfilename, xpos_abs=xpos_abs, ypos_abs=ypos_abs, ra_abs=ra_abs,
+             dec_abs=dec_abs, pkflux_abs=pkflux_abs, bmaj_abs=bmaj_abs, bmin_abs=bmin_abs,
              bpa_abs=bpa_abs, dateobs=dateobs, jdobs=jdobs, rmscell_abs=rmscell_abs)
     
-    if plot:
-        import matplotlib.pyplot as plt
-        from matplotlib.patches import Ellipse
-        import warnings
-        warnings.simplefilter("ignore")
-        #plt.ion()
-        plt.figure(figsize=(20,20))
-        plt.imshow(image_mask.T, cmap='gray', vmin=-4, vmax=4, origin='lower')
-        plt.title(os.path.splitext(os.path.basename(fitsfile))[0])
-        ax = plt.gca()
-        for sind, pkflux in enumerate(pkflux_abs):
-            ax.annotate('%d' % sind, fontsize=15, xy=(xpos_abs[sind],ypos_abs[sind]), \
-                        xycoords='data', xytext=(xpos_abs[sind]+75,ypos_abs[sind]+75), \
-                        textcoords='data', arrowprops=dict(arrowstyle="->",linewidth=1, \
-                        color='pink'), color='pink')
-            ell = Ellipse((xpos_abs[sind],ypos_abs[sind]), width=bmaj_abs[sind]/pixscale, \
-                          height=bmin_abs[sind]/pixscale, angle=-bpa_abs[sind], \
-                          edgecolor='red', facecolor='none', linewidth=1)
-            ax.add_patch(ell)
-        #plt.show()
-        #pdb.set_trace()
-        plt.savefig(outfilename+'.png')
-        import Image
-        Image.open(outfilename+'.png').save(outfilename+'.jpg','JPEG')
-    
+    if plot_sources:
+        _plot_detected_sources(bmaj_abs, bmin_abs, bpa_abs, fitsfile, image_mask, outfilename, pixscale, pkflux_abs,
+                               xpos_abs, ypos_abs)
+    return outfilename + '.npz'
+
+def _plot_detected_sources(bmaj_abs, bmin_abs, bpa_abs, fitsfile, image_mask, outfilename, pixscale, pkflux_abs,
+                           xpos_abs, ypos_abs):
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Ellipse
+    import warnings
+    warnings.simplefilter("ignore")
+    plt.figure(figsize=(20, 20))
+    plt.imshow(image_mask.T, cmap='gray', vmin=-4, vmax=4, origin='lower')
+    plt.title(os.path.splitext(os.path.basename(fitsfile))[0])
+    ax = plt.gca()
+    for sind, pkflux in enumerate(pkflux_abs):
+        ax.annotate('%d' % sind, fontsize=15, xy=(xpos_abs[sind], ypos_abs[sind]),
+                    xycoords='data', xytext=(xpos_abs[sind] + 75, ypos_abs[sind] + 75),
+                    textcoords='data', arrowprops=dict(arrowstyle="->", linewidth=1,
+                                                       color='pink'), color='pink')
+        ell = Ellipse((xpos_abs[sind], ypos_abs[sind]), width=bmaj_abs[sind] / pixscale,
+                      height=bmin_abs[sind] / pixscale, angle=-bpa_abs[sind],
+                      edgecolor='red', facecolor='none', linewidth=1)
+        ax.add_patch(ell)
+    plt.savefig(outfilename + '.png')
+    from PIL import Image
+    Image.open(outfilename + '.png').save(outfilename + '.jpg', 'JPEG')
+
 
 def main():
     parser = argparse.ArgumentParser(description="Generate sources dictionary for fitsfile.")
@@ -445,10 +453,11 @@ def main():
     parser.add_argument("--plot", default=False, action='store_true', help="Produce \
                         jpeg of source clustering.")
     args = parser.parse_args()
-    
-    starttime = time.time()
-    sourcefind_multithread(args.fitsfile, plot=args.plot)
-    print time.time() - starttime
-    
+
+    # TODO make this an input argument
+    beam = (0.33, 0.21, 56.)
+    sourcefind_multithread(args.fitsfile, beam, plot_sources=args.plot)
+
+
 if __name__ == '__main__':
     main()
