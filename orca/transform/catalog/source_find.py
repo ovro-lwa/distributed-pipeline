@@ -78,10 +78,12 @@ def gauss2d(center, A, x0, y0, fwhmx, fwhmy, thetadeg, offset):
     fwhmy = BMIN in pixels
     thetadeg = clock-wise rotation in degrees?
     """
+    # Avoid divided by 0
+    EPSILON = 1e-7
     x, y = center
     theta  = thetadeg * np.pi/180.
-    sigmax = fwhmx/2.35482
-    sigmay = fwhmy/2.35482
+    sigmax = fwhmx/2.35482 + EPSILON
+    sigmay = fwhmy/2.35482 + EPSILON
     a   = np.cos(theta)**2 / (2*sigmax**2) + np.sin(theta)**2 / (2*sigmay**2)
     b   = -np.sin(2*theta) / (4*sigmax**2) + np.sin(2*theta) / (4*sigmay**2)
     c   = np.sin(theta)**2 / (2*sigmax**2) + np.cos(theta)**2 / (2*sigmay**2)
