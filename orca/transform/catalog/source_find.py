@@ -24,6 +24,7 @@ from billiard.pool import Pool
 
 from typing import Optional, Tuple
 
+EPSILON = 1e-30
 
 mask = np.load(pkg_resources.resource_filename('orca', 'resources/mask_4096.npy'))
 
@@ -79,7 +80,6 @@ def gauss2d(center, A, x0, y0, fwhmx, fwhmy, thetadeg, offset):
     thetadeg = clock-wise rotation in degrees?
     """
     # Avoid divided by 0
-    EPSILON = 1e-7
     x, y = center
     theta  = thetadeg * np.pi/180.
     sigmax = fwhmx/2.35482 + EPSILON
