@@ -367,14 +367,22 @@ def sourcefind_multithread(fitsfile: str, beam: Tuple[float, float, float], n_pr
 
 
     # parallelize the source finding
+    pkflux, xpos_rel, ypos_rel, bmaj_pix, bmin_pix, bpas, rmscell = [], [], [], [], [], [], []
     if n_proc > 1:
         pool = Pool(n_proc)
-        pkflux,xpos_rel,ypos_rel,bmaj_pix,bmin_pix,bpa,rmscell = \
+        pkflux,xpos_rel,ypos_rel,bmaj_pix,bmin_pix,bpas,rmscell = \
                 zip(*pool.starmap(sourcefind, ((ic, bmajpix, bminpix, bpahdr) for ic in imagecells)))
     else:
         for imagecell in imagecells:
-            pkflux, xpos_rel, ypos_rel, bmaj_pix, bmin_pix, bpa, rmscell = \
+            pkflux_cell, xpos_rel_cell, ypos_rel_cell, bmaj_pix_cell, bmin_pix_cell, bpa_cell, rmscell_cell = \
                 sourcefind(imagecell, bmajpix, bminpix, bpahdr)
+            pkflux.append(pkflux_cell)
+            xpos_rel.append(xpos_rel_cell)
+            ypos_rel.append(ypos_rel_cell)
+            bmaj_pix.append(bmaj_pix_cell)
+            bmin_pix.append(bmin_pix_cell)
+            bpas.append(bpa_cell)
+            rmscell.append(rmscell_cell)
 
     pkflux_abs  = []
     ra_abs      = []
@@ -409,7 +417,7 @@ def sourcefind_multithread(fitsfile: str, beam: Tuple[float, float, float], n_pr
         ypos_abs.extend(np.array(ypos_abs_cellnum))
         bmaj_abs.extend(np.array(bmaj_pix[cellnum]) * pixscale)
         bmin_abs.extend(np.array(bmin_pix[cellnum]) * pixscale)
-        bpa_abs.extend(np.array(bpa[cellnum]))
+        bpa_abs.extend(np.array(bpas[cellnum]))
         rmscell_abs.extend(np.array(rmscell[cellnum]))
 
     # save to numpy file
