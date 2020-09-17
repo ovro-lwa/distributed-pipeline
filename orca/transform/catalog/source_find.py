@@ -12,6 +12,7 @@ import sys
 import os
 import re
 import pkg_resources
+import itertools
 
 from astropy.io import fits as pyfits
 import scipy.cluster.hierarchy as hcluster
@@ -369,12 +370,11 @@ def sourcefind_multithread(fitsfile: str, beam: Tuple[float, float, float], n_pr
     # parallelize the source finding
     if n_proc > 1:
         pool = Pool(n_proc)
-        pkflux,xpos_rel,ypos_rel,bmaj_pix,bmin_pix,bpa,rmscell = \
+        pkflux,xpos_rel,ypos_rel,bmaj_pix,bmin_pix,bpas,rmscell = \
                 zip(*pool.starmap(sourcefind, ((ic, bmajpix, bminpix, bpahdr) for ic in imagecells)))
     else:
-        for imagecell in imagecells:
-            pkflux, xpos_rel, ypos_rel, bmaj_pix, bmin_pix, bpa, rmscell = \
-                sourcefind(imagecell, bmajpix, bminpix, bpahdr)
+        pkflux,xpos_rel,ypos_rel,bmaj_pix,bmin_pix,bpas,rmscell = \
+            zip(*itertools.starmap(sourcefind, ((ic, bmajpix, bminpix, bpahdr) for ic in imagecells)))
 
     pkflux_abs  = []
     ra_abs      = []
@@ -409,7 +409,7 @@ def sourcefind_multithread(fitsfile: str, beam: Tuple[float, float, float], n_pr
         ypos_abs.extend(np.array(ypos_abs_cellnum))
         bmaj_abs.extend(np.array(bmaj_pix[cellnum]) * pixscale)
         bmin_abs.extend(np.array(bmin_pix[cellnum]) * pixscale)
-        bpa_abs.extend(np.array(bpa[cellnum]))
+        bpa_abs.extend(np.array(bpas[cellnum]))
         rmscell_abs.extend(np.array(rmscell[cellnum]))
 
     # save to numpy file
