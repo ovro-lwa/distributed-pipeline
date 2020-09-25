@@ -63,7 +63,7 @@ def flag_bls(msfile: str, blfile: str) -> str:
         Nchans = flagcol.shape[1]
         Ncorrs = flagcol.shape[2]
         # make the correlation matrix
-        flagmat = np.zeros((Nants,Nants,Nspw,Nchans,Ncorrs))
+        flagmat = np.zeros((Nants,Nants,Nspw,Nchans,Ncorrs),dtype=bool)
         tiuinds = np.triu_indices(Nants)
         # put the FLAG column into the correlation matrix
         flagmat[tiuinds] = flagcol.reshape(Nspw,Nbls,Nchans,Ncorrs).transpose(1,0,2,3)
