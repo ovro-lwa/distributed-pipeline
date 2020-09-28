@@ -1,10 +1,8 @@
-from orca.proj.boilerplate import run_dada2ms, flag_chans, apply_ant_flag, \
-    apply_bl_flag, zest, run_chgcentre, run_integrate_with_concat, do_calibration, \
-    get_spectrum, do_bandpass_correction, do_applycal
+from orca.proj.boilerplate import run_dada2ms, flag_chans, apply_ant_flag, flag_ants, apply_bl_flag, zest, run_chgcentre, run_integrate_with_concat, do_calibration, get_spectrum, do_bandpass_correction, do_applycal
 from orca.utils.calibrationutils import calibration_time_range
 from orca.utils.coordutils import CYG_A
 from orca.flagging.flag_bad_chans import flag_bad_chans
-from orca.flagging.flag_bad_ants import flag_bad_ants, concat_dada2ms, plot_autos
+from orca.flagging.flag_bad_ants import flag_bad_ants, concat_dada2ms, plot_autos, flag_ants_from_postcal_autocorr
 from orca.wrapper import change_phase_centre
 from orca.proj.celery import app
 from celery import group
@@ -24,7 +22,7 @@ pm_20200117 = OfflinePathsManager(
                   utc_times_txt_path='/lustre/data/exoplanet_20200117/utc_times.txt',
                   dadafile_dir='/lustre/data/exoplanet_20200117',
                   working_dir=f'/lustre/{user}/exoplanet/orca_testwpm/LST_nopeel',
-                  gaintable_dir=f'/lustre/{user}/exoplanet/orca_testwpm/LST_nopeel/BCAL06')
+                  gaintable_dir=f'/lustre/{user}/exoplanet/orca_testwpm/LST_nopeel/BCAL_20200924')
 
 start_time_testLSTnopeel = datetime(2020,1,22,9,30,0)
 end_time_testLSTnopeel   = datetime(2020,1,22,11,30,0)
@@ -46,8 +44,8 @@ def calibration_pipeline(start_time: datetime, end_time: datetime):
     # Get antenna flags and produce autocorrelation pdf
     msfileantflags = concat_dada2ms(pm_cal.dadafile_dir, middleBCALfile, 
                         f'{pm_cal.gaintable_dir}/{middleBCALdate.date().isoformat()}')
-    #antflagfile    = flag_bad_ants(msfileantflags)
-    antflagfile    = f'{pm_cal.gaintable_dir}/{middleBCALdate.date().isoformat()}/flag_bad_ants.ants'
+    antflagfile    = flag_bad_ants(msfileantflags)
+    #antflagfile    = f'{pm_cal.gaintable_dir}/{middleBCALdate.date().isoformat()}/flag_bad_ants.ants'
     ants           = np.genfromtxt(antflagfile, dtype=int, delimiter=',')
     pdffile        = plot_autos(msfileantflags)
     # chain together dada2ms and chgcentre commands
@@ -61,6 +59,8 @@ def calibration_pipeline(start_time: datetime, end_time: datetime):
     #
     blfile1  = '/home/mmanders/imaging_scripts/flagfiles/defaults/expansion2expansion.bl'
     blfile2  = '/home/mmanders/imaging_scripts/flagfiles/defaults/flagsRyan_adjacent.bl'
+    blfile3  = '/home/mmanders/imaging_scripts/flagfiles/defaults/withinARXboard.bl'
+    blfile4  = '/home/mmanders/imaging_scripts/flagfiles/defaults/badbaselines.bl'
     ledafile = '/home/mmanders/imaging_scripts/flagfiles/defaults/leda.ants'
     ledaants = np.genfromtxt(ledafile, dtype=int, delimiter=',')
     result   = group([run_integrate_with_concat.s([
@@ -69,23 +69,46 @@ def calibration_pipeline(start_time: datetime, end_time: datetime):
             pm_cal.get_gaintable_path(middleBCALdate.date(), f'{s:02d}', 'ms'),
             phase_center=phase_center) |
         apply_ant_flag.s(ants.tolist()) | apply_ant_flag.s(ledaants.tolist()) |
-        apply_bl_flag.s(blfile1) | apply_bl_flag.s(blfile2) |
-        do_calibration.s() |
+        apply_bl_flag.s(blfile1) | apply_bl_flag.s(blfile2) | apply_bl_flag.s(blfile3) | apply_bl_flag.s(blfile4) |
+        do_calibration.s() | flag_ants.s() | flag_ants.s(tavg = True)
+#        run_chgcentre.s(CYG_A.to_string('hmsdms')) |
+#        get_spectrum.s('CygA', timeavg=True) |
+#        do_bandpass_correction.s(pm_cal.get_bcal_path(middleBCALdate.date(),f'{s:02d}'),
+#                                 plot=True) |
+#        run_chgcentre.si(pm_cal.get_gaintable_path(middleBCALdate.date(),f'{s:02d}','ms'),
+#                         phase_center) |
+#        do_applycal.s(
+#            [pm_cal.get_gaintable_path(middleBCALdate.date(), f'{s:02d}', calext) 
+#             for calext in ['bcal','X','dcal','bcal2']] ) |
+#        run_chgcentre.s(CYG_A.to_string('hmsdms')) |
+#        get_spectrum.s('CygA_postcorrection', timeavg=True) |
+#        do_bandpass_correction.s(plot=True)
+        for s in range(2,8)
+    ])()
+    msfiles = result.get()
+#    for msfile in msfiles:
+#        antflagfilebyspw = flag_ants_from_postcal_autocorr(msfile)
+#        antflagfilebyspw2 = flag_ants_from_postcal_autocorr(msfile, tavg=True)
+#        ants2 = np.genfromtxt(antflagfilebyspw, dtype=int, delimiter=',')
+#        ants3 = np.genfromtxt(antflagfilebyspw2, dtype=int, delimiter=',')
+#        apply_ant_flag(msfile,ants2.tolist())
+#        apply_ant_flag(msfile,ants3.tolist())
+
+    # move first pass cal tables to msfiles directory so they'll get deleted in the last step
+    for s in range(2,8):
+        caltableslist = [pm_cal.get_gaintable_path(middleBCALdate.date(), f'{s:02d}', calext) 
+             for calext in ['bcal','X','dcal','cl']]
+        for caltable in caltableslist:
+            os.system(f'mv {caltable} {pm_cal.gaintable_dir}/{middleBCALdate.date().isoformat()}/msfiles')
+    # do second pass calibration
+    result2 = group([do_calibration.s(msfile) |
         run_chgcentre.s(CYG_A.to_string('hmsdms')) |
         get_spectrum.s('CygA', timeavg=True) |
         do_bandpass_correction.s(pm_cal.get_bcal_path(middleBCALdate.date(),f'{s:02d}'),
-                                 plot=True) |
-        run_chgcentre.si(pm_cal.get_gaintable_path(middleBCALdate.date(),f'{s:02d}','ms'),
-                         phase_center) |
-        do_applycal.s(
-            [pm_cal.get_gaintable_path(middleBCALdate.date(), f'{s:02d}', calext) 
-             for calext in ['bcal','X','dcal','bcal2']] ) |
-        run_chgcentre.s(CYG_A.to_string('hmsdms')) |
-        get_spectrum.s('CygA_postcorrection', timeavg=True) |
-        do_bandpass_correction.s(plot=True)
-        for s in range(2,8)
+                                 plot=True)
+        for msfile in msfiles
     ])()
-    result.get()
+    bcal2files = result2.get()
     # delete single integration measurement sets
     os.system(f'rm -r {pm_cal.gaintable_dir}/{middleBCALdate.date().isoformat()}/msfiles')
     return middleBCALdate.date()
@@ -99,18 +122,30 @@ def processing_pipeline(CALdate: date, start_time: datetime, end_time: datetime)
                   dtype=int, delimiter=',')
     blfile1 = '/home/mmanders/imaging_scripts/flagfiles/defaults/expansion2expansion.bl'
     blfile2 = '/home/mmanders/imaging_scripts/flagfiles/defaults/flagsRyan_adjacent.bl'
+    blfile3 = '/home/mmanders/imaging_scripts/flagfiles/defaults/withinARXboard.bl'
+    blfile4  = '/home/mmanders/imaging_scripts/flagfiles/defaults/badbaselines.bl'
     ledafile = '/home/mmanders/imaging_scripts/flagfiles/defaults/leda.ants'
     ledaants = np.genfromtxt(ledafile, dtype=int, delimiter=',')
-    group([
+    result = group([
         run_dada2ms.s(pm.get_dada_path(f'{s:02d}', t), 
                       out_ms=pm.get_ms_path(t, f'{s:02d}')) | 
         do_applycal.s([ pm.get_gaintable_path(CALdate, f'{s:02d}', calext) 
                         for calext in ['bcal','X','dcal','bcal2'] ]) | 
         apply_ant_flag.s(ants.tolist()) | apply_ant_flag.s(ledaants.tolist()) |
-        apply_bl_flag.s(blfile1) | apply_bl_flag.s(blfile2) | 
-        flag_chans.s(f'{s:02d}', crosshand=True, uvcut_m=50) |
+        flag_ants.s() |
+        apply_bl_flag.s(blfile1) | apply_bl_flag.s(blfile2) | apply_bl_flag.s(blfile3) | apply_bl_flag.s(blfile4) |
+        flag_chans.s(f'{s:02d}', crosshand=True) | #, uvcut_m=50) |
         zest.s()
         for t in pm.utc_times_mapping.keys() for s in range(2,8)
+    ])()
+    output = result.get()
+    # concatenate in time per spw
+    mslist = [pm.get_ms_path(t, '02') for t in pm.utc_times_mapping.keys()]
+    middlems = mslist[int(np.floor(len(mslist)/2))]
+    phase_center = change_phase_centre.get_phase_center(middlems)
+    msfiles = group([run_integrate_with_concat.s([pm.get_ms_path(t, f'{s:02d}') 
+        for t in pm.utc_times_mapping.keys()], f'{pm.working_dir}/twohourconcat/{os.path.basename(middlems)}', phase_center=phase_center)
+        for s in range(2,8)
     ])()
 
 
@@ -123,6 +158,7 @@ def spectrum_pipeline(target_coordinates: str, target_name: str, start_time: dat
         get_spectrum.s(target_name) 
         for t in pm.utc_times_mapping.keys() for s in range(2,8)
     ])()
+    return spectra
     
     #spwcounter = 0
     #intcounter = 0

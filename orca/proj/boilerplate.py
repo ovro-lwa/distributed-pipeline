@@ -87,10 +87,10 @@ def apply_ant_flag(ms_file: str, ants: list) -> str:
     return ms_file
 
 @app.task
-def flag_ants(ms_file: str) -> str:
+def flag_ants(ms_file: str, tavg: bool = False) -> str:
     from casacore.tables import table, taql
     import numpy as np
-    ant_file = flag_bad_ants.flag_ants_from_postcal_autocorr(ms_file)
+    ant_file = flag_bad_ants.flag_ants_from_postcal_autocorr(ms_file, tavg = tavg)
     antsarray = np.genfromtxt(ant_file, dtype=int, delimiter=',')
     ants = antsarray.tolist()
     with table(ms_file, ack=False) as t:
