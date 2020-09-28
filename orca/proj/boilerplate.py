@@ -3,7 +3,7 @@ from datetime import datetime
 import sys
 from typing import Optional, List
 
-from orca.flagging import flagoperations, flag_bad_chans
+from orca.flagging import flagoperations, flag_bad_chans, flag_bad_ants
 from orca.proj.celery import app
 from orca.wrapper import dada2ms, change_phase_centre, wsclean
 from orca.transform import peeling, integrate, gainscaling, spectrum, calibration, image_sub
@@ -86,6 +86,16 @@ def apply_ant_flag(ms_file: str, ants: list) -> str:
         taql(f"update $t set FLAG=True where any(ANTENNA1==$ants || ANTENNA2==$ants)")
     return ms_file
 
+@app.task
+def flag_ants(ms_file: str) -> str:
+    from casacore.tables import table, taql
+    import numpy as np
+    ant_file = flag_bad_ants.flag_ants_from_postcal_autocorr(ms_file)
+    antsarray = np.genfromtxt(ant_file, dtype=int, delimiter=',')
+    ants = antsarray.tolist()
+    with table(ms_file, ack=False) as t:
+        taql(f"update $t set FLAG=True where any(ANTENNA1==$ants || ANTENNA2==$ants)")
+    return ms_file
 
 @app.task
 def apply_bl_flag(ms_file: str, bl_file: str) -> str:
