@@ -91,10 +91,11 @@ def flag_ants(ms_file: str, tavg: bool = False) -> str:
     from casacore.tables import table, taql
     import numpy as np
     ant_file = flag_bad_ants.flag_ants_from_postcal_autocorr(ms_file, tavg = tavg)
-    antsarray = np.genfromtxt(ant_file, dtype=int, delimiter=',')
-    ants = antsarray.tolist()
-    with table(ms_file, ack=False) as t:
-        taql(f"update $t set FLAG=True where any(ANTENNA1==$ants || ANTENNA2==$ants)")
+    if ant_file:
+        antsarray = np.genfromtxt(ant_file, dtype=int, delimiter=',')
+        ants = antsarray.tolist()
+        with table(ms_file, ack=False) as t:
+            taql(f"update $t set FLAG=True where any(ANTENNA1==$ants || ANTENNA2==$ants)")
     return ms_file
 
 @app.task

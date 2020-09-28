@@ -94,6 +94,8 @@ def flag_ants_from_postcal_autocorr(msfile: str, tavg: bool = False) -> str:
         with open(antflagfile,'w') as f:
             f.write(flagsallstr2)
         return antflagfile
+    else:
+    	return None
 
 
 def flag_bad_ants(msfile: str) -> str:

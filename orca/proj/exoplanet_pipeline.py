@@ -21,8 +21,8 @@ user = os.getlogin()
 pm_20200117 = OfflinePathsManager(
                   utc_times_txt_path='/lustre/data/exoplanet_20200117/utc_times.txt',
                   dadafile_dir='/lustre/data/exoplanet_20200117',
-                  working_dir=f'/lustre/{user}/exoplanet/orca_testwpm/LST_nopeel',
-                  gaintable_dir=f'/lustre/{user}/exoplanet/orca_testwpm/LST_nopeel/BCAL_20200924')
+                  working_dir=f'/lustre/{user}/exoplanet/processing',
+                  gaintable_dir=f'/lustre/{user}/exoplanet/processing/BCAL')
 
 start_time_testLSTnopeel = datetime(2020,1,22,9,30,0)
 end_time_testLSTnopeel   = datetime(2020,1,22,11,30,0)
