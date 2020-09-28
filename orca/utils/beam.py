@@ -90,3 +90,50 @@ class beam:
         p.title('V')
         p.colorbar()
         p.show()
+
+
+class jones:
+    """
+    For loading and returning LWA dipole beam values (derived from DW beam simulations) on the ASTM.
+    Last edit: 11 September 2020
+    """
+    def __init__(self,msfile):
+        self.CRFREQ = float(tables.table(msfile+'/SPECTRAL_WINDOW', ack=False).getcell('NAME', 0))/1.e6 # center frequency in MHz
+        self.path   = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe()))) # absolute path to module
+        # load 4096x4096 grid of azimuth,elevation values
+        self.lmgrid  = np.load(BEAM_FILE_PATH+'/lmgrid.npy')
+        self.gridsize = self.lmgrid.shape[-1]
+        # load 4096x4096 grid of complex Co, Cx values
+        self.beamjonesfile = BEAM_FILE_PATH+'/beamJones.npz'
+        if os.path.exists(self.beamjonesfile):
+            self.beamjones = np.load(self.beamjonesfile)
+            self.Co    = self.beamjones['Co']
+            self.Cx    = self.beamjones['Cx']
+        else:
+            print >> sys.stderr, 'Beam .npz file does not exist at %s. Check your frequency. \
+                                  May need to generate new beam file.' % str(self.CRFREQ)
+            sys.exit()
+
+
+    def srcjones(self,l,m):
+        """Compute beam scaling factor
+        Args:
+            (l,m) coordinates
+
+        Returns: Jones matrix at coordinates (l,m)
+
+        """
+        def knn_search(arr,grid):
+            '''
+            Find 'nearest neighbor' of array of points in multi-dimensional grid
+            Source: glowingpython.blogspot.com/2012/04/k-nearest-neighbor-search.html
+            '''
+            gridsize = grid.shape[1]
+            dists    = np.sqrt(((grid - arr[:,:gridsize])**2.).sum(axis=0))
+            return np.argsort(dists)[0]
+        # index where grid equals source az el values
+        index = knn_search(np.array([ [l], [m] ]), self.lmgrid.reshape(2,self.gridsize*self.gridsize))
+        Jonesmat = np.array([ [self.Co.reshape(self.gridsize*self.gridsize)[index], self.Cx.reshape(self.gridsize*self.gridsize)[index]],
+                              [-np.rot90(self.Cx).reshape(self.gridsize*self.gridsize)[index], np.rot90(self.Co).reshape(self.gridsize*self.gridsize)[index]] ])
+        return Jonesmat
+
