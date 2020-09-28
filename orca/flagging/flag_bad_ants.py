@@ -7,7 +7,8 @@ from scipy.stats import skew
 from scipy.ndimage import filters
 from matplotlib.backends.backend_pdf import PdfPages
 import casacore.tables as tables
-from orca.proj.boilerplate import run_dada2ms
+from orca.wrapper import dada2ms
+import pdb
 
 
 def concat_dada2ms(dadafile_dir: str, BCALdadafile: str, outputdir: str):
@@ -17,11 +18,83 @@ def concat_dada2ms(dadafile_dir: str, BCALdadafile: str, outputdir: str):
     for spwind, dadapathwithspw in enumerate(np.sort(glob.glob(f'{dadafile_dir}/??/{BCALdadafile}'))):
         msfileconcat = os.path.splitext(os.path.basename(dadapathwithspw))[0]+'.ms'
         if spwind == 0:
-            run_dada2ms(dadapathwithspw, f'{outputdir}/{msfileconcat}')
+            dada2ms.dada2ms(dadapathwithspw, f'{outputdir}/{msfileconcat}')
         else:
-            run_dada2ms(dadapathwithspw, f'{outputdir}/{msfileconcat}', addspw=True)
+            dada2ms.dada2ms(dadapathwithspw, f'{outputdir}/{msfileconcat}', addspw=True)
     return f'{outputdir}/{msfileconcat}'
                     
+
+def flag_ants_from_postcal_autocorr(msfile: str, tavg: bool = False) -> str:
+    """Generates a text file containing the bad antennas.
+    DOES NOT ACTUALLY APPLY FLAGS. CURRENTLY SHOULD ONLY BE RUN ON SINGLE SPW MSs.
+    
+    Args:
+        msfile
+        tavg: If set to True, will time average before evaluating flags.
+        
+    Returns:
+        Path to the text file with the list of antennas to flag.
+    """
+    t      = tables.table(msfile, readonly=True)
+    tautos = t.query('ANTENNA1=ANTENNA2')
+    t.close()
+    # get CORRECTED_DATA
+    autos_corrected = tautos.getcol('CORRECTED_DATA')
+    autos_flags     = tautos.getcol('FLAG')
+    autos_antnums   = tautos.getcol('ANTENNA1')
+    # autos_corrected.shape = (Nants*Nints, Nchans, Ncorrs)
+    Nants = np.unique(autos_antnums).shape[0]
+    Nints = int(autos_antnums.shape[0]/Nants)
+    Ncorrs = autos_corrected.shape[-1]
+    # average over frequency, reorder
+    autos_corrected_mask = ma.masked_array(autos_corrected, mask=autos_flags, 
+                                           fill_value=np.nan)
+    autos_tseries = np.nanmean(autos_corrected_mask, axis=1).reshape(Nints, Nants, Ncorrs).transpose(1,0,2)
+    antnums_reorder = autos_antnums.reshape(Nints, Nants).transpose(1,0)
+    # autos_tseries.shape = (Nants, Nints, Ncorrs)
+    # if msfile has Nints>1, use time series; else just take median
+    if autos_tseries.shape[1] == 1:
+        arr_to_evaluate = autos_tseries[:,0,:]
+    elif tavg:
+    	arr_to_evaluate = np.nanmean(autos_tseries,axis=1)
+    else:
+        medant_tseries  = np.nanmedian(autos_tseries, axis=0)
+        arr_to_evaluate = np.nanstd(autos_tseries/medant_tseries, axis=1)
+    # separate out core and expansion antennas
+    inds_core = list(range(0,56)) + list(range(64,120)) + list(range(128,184)) + list(range(192,238))
+    inds_exp  = list(range(56,64)) + list(range(120,128)) + list(range(184,192)) + list(range(238,246))
+    medval_core = np.nanmedian(arr_to_evaluate[inds_core,:], axis=0)
+    medval_exp = np.nanmedian(arr_to_evaluate[inds_exp,:], axis=0)
+    stdval_core = np.std(arr_to_evaluate[inds_core,:], axis=0)
+    stdval_exp = np.std(arr_to_evaluate[inds_exp,:], axis=0)
+    # find 5sigma outliers, exclude, and recalculate stdval
+    newinds_core = np.asarray(inds_core)[np.where( (arr_to_evaluate[inds_core,0] < medval_core[0]+3*stdval_core[0]) | 
+                         (arr_to_evaluate[inds_core,3] < medval_core[3]+3*stdval_core[3]) )]
+    newinds_exp = np.asarray(inds_exp)[np.where( (arr_to_evaluate[inds_exp,0] < medval_exp[0]+3*stdval_exp[0]) | 
+                         (arr_to_evaluate[inds_exp,3] < medval_exp[3]+3*stdval_exp[3]) )]
+    # exclude and recalculate
+    medval_core = np.nanmedian(arr_to_evaluate[newinds_core,:], axis=0)
+    medval_exp = np.nanmedian(arr_to_evaluate[newinds_exp,:], axis=0)
+    stdval_core = np.std(arr_to_evaluate[newinds_core,:], axis=0)
+    stdval_exp = np.std(arr_to_evaluate[newinds_exp,:], axis=0)
+
+    newflagscore = np.asarray(inds_core)[np.where( (arr_to_evaluate[inds_core,0] > medval_core[0]+4*np.nanmin(stdval_core)) | 
+                         (arr_to_evaluate[inds_core,3] > medval_core[3]+4*np.nanmin(stdval_core)) )]
+    newflagsexp = np.asarray(inds_exp)[np.where( (arr_to_evaluate[inds_exp,0] > medval_exp[0]+4*np.nanmin(stdval_exp)) | 
+                         (arr_to_evaluate[inds_exp,3] > medval_exp[3]+4*np.nanmin(stdval_exp)) )]
+    flagsall = np.sort(np.append(newflagscore,newflagsexp))
+    if flagsall.size > 0:
+        antflagfile = os.path.splitext(os.path.abspath(msfile))[0]+'.ants'
+        if os.path.exists(antflagfile):
+            existingflags = np.genfromtxt(antflagfile, delimiter=',', dtype=int)
+            flagsall = np.append(flagsall, existingflags)
+            flagsall = np.unique(flagsall)
+        flagsallstr = [str(flag) for flag in flagsall]        	
+        flagsallstr2 = ",".join(flagsallstr)
+        with open(antflagfile,'w') as f:
+            f.write(flagsallstr2)
+        return antflagfile
+
 
 def flag_bad_ants(msfile: str) -> str:
     """Generates a text file containing the bad antennas.
@@ -31,7 +104,7 @@ def flag_bad_ants(msfile: str) -> str:
         msfile: msfile to generate
 
     Returns:
-        Path to the text file with list of antennas flagged.
+        Path to the text file with list of antennas to flag.
     """
     t       = tables.table(msfile, readonly=True)
     tautos  = t.query('ANTENNA1=ANTENNA2')
