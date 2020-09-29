@@ -1,4 +1,5 @@
 import numpy as np
+from typing import Optional
 import glob
 import os,argparse
 import pylab
@@ -24,7 +25,7 @@ def concat_dada2ms(dadafile_dir: str, BCALdadafile: str, outputdir: str):
     return f'{outputdir}/{msfileconcat}'
                     
 
-def flag_ants_from_postcal_autocorr(msfile: str, tavg: bool = False) -> str:
+def flag_ants_from_postcal_autocorr(msfile: str, tavg: bool = False) -> Optional[str]:
     """Generates a text file containing the bad antennas.
     DOES NOT ACTUALLY APPLY FLAGS. CURRENTLY SHOULD ONLY BE RUN ON SINGLE SPW MSs.
     
@@ -56,7 +57,7 @@ def flag_ants_from_postcal_autocorr(msfile: str, tavg: bool = False) -> str:
     if autos_tseries.shape[1] == 1:
         arr_to_evaluate = autos_tseries[:,0,:]
     elif tavg:
-    	arr_to_evaluate = np.nanmean(autos_tseries,axis=1)
+        arr_to_evaluate = np.nanmean(autos_tseries,axis=1)
     else:
         medant_tseries  = np.nanmedian(autos_tseries, axis=0)
         arr_to_evaluate = np.nanstd(autos_tseries/medant_tseries, axis=1)
@@ -95,7 +96,7 @@ def flag_ants_from_postcal_autocorr(msfile: str, tavg: bool = False) -> str:
             f.write(flagsallstr2)
         return antflagfile
     else:
-    	return None
+        return None
 
 
 def flag_bad_ants(msfile: str) -> str:
