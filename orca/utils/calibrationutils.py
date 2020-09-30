@@ -69,8 +69,9 @@ def gen_model_ms_stokes(ms: str, zest: bool = False):
     src_list = [{'label': 'CasA', 'flux': 16530, 'alpha': -0.72, 'ref_freq': 80.0,
                  'position': 'J2000 23h23m24s +58d48m54s'},
                 {'label': 'CygA', 'flux': 16300, 'alpha': -0.58, 'ref_freq': 80.0,
-                 'position': 'J2000 19h59m28.35663s +40d44m02.0970s'}]    
-    t0    = tables.table(ms, ack=False).getcell('TIME', 0)
+                 'position': 'J2000 19h59m28.35663s +40d44m02.0970s'}]
+    with tables.table(ms, ack=False) as t:
+        t0 = t.getcell('TIME', 0)
     me    = measures.measures()
     time  = me.epoch('UTC', '%fs' % t0)
     timeT = Time(time['m0']['value'], format='mjd', scale='utc')
