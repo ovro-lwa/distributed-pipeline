@@ -44,7 +44,7 @@ def test_make_dirs_called(mocked_Popen, mocked_makedirs):
     mocked_p.returncode = 0
 
     dada2ms.dada2ms('/test/data/1234567.dada', '/out/ms/out.ms', gaintable='/path/to/a1.bcal')
-    mocked_makedirs.assert_called_once_with('/out/ms/out.ms', exist_ok=True)
+    mocked_makedirs.assert_called_once_with('/out/ms/out.ms', exist_ok=False)
 
 
 @patch('logging.error')

@@ -1,6 +1,11 @@
+"""Manages configuration
+
+It's effectively a singleton using module imports.
+"""
 from os import path
 import getpass
 import logging
+import pkg_resources
 
 import yaml
 
@@ -21,6 +26,6 @@ if path.isfile(ORCA_CONF_PATH):
     config = load_yaml(ORCA_CONF_PATH)
 else:
     log.info(f'{ORCA_CONF_PATH} not found. Using default configuration.')
-    config = load_yaml(path.join(path.dirname(__file__), 'default-orca-conf.yml'))
+    config = load_yaml(pkg_resources.resource_filename('orca', 'default-orca-conf.yml'))
 
 queue_config = config['queue']

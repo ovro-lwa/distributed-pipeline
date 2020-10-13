@@ -7,17 +7,18 @@ CELERY_APP_NAME = 'proj'
 app = Celery(CELERY_APP_NAME,
              broker='pyamqp://yuping:yuping@astm13:5672/yuping',
              backend='rpc://',
-             include=['orca.proj.longbandpass',
-                      'orca.proj.boilerplate',
+             include=['orca.proj.boilerplate',
                       'orca.transform',
                       'orca.proj.onedayaverage',
                       'orca.proj.gainvariation',
-                      'orca.proj.pipeline'])
+                      'orca.proj.transientbatchtasks'
+                      ])
 
 # Optional configuration, see the application user guide.
 app.conf.update(
     result_expires=3600,
-    worker_prefetch_multiplier=1
+    worker_prefetch_multiplier=1,
+    task_serializer='json'
 )
 
 task_routes = {'*': queue_config['prefix']}

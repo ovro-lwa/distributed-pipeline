@@ -1,4 +1,5 @@
-from datetime import datetime
+"""dada2ms wrapper
+"""
 import logging
 from os import path
 import os
@@ -11,29 +12,38 @@ dada2ms_config = '/home/yuping/dada2ms.cfg'
 NEW_ENV = new_env = dict(os.environ, LD_LIBRARY_PATH='/opt/astro/mwe/usr/lib64:/opt/astro/lib/:/opt/astro/casacore-1.7.0/lib',
                          AIPSPATH='/opt/astro/casa-data dummy dummy')
 
-def dada2ms(dada_file: str, out_ms: str, gaintable: str = None) -> str:
-    """
-    Turns dada into ms.
-    TODO generate python binding for dada2ms
-    :param dada_file: Path to the dada file.
-    :param out_ms: Path to the output measurement set.
-    :param gaintable:
-    :return: Path to the generated measurement set.
-    TODO Generate a python binding for dada2ms and call it here,
-    """
+
+def dada2ms(dada_file: str, out_ms: str, gaintable: str = None, addspw: bool = False) -> str:
+    """Wrapper around Stephen Bourke's dada2ms.
+    Optionally apply a gaintable (only gaintable of type bandpass has been tested). It will write a ms with the data in
+    the DATA column. If the directory of the out_ms does not exist, it will create the directory.
+
+    Args:
+        dada_file: Path to the dada file.
+        out_ms: Path to the output measurement set.
+        gaintable: Path to the gaintable. Default is None which means don't apply the calibration.
+        addspw: Use the --apend --addspw options.
+
+    Returns: Path to the output ms. The same as out_ms
 
     """
-    TODO need to rebuild dada2ms and this won't be needed. Currently dada2ms depends on casacore libs ver 1.x and so
-    I need to set the LD_LIBRARY_PATH to something else. Alternatively, we could add a symlink in the casacore 2.0 dir.
-    I don't understand why I need this AIPSPATH stuff though.
-    """
-    os.makedirs(out_ms, exist_ok=True)
+    if not addspw:
+        os.makedirs(out_ms, exist_ok=False)
 
-    if gaintable:
+    if gaintable and (not addspw):
         proc = subprocess.Popen(
             [dada2ms_exec, '-c', dada2ms_config, '--cal', gaintable, dada_file, out_ms], env=NEW_ENV,
             stderr=subprocess.PIPE, stdout=subprocess.PIPE
         )
+    elif gaintable and addspw:
+        proc = subprocess.Popen(
+            [dada2ms_exec, '-c', dada2ms_config, '--cal', gaintable, '--append', '--addspw', dada_file, out_ms], env=NEW_ENV,
+            stderr=subprocess.PIPE, stdout=subprocess.PIPE
+        )
+    elif addspw:
+        proc = subprocess.Popen(
+            [dada2ms_exec, '-c', dada2ms_config, '--append', '--addspw', dada_file, out_ms], env=NEW_ENV, stderr=subprocess.PIPE,
+            stdout=subprocess.PIPE)
     else:
         proc = subprocess.Popen(
             [dada2ms_exec, '-c', dada2ms_config, dada_file, out_ms], env=NEW_ENV, stderr=subprocess.PIPE,

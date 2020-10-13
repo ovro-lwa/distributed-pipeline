@@ -1,6 +1,7 @@
 import pytest
+from pytest import mark
 
-from orca.utils import coord
+from orca.utils import coordutils
 
 import numpy as np
 from math import radians, atan2, sin, cos, asin, pi, sqrt, degrees
@@ -13,16 +14,51 @@ from astropy import units as u
 
 from datetime import datetime
 
+
 def test_verify_coordinates():
-    assert coord.CAS_A.separation(SkyCoord.from_name('Cas A')) < 1 * u.arcmin
-    assert coord.CYG_A.separation(SkyCoord.from_name('Cygnus A')) < 1 * u.arcmin
-    assert coord.TAU_A.separation(SkyCoord.from_name('Crab Pulsar ')) < 1 * u.arcmin
+    assert coordutils.CAS_A.separation(SkyCoord.from_name('Cas A')) < 1 * u.arcmin
+    assert coordutils.CYG_A.separation(SkyCoord.from_name('Cygnus A')) < 1 * u.arcmin
+    assert coordutils.TAU_A.separation(SkyCoord.from_name('Crab Pulsar ')) < 1 * u.arcmin
 
 
-def test_sun_icrs():
-    t = datetime(2018, 3, 23, 16, 26, 18)
-    ans = SkyCoord('00h09m23s +1d11m30s', frame=ICRS) # Read off from an image
-    assert coord.sun_icrs(t).separation(ans) < 15 * u.arcmin
+@mark.parametrize('t, expected_pos', [
+    (datetime(2018, 3, 23, 16, 26, 18), SkyCoord('00h09m23s +1d11m30s', frame=ICRS))  # Read off an image
+])
+def test_sun_icrs(t, expected_pos):
+    assert coordutils.sun_icrs(t).separation(expected_pos) < 15 * u.arcmin
+
+
+@mark.parametrize('t, direction, expected_az, expected_alt', [
+    # From Marin's code
+    (datetime(2018, 3, 23, 16, 30, 20), SkyCoord('19h59m24s +40d44m50s'), 298.79 * u.deg,  81.88 * u.deg),
+    (datetime(2018, 3, 23, 16, 30, 14), SkyCoord('20h37m12s +36d57m49s'), 254.28 * u.deg, 89.22 * u.deg),
+    (datetime(2018, 3, 22, 3, 30, 14), SkyCoord('19h59m24s +40d44m50s'), 355.27 * u.deg, -11.78 * u.deg)
+])
+def test_get_altaz_at_ovro(t, direction, expected_az, expected_alt):
+    assert coordutils.get_altaz_at_ovro(direction, t).az - expected_az < 0.1 * u.deg
+    assert coordutils.get_altaz_at_ovro(direction, t).alt - expected_alt < 0.1 * u.deg
+
+
+@mark.parametrize('az, expected_alt', [
+    # Read off mountain_azel.csv
+    (Angle('3.3 deg'), 4.00949066 * u.deg),
+    (Angle('46 deg'), 12.49629463 * u.deg),
+
+])
+def test_get_interpolated_mountain_alt(az, expected_alt):
+    assert coordutils._get_interpolated_mountain_alt(az) == expected_alt
+
+
+@mark.parametrize('coordinates, utc_time, altitude_limit, expected_ans', [
+    # Read off an image. CygA is invisible. CasA is low.
+    (coordutils.TAU_A, datetime(2018, 3, 23, 3, 26, 18), 5 * u.deg, True),
+    (coordutils.CYG_A, datetime(2018, 3, 23, 3, 26, 18), 5 * u.deg, False),
+    (coordutils.CYG_A, datetime(2018, 3, 23, 3, 26, 18), 0 * u.deg, False),
+    (coordutils.CAS_A, datetime(2018, 3, 23, 3, 26, 18), 0 * u.deg, True),
+    (coordutils.CAS_A, datetime(2018, 3, 23, 3, 26, 18), 20 * u.deg, False),
+])
+def test_is_visible(coordinates, utc_time, altitude_limit, expected_ans):
+    assert coordutils.is_visible(coordinates, utc_time, altitude_limit=altitude_limit) == expected_ans
 
 
 """
@@ -47,9 +83,11 @@ def test_astropy_never_transform_to_sun_location_to_icrs():
     # But if you use GCRS as the base frame then it should work
     assert sun_coord.separation(sun_coord2_icrs) < Angle('5 arcmin')
 
+
 """
 Regression test for using astropy's wcs conversions
 """
+
 
 def test_wcs_zenith_from_marin():
     im, header = fitsutils.read_image_fits(TEST_FITS)
@@ -69,6 +107,7 @@ def test_wcs_low_el_from_marin():
     w = __WCSFromMarin(header)
     check_convert_marin(139.1670454, -12.9494991, w, 758, 975)
 
+
 def test_wcs_below_horizon_from_marin():
     im, header = fitsutils.read_image_fits(TEST_FITS)
     w = __WCSFromMarin(header)
@@ -76,6 +115,7 @@ def test_wcs_below_horizon_from_marin():
     sky = w.pix2sky(90., 2000)
     assert math.isnan(sky[0])
     assert math.isnan(sky[1])
+
 
 class __WCSFromMarin:
     '''
