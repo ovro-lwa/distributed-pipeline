@@ -17,31 +17,31 @@ logging.basicConfig(level=logging.INFO)
 
 
 @app.task
-def run_average(ms_file_list, ref_ms_index, out_ms, fault_tolerant=True):
-    temp_ms = '/dev/shm/yuping/' + os.path.basename(out_ms)
-    average_ms(ms_file_list, ref_ms_index, temp_ms, 'DATA', tolerate_ms_io_error=fault_tolerant)
-    logging.info('Finished averaging. Copying the final measurement set from /dev/shm back.')
+def run_average(ms_file_list, ref_ms_index, out_ms, temp_dir, datacol='DATA', fault_tolerant=True):
+    temp_ms = f'{temp_dir}/{os.path.basename(out_ms)}'
+    average_ms(ms_file_list, ref_ms_index, temp_ms, datacol, tolerate_ms_io_error=fault_tolerant)
+    logging.info(f'Finished averaging. Copying the final measurement set from {temp_dir} back.')
     shutil.copytree(temp_ms, out_ms)
     shutil.rmtree(temp_ms)
 
 
 @app.task
-def running_average(dada_list: List[str], bcal: str, spw: str, out_ms: str, scratch_dir: str):
+def running_average(dada_list: List[str], bcal: str, spw: str, out_ms: str, scratch_dir: str, datacol='DATA'):
     tmpdir = f'{scratch_dir}/{uuid.uuid4()}'
     os.makedirs(tmpdir)
     count = len(dada_list)
     dada2ms.dada2ms(dada_list[0], out_ms, bcal)
     with tables.table(out_ms) as t:
-        avg = t.getcol('DATA') / count
+        avg = t.getcol(datacol) / count
 
     for i, dada in enumerate(dada_list[1:]):
         ms = dada2ms.dada2ms(dada, f'{tmpdir}/{spw}_{i+1}.ms', bcal)
         with tables.table(ms) as t:
-            avg += t.getcol('DATA') / count
+            avg += t.getcol(datacol) / count
         shutil.rmtree(ms)
 
     with tables.table(out_ms, readonly=False, ack=False) as out_t:
-        out_t.putcol('DATA', avg)
+        out_t.putcol(datacol, avg)
     shutil.rmtree(tmpdir)
 
 
