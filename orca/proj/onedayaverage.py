@@ -43,13 +43,3 @@ def running_average(dada_list: List[str], bcal: str, spw: str, out_ms: str, scra
     with tables.table(out_ms, readonly=False, ack=False) as out_t:
         out_t.putcol(datacol, avg)
     shutil.rmtree(tmpdir)
-
-
-def do_average_ms():
-    ref_ms_index = 0
-    spws = [f'{i:02d}' for i in range(22)]
-    for s in spws:
-        # TODO generate this without having to stat. This doesn't scale well on lustre
-        ms_list = sorted(glob.glob(f'/lustre/yuping/0-100-hr-reduction/blflag/msfile/2018-03-22/*/*/{s}_*.ms'))
-        out_ms = '/lustre/yuping/0-100-hr-reduction/blflag/outms2/' + os.path.basename(ms_list[ref_ms_index])
-        run_average.delay(ms_list, ref_ms_index, out_ms)
