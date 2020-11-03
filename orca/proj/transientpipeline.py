@@ -14,21 +14,24 @@ logging.basicConfig(stream=sys.stdout, level=logging.INFO,
 
 pm_whole = OfflinePathsManager(utc_times_txt_path='/home/yuping/utc_times.txt',
                                dadafile_dir='/lustre/data/2018-03-20_100hr_run',
-                               working_dir='/lustre/yuping/0-100-hr-reduction/final/',
-                               gaintable_dir='/lustre/yuping/2019-10-100-hr-take-two/bandpass/',
-                               flag_npy_paths='/home/yuping/100-hr-a-priori-flags/20191125-consolidated-flags/20200602-consolidated-flags.npy')
+                               working_dir='/lustre/yuping/0-100-hr-reduction/narrow-band-test/',
+                               gaintable_dir='/lustre/yuping/0-100-hr-reduction/bandpass/',
+                               flag_npy_paths='/home/yuping/100-hr-a-priori-flags/20201026-day-flags/2018-03-23-consolidated.npy')
 
+NARROW_ONLY = True
 
 def calibration_pipeline(start_time, end_time, cal_date):
     pm = pm_whole.time_filter(start_time=start_time,
                               end_time=end_time)
+    # spw_l = range(22)
+    spw_l = [12]
     group([
         run_dada2ms.s(pm.get_dada_path(f'{s:02d}', t), out_ms=pm.get_ms_path(t, f'{s:02d}'),
                       gaintable=pm.get_bcal_path(cal_date, f'{s:02d}')) |
         apply_a_priori_flags.s(flag_npy_path=pm.get_flag_npy_path(t)) |
         peel.s(t) |
-        flag_chans.s(spw=s, uvcut_m=30)
-        for t in pm.utc_times_mapping.keys() for s in range(22)])()
+        flag_chans.s(spw=s)
+        for t in pm.utc_times_mapping.keys() for s in spw_l])()
 
 
 def imaging_steps(start_time_day1: datetime, end_time_day1: datetime, chunk_size: int):
@@ -47,7 +50,7 @@ def imaging_steps(start_time_day1: datetime, end_time_day1: datetime, chunk_size
                                  f'{pm.working_dir}/snapshot',
                                  f'{pm.working_dir}/narrow',
                                  f'{pm.working_dir}/subsequent_diff',
-                                 '/pipedata/workdir/yuping/')
+                                 '/pipedata/workdir/yuping/', spw_list=[12])
            for i, (c1, c2) in enumerate(zip(ms_parent_chunks[:-1], ms_parent_chunks_day2[:-1]))
            ])()
     # TODO what if the last chunk has only one element?
@@ -56,7 +59,7 @@ def imaging_steps(start_time_day1: datetime, end_time_day1: datetime, chunk_size
                               f'{pm.working_dir}/snapshot',
                               f'{pm.working_dir}/narrow',
                               f'{pm.working_dir}/subsequent_diff',
-                              '/pipedata/workdir/yuping/')
+                              '/pipedata/workdir/yuping/', spw_list=[12])
 
 
 def subtraction_step(start_time_day1: datetime, end_time_day1: datetime, chunk_size: int):
@@ -85,22 +88,29 @@ def subtraction_step(start_time_day1: datetime, end_time_day1: datetime, chunk_s
     logging.info('Dispatching tasks...')
     for c1, c2 in zip(timestamp_chunks, timestamp_chunks_day2):
         # for each image, subtract each snapshot, add subtracted images across time.
-        day1_snapshots = [pm.dpp(ts1, snapshot, '-image.fits') for ts1 in c1]
-        day2_snapshots = [pm.dpp(ts2, snapshot, '-image.fits') for ts2 in c2]
+
+        if not NARROW_ONLY:
+            day1_snapshots = [pm.dpp(ts1, snapshot, '-image.fits') for ts1 in c1]
+            day2_snapshots = [pm.dpp(ts2, snapshot, '-image.fits') for ts2 in c2]
+            group(run_image_sub.s(pm.dpp(ts1, snapshot, '-image.fits'),
+                                  pm.dpp(ts2, snapshot, '-image.fits'),
+                                  os.path.dirname(pm.dpp(ts1, sid_diff, '.fits')), 'diff_') for ts1, ts2 in zip(c1, c2))()
+            run_image_sub.delay(day1_snapshots,
+                                day2_snapshots,
+                                os.path.dirname(pm.dpp(c1[0], sid_long, '.fits')), 'diff_')
+            run_co_add.delay(day1_snapshots, pm.dpp(c1[0], long, '-image.fits'), 0)
+            run_co_add.delay(day2_snapshots, pm.dpp(c2[0], long, '-image.fits'), 0)
+
         day1_narrows = [pm.dpp(ts1, narrow, '-image.fits') for ts1 in c1]
         day2_narrows = [pm.dpp(ts2, narrow, '-image.fits') for ts2 in c2]
-        group(run_image_sub.s(pm.dpp(ts1, snapshot, '-image.fits'),
-                              pm.dpp(ts2, snapshot, '-image.fits'),
-                              os.path.dirname(pm.dpp(ts1, sid_diff, '.fits')), 'diff_') for ts1, ts2 in zip(c1, c2))()
-        run_image_sub.delay(day1_snapshots,
-                            day2_snapshots,
-                            os.path.dirname(pm.dpp(c1[0], sid_long, '.fits')), 'diff_')
         run_image_sub.delay(day1_narrows,
                             day2_narrows,
                             os.path.dirname(pm.dpp(c1[0], sid_narrow, '.fits')), 'diff_')
         # Create coadd as well since the pipeline needs it.
         run_co_add.delay(day1_narrows, pm.dpp(c1[0], narrow_long, '-image.fits'), 0)
         run_co_add.delay(day2_narrows, pm.dpp(c2[0], narrow_long, '-image.fits'), 0)
+        """
         run_co_add.delay(day1_snapshots, pm.dpp(c1[0], long, '-image.fits'), 0)
         run_co_add.delay(day2_snapshots, pm.dpp(c2[0], long, '-image.fits'), 0)
+        """
 

@@ -96,6 +96,7 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
         log.info('Merging flags.')
         _parallel_merge_flags(large_pool, copied_ms_parent_list + copied_ms_parent_day2_list, spw_list)
 
+        """
         log.info('Start imaging.')
 
         temp_im_dir = temp + '/snapshots'
@@ -126,20 +127,21 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
         # save some disk space
         log.info('Removing snapshot temp directory.')
         shutil.rmtree(temp_im_dir)
-
+        """
         # Narrow band imaging
         log.info('Imaging narrow band.')
         tmp_narrow_path = f'{temp}/narrow'
         os.makedirs(tmp_narrow_path)
+        narrow_chan_width = 100
         start_chan = str(51 - narrow_chan_width // 2)
         end_chan = str(51 + narrow_chan_width // 2 + 1)
         narrow_snapshots1, timestamps1 = \
-            _parallel_wsclean_snapshot_sources_removed_async(large_pool,
+            _parallel_wsclean_snapshot_sources_removed_async(small_pool,
                                                              copied_ms_parent_list, temp,
                                                              tmp_narrow_path, ['12'],
                                                              more_args=['-channelrange', start_chan, end_chan])
         narrow_snapshots2, timestamps2 = \
-            _parallel_wsclean_snapshot_sources_removed_async(large_pool,
+            _parallel_wsclean_snapshot_sources_removed_async(small_pool,
                                                              copied_ms_parent_day2_list, temp,
                                                              tmp_narrow_path, ['12'],
                                                              more_args=['-channelrange', start_chan, end_chan])
@@ -156,7 +158,8 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
         large_pool.join()
         shutil.rmtree(temp)
 
-    return snapshots1, snapshots2, narrow_snapshots1, narrow_snapshots2
+    # return snapshots1, snapshots2, narrow_snapshots1, narrow_snapshots2
+    return [], [], narrow_snapshots1, narrow_snapshots2
 
 
 def _copy_snapshots_back(snapshot_image_dir, snapshots1, snapshots2, timestamps1, timestamps2):
