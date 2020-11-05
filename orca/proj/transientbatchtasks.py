@@ -132,7 +132,6 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
         log.info('Imaging narrow band.')
         tmp_narrow_path = f'{temp}/narrow'
         os.makedirs(tmp_narrow_path)
-        narrow_chan_width = 100
         start_chan = str(51 - narrow_chan_width // 2)
         end_chan = str(51 + narrow_chan_width // 2 + 1)
         narrow_snapshots1, timestamps1 = \
