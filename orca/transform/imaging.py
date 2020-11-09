@@ -78,7 +78,7 @@ def make_residual_image_with_source_removed(ms_list: List[str], timestamp: datet
 
     """
     log.info(f'Imaging {ms_list[0]}... with length {len(ms_list)}.')
-    dirty_image = make_dirty_image(ms_list, output_dir, output_prefix, inner_tukey=inner_tukey)
+    dirty_image = make_dirty_image(ms_list, output_dir, output_prefix, inner_tukey=inner_tukey, more_args=more_args)
 
     extra_args = ['-size', str(IMSIZE), str(IMSIZE), '-scale', str(IM_SCALE_DEGREE),
                   '-weight', 'briggs', '0',
@@ -149,7 +149,8 @@ def get_peak_around_source(im_T: np.ndarray, source_coord: SkyCoord, w: wcs.WCS)
 
 
 def make_dirty_image(ms_list: List[str], output_dir: str, output_prefix: str, make_psf: bool = False,
-                     inner_tukey: Optional[int] = None, n_thread: int = 10) -> Union[str, Tuple[str, str]]:
+                     inner_tukey: Optional[int] = None, n_thread: int = 10,
+                     more_args: Optional[List[str]] = None) -> Union[str, Tuple[str, str]]:
     """Make dirty image out of list of measurement sets.
 
     Args:
@@ -159,6 +160,7 @@ def make_dirty_image(ms_list: List[str], output_dir: str, output_prefix: str, ma
         make_psf:
         inner_tukey:
         n_thread:
+        more_args:
 
     Returns: if make_psf, (image path, psf path), else just the image path.
 
@@ -168,7 +170,7 @@ def make_dirty_image(ms_list: List[str], output_dir: str, output_prefix: str, ma
     extra_args = ['-size', str(IMSIZE), str(IMSIZE), '-scale', str(IM_SCALE_DEGREE),
                   '-niter', '0', '-weight', 'briggs', '0',
                   '-no-update-model-required', '-no-reorder',
-                  '-j', str(n_thread)] + taper_args
+                  '-j', str(n_thread)] + taper_args + more_args
     wsclean.wsclean(ms_list, output_dir, output_prefix, extra_arg_list=extra_args)
     if make_psf:
         extra_args = ['-size', str(2 * IMSIZE), str(2 * IMSIZE), '-scale', str(IM_SCALE_DEGREE),
