@@ -103,3 +103,4 @@ def subtraction_step(start_time_day1: datetime, end_time_day1: datetime, chunk_s
         run_co_add.delay(day2_narrows, pm.dpp(c2[0], narrow_long, '-image.fits'), 0)
         run_co_add.delay(day1_snapshots, pm.dpp(c1[0], long, '-image.fits'), 0)
         run_co_add.delay(day2_snapshots, pm.dpp(c2[0], long, '-image.fits'), 0)
+

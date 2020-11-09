@@ -148,6 +148,38 @@ def add(x: int, y: int) -> int:
 def str_concat(first, second, third=''):
     return f'{first}{second}{third}'
 
+"""
+For debugging
+"""
+
+import shutil
+import os
+import numpy as np
+from casacore.tables import table
+
+
+@app.task
+def pcp(source, target_dir):
+    os.makedirs(target_dir, exist_ok=True)
+    shutil.copy(source, target_dir)
+
+
+@app.task
+def pcp_tree(source, target_dir):
+    os.makedirs(target_dir, exist_ok=True)
+    shutil.copytree(source, f'{target_dir}/{os.path.basename(source)}')
+
+
+@app.task
+def read_dada(dada):
+    arr = np.fromfile(dada, dtype=np.int32, offset=4096)
+
+
+@app.task
+def read_ms(ms, lock):
+    with table(ms, ack=False, readonly=lock) as t:
+        arr = t.getcol('DATA')
+
 
 @app.task
 def test_multiprocessing():

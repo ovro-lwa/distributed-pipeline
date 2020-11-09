@@ -106,8 +106,7 @@ def make_residual_image_with_source_removed(ms_list: List[str], timestamp: datet
     if coordutils.is_visible(sun_icrs, timestamp):
         fits_mask_center_list.append(get_peak_around_source(im_T, sun_icrs, wcs.WCS(header)))
         fits_mask_width_list.append(81)
-        if len(ms_list) > 11:
-            channelsout = SUN_CHANNELS_OUT
+        channelsout = SUN_CHANNELS_OUT
         log.info(f'Removing the Sun by splitting in {channelsout} bands.')
 
     if fits_mask_width_list:
