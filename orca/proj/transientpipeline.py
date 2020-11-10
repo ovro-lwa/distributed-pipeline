@@ -27,7 +27,7 @@ def calibration_pipeline(start_time, end_time, cal_date):
                       gaintable=pm.get_bcal_path(cal_date, f'{s:02d}')) |
         apply_a_priori_flags.s(flag_npy_path=pm.get_flag_npy_path(t)) |
         peel.s(t) |
-        flag_chans.s(spw=s)
+        flag_chans.s(spw=s, uvcut_m=30)
         for t in pm.utc_times_mapping.keys() for s in range(22)])()
 
 
