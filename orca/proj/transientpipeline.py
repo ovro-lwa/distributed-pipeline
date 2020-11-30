@@ -3,7 +3,7 @@ from celery import group, chord
 from ..metadata.pathsmanagers import OfflinePathsManager, SIDEREAL_DAY
 from orca.proj.transientbatchtasks import make_image_products
 
-from datetime import datetime, date
+from datetime import datetime, timedelta
 import itertools
 import sys
 import logging
@@ -14,11 +14,15 @@ logging.basicConfig(stream=sys.stdout, level=logging.INFO,
 
 pm_whole = OfflinePathsManager(utc_times_txt_path='/home/yuping/utc_times.txt',
                                dadafile_dir='/lustre/data/2018-03-20_100hr_run',
-                               working_dir='/lustre/yuping/0-100-hr-reduction/narrow-band-test/',
+                               working_dir='/lustre/yuping/0-100-hr-reduction/final-narrow/',
                                gaintable_dir='/lustre/yuping/0-100-hr-reduction/bandpass/',
-                               flag_npy_paths='/home/yuping/100-hr-a-priori-flags/20201026-day-flags/2018-03-23-consolidated.npy')
+                               flag_npy_paths='/home/yuping/100-hr-a-priori-flags/20201026-day-flags/2018-03-24-consolidated.npy')
 
 NARROW_ONLY = True
+
+INTEGRATION_TIME = timedelta(seconds=13)
+
+TMP_DIR = '/lustre/yuping/scratch'
 
 def calibration_pipeline(start_time, end_time, cal_date):
     pm = pm_whole.time_filter(start_time=start_time,
@@ -42,6 +46,9 @@ def imaging_steps(start_time_day1: datetime, end_time_day1: datetime, chunk_size
     ms_parent_chunks = [[pm.get_ms_parent_path(ts) for ts in c] for c in timestamp_chunks]
     ms_parent_chunks_day2 = [[pm.get_ms_parent_path(ts) for ts in c] for c in timestamp_chunks_day2]
 
+    ms_after_last_day1 = pm.get_ms_parent_path(end_time_day1)
+    ms_after_last_day2 = pm.get_ms_parent_path(end_time_day1 + SIDEREAL_DAY)
+
     assert len(ms_parent_chunks) == len(ms_parent_chunks_day2)
     logging.info(f'Chunk size is {len(ms_parent_chunks)} with last chunk size {len(ms_parent_chunks[-1])}.')
     group([make_image_products.s(c1, c2,
@@ -50,16 +57,16 @@ def imaging_steps(start_time_day1: datetime, end_time_day1: datetime, chunk_size
                                  f'{pm.working_dir}/snapshot',
                                  f'{pm.working_dir}/narrow',
                                  f'{pm.working_dir}/subsequent_diff',
-                                 '/pipedata/workdir/yuping/', spw_list=[12])
+                                 TMP_DIR, spw_list=[12])
            for i, (c1, c2) in enumerate(zip(ms_parent_chunks[:-1], ms_parent_chunks_day2[:-1]))
            ])()
     # TODO what if the last chunk has only one element?
-    make_image_products.delay(ms_parent_chunks[-1][:-1], ms_parent_chunks_day2[-1][:-1],
-                              ms_parent_chunks[-1][-1], ms_parent_chunks_day2[-1][-1],
+    make_image_products.delay(ms_parent_chunks[-1], ms_parent_chunks_day2[-1],
+                              ms_after_last_day1, ms_after_last_day2,
                               f'{pm.working_dir}/snapshot',
                               f'{pm.working_dir}/narrow',
                               f'{pm.working_dir}/subsequent_diff',
-                              '/pipedata/workdir/yuping/', spw_list=[12])
+                              TMP_DIR, spw_list=[12])
 
 
 def subtraction_step(start_time_day1: datetime, end_time_day1: datetime, chunk_size: int):
@@ -77,8 +84,8 @@ def subtraction_step(start_time_day1: datetime, end_time_day1: datetime, chunk_s
     sid_long = 'sidereal_long_diff'
     sid_narrow = 'sidereal_narrow_diff'
 
-    timestamp_chunks[-1] = timestamp_chunks[-1][:-1]
-    timestamp_chunks_day2[-1] = timestamp_chunks_day2[-1][:-1]
+    timestamp_chunks[-1] = timestamp_chunks[-1]
+    timestamp_chunks_day2[-1] = timestamp_chunks_day2[-1]
     logging.info('Making directories.')
     for out_dir in [sid_diff, sid_long, sid_narrow, narrow_long, long]:
         for c1, c2 in zip(timestamp_chunks, timestamp_chunks_day2):
@@ -109,8 +116,8 @@ def subtraction_step(start_time_day1: datetime, end_time_day1: datetime, chunk_s
         # Create coadd as well since the pipeline needs it.
         run_co_add.delay(day1_narrows, pm.dpp(c1[0], narrow_long, '-image.fits'), 0)
         run_co_add.delay(day2_narrows, pm.dpp(c2[0], narrow_long, '-image.fits'), 0)
-        """
-        run_co_add.delay(day1_snapshots, pm.dpp(c1[0], long, '-image.fits'), 0)
-        run_co_add.delay(day2_snapshots, pm.dpp(c2[0], long, '-image.fits'), 0)
-        """
+
+        if not NARROW_ONLY:
+            run_co_add.delay(day1_snapshots, pm.dpp(c1[0], long, '-image.fits'), 0)
+            run_co_add.delay(day2_snapshots, pm.dpp(c2[0], long, '-image.fits'), 0)
 

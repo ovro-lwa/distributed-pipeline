@@ -66,8 +66,8 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
 
     temp = f'{scratch_dir}/{uuid.uuid4()}'
     os.makedirs(temp)
-    small_pool = Pool(8)
-    large_pool = Pool(11)
+    small_pool = Pool(4)
+    large_pool = Pool(8)
     try:
         middle_ms = glob(f'{ms_parent_list[len(ms_parent_list) // 2]}/??_*.ms')[0]
         phase_center = change_phase_centre.get_phase_center(middle_ms)

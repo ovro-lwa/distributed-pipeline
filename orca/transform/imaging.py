@@ -19,7 +19,7 @@ from orca.wrapper import wsclean
 
 log = logging.getLogger(__name__)
 
-CLEAN_THRESHOLD_JY = 25
+CLEAN_THRESHOLD_JY = 50
 CLEAN_THRESHOLD_JY_CRAB = 50
 
 CLEAN_MGAIN = 0.8
