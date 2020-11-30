@@ -19,6 +19,16 @@ def test_time_filter():
     assert pm2.utc_times_mapping[datetime(2019, 10, 28, 23, 4, 44)] == \
            '2019-10-22-02:35:47_0005246685093888.000000.dada'
 
+
+def test_time_filter_inclusive_exclusive():
+    pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt', '.')
+    b = datetime(2019, 10, 28, 23, 2, 47)
+    e = datetime(2019, 10, 28, 23, 4, 5)
+    pm2 = pm.time_filter(b, e)
+    assert len(pm2.utc_times_mapping) == 6
+    assert b in pm2.utc_times_mapping
+    assert e not in pm2.utc_times_mapping
+
 def test_with_bad_path():
     with pytest.raises(FileNotFoundError):
         pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt',
