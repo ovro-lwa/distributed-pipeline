@@ -179,8 +179,11 @@ class OfflinePathsManager(PathsManager):
             new_paths_manager: New PathsManager object with time filtered.
         """
         new_paths_manager = copy.deepcopy(self)
-        new_paths_manager.utc_times_mapping = OrderedDict((k, v) for k, v in self.utc_times_mapping.items()
-                                                          if start_time <= k < end_time)
+        if start_time == end_time:
+            new_paths_manager.utc_times_mapping = OrderedDict([(start_time, self.utc_times_mapping[start_time])])
+        else:
+            new_paths_manager.utc_times_mapping = OrderedDict((k, v) for k, v in self.utc_times_mapping.items()
+                                                              if start_time <= k < end_time)
         return new_paths_manager
 
     def chunks_by_integration(self, chunk_size: int) -> List[List[datetime]]:

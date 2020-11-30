@@ -29,6 +29,14 @@ def test_time_filter_inclusive_exclusive():
     assert b in pm2.utc_times_mapping
     assert e not in pm2.utc_times_mapping
 
+
+def test_time_filter_single():
+    pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt', '.')
+    b = datetime(2019, 10, 28, 23, 2, 47)
+    pm2 = pm.time_filter(b, b)
+    assert len(pm2.utc_times_mapping) == 1
+
+
 def test_with_bad_path():
     with pytest.raises(FileNotFoundError):
         pm = OfflinePathsManager(f'{path.dirname(__file__)}/../resources/utc_times_test.txt',
