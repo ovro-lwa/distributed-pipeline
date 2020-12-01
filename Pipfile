@@ -24,6 +24,7 @@ casatools = {version = '*',index = 'nrao'}
 casatasks = {version = '*',index = 'nrao'}
 ovro-lwa-orca = {editable = true,path = "."}
 psutil = "*"
+cryptography = ">=3.2"
 
 [dev-packages]
 pytest = '*'
