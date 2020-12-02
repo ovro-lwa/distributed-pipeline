@@ -48,14 +48,14 @@ class OfflinePathsManager(PathsManager):
 
     """
     def __init__(self, utc_times_txt_path: str, dadafile_dir: Optional[str] = None, working_dir: Optional[str] = None,
-                 gaintable_dir: str = None, flag_npy_paths: Optional[Union[str, Dict[date, str]]] = None):
+                 gaintable_dir: str = None, flag_npy_paths: Optional[Union[str, Dict[datetime, str]]] = None):
         for d in (dadafile_dir, working_dir, gaintable_dir):
             if d and not path.exists(d):
                 raise FileNotFoundError(f"File not found or path does not exist: {d}.")
         super().__init__(utc_times_txt_path, dadafile_dir)
         self._working_dir: Optional[str] = working_dir
         self._gaintable_dir: Optional[str] = gaintable_dir
-        self._flag_npy_paths: Union[str, Dict[date, str], None] = flag_npy_paths
+        self._flag_npy_paths: Optional[Union[str, Dict[datetime, str]]] = flag_npy_paths
 
     @property
     def working_dir(self) -> str:
