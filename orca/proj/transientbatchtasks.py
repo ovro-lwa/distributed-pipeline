@@ -23,6 +23,8 @@ from orca.flagging.flagoperations import merge_group_flags
 
 log = logging.getLogger(__name__)
 
+NARROW_ONLY = True
+
 
 @app.task(autoretry_for=(WorkerLostError,), retry_kwargs={'max_retries': 1, 'countdown': 2})
 def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str],
@@ -97,35 +99,37 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
         _parallel_merge_flags(large_pool, copied_ms_parent_list + copied_ms_parent_day2_list, spw_list)
 
         log.info('Start imaging.')
+        if not NARROW_ONLY:
+            temp_im_dir = temp + '/snapshots'
+            os.makedirs(temp_im_dir)
+            snapshots1, timestamps1 = _parallel_wsclean_snapshot_sources_removed_async(
+                small_pool,
+                copied_ms_parent_list + [copied_after_end],
+                temp, temp_im_dir, spw_list)
+            snapshots2, timestamps2 = _parallel_wsclean_snapshot_sources_removed_async(
+                small_pool,
+                copied_ms_parent_day2_list +
+                [copied_after_end_day2],
+                temp, temp_im_dir, spw_list)
+            snapshots2 = snapshots2.get()
+            snapshots1 = snapshots1.get()
+            log.info('Start subsequent subtraction.')
+            # subsequent subtraction
+            for i in range(len(snapshots1[:-1])):
+                outdir1 = f'{snapshot_diff_outdir}/{timestamps1[i].date()}/hh={timestamps1[i].hour:02d}'
+                outdir2 = f'{snapshot_diff_outdir}/{timestamps2[i].date()}/hh={timestamps2[i].hour:02d}'
+                os.makedirs(outdir1, exist_ok=True)
+                os.makedirs(outdir2, exist_ok=True)
+                image_sub.image_sub(snapshots1[i], snapshots1[i + 1], outdir1)
+                image_sub.image_sub(snapshots2[i], snapshots2[i + 1], outdir2)
+            snapshots1 = snapshots1[:-1]
+            snapshots2 = snapshots2[:-1]
 
-        temp_im_dir = temp + '/snapshots'
-        os.makedirs(temp_im_dir)
-        snapshots1, timestamps1 = _parallel_wsclean_snapshot_sources_removed_async(small_pool,
-                                                                                   copied_ms_parent_list + [copied_after_end],
-                                                                                   temp, temp_im_dir, spw_list)
-        snapshots2, timestamps2 = _parallel_wsclean_snapshot_sources_removed_async(small_pool,
-                                                                                   copied_ms_parent_day2_list +
-                                                                                   [copied_after_end_day2],
-                                                                                   temp, temp_im_dir, spw_list)
-        snapshots2 = snapshots2.get()
-        snapshots1 = snapshots1.get()
-        log.info('Start subsequent subtraction.')
-        # subsequent subtraction
-        for i in range(len(snapshots1[:-1])):
-            outdir1 = f'{snapshot_diff_outdir}/{timestamps1[i].date()}/hh={timestamps1[i].hour:02d}'
-            outdir2 = f'{snapshot_diff_outdir}/{timestamps2[i].date()}/hh={timestamps2[i].hour:02d}'
-            os.makedirs(outdir1, exist_ok=True)
-            os.makedirs(outdir2, exist_ok=True)
-            image_sub.image_sub(snapshots1[i], snapshots1[i + 1], outdir1)
-            image_sub.image_sub(snapshots2[i], snapshots2[i + 1], outdir2)
-        snapshots1 = snapshots1[:-1]
-        snapshots2 = snapshots2[:-1]
+            _copy_snapshots_back(snapshot_image_dir, snapshots1, snapshots2, timestamps1, timestamps2)
 
-        _copy_snapshots_back(snapshot_image_dir, snapshots1, snapshots2, timestamps1, timestamps2)
-
-        # save some disk space
-        log.info('Removing snapshot temp directory.')
-        shutil.rmtree(temp_im_dir)
+            # save some disk space
+            log.info('Removing snapshot temp directory.')
+            shutil.rmtree(temp_im_dir)
 
         # Narrow band imaging
         log.info('Imaging narrow band.')
@@ -156,7 +160,10 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
         large_pool.join()
         shutil.rmtree(temp)
 
-    return snapshots1, snapshots2, narrow_snapshots1, narrow_snapshots2
+    if NARROW_ONLY:
+        return [], [], narrow_snapshots1, narrow_snapshots2
+    else:
+        return snapshots1, snapshots2, narrow_snapshots1, narrow_snapshots2
 
 
 def _copy_snapshots_back(snapshot_image_dir, snapshots1, snapshots2, timestamps1, timestamps2):

@@ -17,10 +17,12 @@ import numpy as np
 from orca.utils import fitsutils, coordutils
 from orca.wrapper import wsclean
 
+NARROW_ONLY = True
+
 log = logging.getLogger(__name__)
 
-CLEAN_THRESHOLD_JY = 5
-CLEAN_THRESHOLD_JY_CRAB = 20
+CLEAN_THRESHOLD_SUN_JY = 50 if NARROW_ONLY else 5
+CLEAN_THRESHOLD_JY = 50 if NARROW_ONLY else 20
 
 CLEAN_MGAIN = 0.8
 SUN_CHANNELS_OUT = 2
@@ -119,7 +121,7 @@ def make_residual_image_with_source_removed(ms_list: List[str], timestamp: datet
         if channelsout:
             wsclean.wsclean(ms_list, output_dir, output_prefix, extra_arg_list=extra_args +
                             ['-channelsout', str(channelsout), '-fitsmask', fits_mask,
-                             '-threshold', str(CLEAN_THRESHOLD_JY),
+                             '-threshold', str(CLEAN_THRESHOLD_SUN_JY),
                              '-mgain', str(CLEAN_MGAIN)] +
                             taper_args)
             log.info('Renaming the MFS-residual fits file to image after source removal.')
@@ -128,7 +130,7 @@ def make_residual_image_with_source_removed(ms_list: List[str], timestamp: datet
             wsclean.wsclean(ms_list, output_dir, output_prefix,
                             extra_arg_list=extra_args +
                                            ['-fitsmask', fits_mask, '-threshold',
-                                            str(CLEAN_THRESHOLD_JY_CRAB),
+                                            str(CLEAN_THRESHOLD_JY),
                                             '-mgain', str(CLEAN_MGAIN)] +
                                            taper_args)
             log.info('Renaming the residual fits file to image after source removal.')
