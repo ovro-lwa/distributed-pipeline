@@ -22,7 +22,7 @@ def test_source_find_correctness(n_proc):
         shutil.copy(TEST_DIFF_IM, f'{dir}/test.fits')
         out_npy = source_find.sourcefind_multithread(f'{dir}/test.fits',
                                                      (0.47967978178195703, 0.22426370283084199, 49.280091354775998),
-                                                     n_proc=1)
+                                                     n_proc=n_proc)
         ans = np.load(out_npy)
         expected = np.load(EXPECTED_CAT)
 

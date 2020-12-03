@@ -83,6 +83,10 @@ def gauss2d(center, A, x0, y0, fwhmx, fwhmy, thetadeg, offset):
     theta  = thetadeg * np.pi/180.
     sigmax = fwhmx/2.35482
     sigmay = fwhmy/2.35482
+    if sigmax == 0.:
+        sigmax = 1.
+    if sigmay == 0.:
+        sigmay = 1.
     a   = np.cos(theta)**2 / (2*sigmax**2) + np.sin(theta)**2 / (2*sigmay**2)
     b   = -np.sin(2*theta) / (4*sigmax**2) + np.sin(2*theta) / (4*sigmay**2)
     c   = np.sin(theta)**2 / (2*sigmax**2) + np.cos(theta)**2 / (2*sigmay**2)
@@ -443,8 +447,6 @@ def _plot_detected_sources(bmaj_abs, bmin_abs, bpa_abs, fitsfile, image_mask, ou
                       edgecolor='red', facecolor='none', linewidth=1)
         ax.add_patch(ell)
     plt.savefig(outfilename + '.png')
-    from PIL import Image
-    Image.open(outfilename + '.png').save(outfilename + '.jpg', 'JPEG')
 
 
 def main():
@@ -452,11 +454,12 @@ def main():
     parser.add_argument("fitsfile", type=str, help="Path-to-fitsfile/fitsfile.fits")
     parser.add_argument("--plot", default=False, action='store_true', help="Produce \
                         jpeg of source clustering.")
+    parser.add_argument("--nprocs", default=1, type=int, help="Number of processes to use.")
     args = parser.parse_args()
 
     # TODO make this an input argument
-    beam = (0.33, 0.21, 56.)
-    sourcefind_multithread(args.fitsfile, beam, plot_sources=args.plot)
+    beam = (0.463562791015488, 0.216336343658053, 92.95)  # Narrow band
+    sourcefind_multithread(args.fitsfile, beam, plot_sources=args.plot, n_proc=args.nprocs)
 
 
 if __name__ == '__main__':
