@@ -1,6 +1,6 @@
 import pytest
 
-from orca.transform.catalog import source_find
+from orca.extra import source_find
 from os import path
 
 import tempfile
