@@ -37,6 +37,7 @@ mypy = "*"
 seaborn = "*"
 sphinxcontrib-napoleon = "*"
 sphinx-rtd-theme = '*'
+ipympl = "*"
 
 [requires]
 python_version = "3.6"
