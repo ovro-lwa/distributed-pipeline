@@ -10,8 +10,8 @@ import os
 
 import numpy as np
 
-TEST_DIFF_IM = f'{path.dirname(__file__)}/../../resources/diff_2018-03-22T15:57:44-image.fits'
-EXPECTED_CAT = f'{path.dirname(__file__)}/../../resources/diff_2018-03-22T15:57:44-image_sfind_marin.npz'
+TEST_DIFF_IM = f'{path.dirname(__file__)}/../resources/diff_2018-03-22T15:57:44-image.fits'
+EXPECTED_CAT = f'{path.dirname(__file__)}/../resources/diff_2018-03-22T15:57:44-image_sfind_marin.npz'
 
 
 @pytest.mark.skipif('TRAVIS' in os.environ, reason="Numerical instability on travis")
