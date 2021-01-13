@@ -21,20 +21,20 @@ def test_npz_to_table():
 def test_create_table_with_source_id():
     cat = np.load(TEST_NPZ)
     source_id = np.arange(cat['xpos_abs'].shape[0], dtype=np.int)
-    t = catalogutils.npz_to_table(xpos_abs=cat['xpos_abs'], ypos_abs=cat['ypos_abs'], ra_abs=cat['ra_abs'],
-                                  dec_abs=cat['dec_abs'], pkflux_abs=cat['pkflux_abs'], bmaj_abs=cat['bmaj_abs'],
-                                  bmin_abs=cat['bmin_abs'], bpa_abs=cat['bpa_abs'], dateobs=cat['dateobs'],
-                                  jdobs=cat['jdobs'], rmscell_abs=cat['rmscell_abs'], source_id=source_id)
+    t = catalogutils.to_table(xpos_abs=cat['xpos_abs'], ypos_abs=cat['ypos_abs'], ra_abs=cat['ra_abs'],
+                              dec_abs=cat['dec_abs'], pkflux_abs=cat['pkflux_abs'], bmaj_abs=cat['bmaj_abs'],
+                              bmin_abs=cat['bmin_abs'], bpa_abs=cat['bpa_abs'], dateobs=cat['dateobs'],
+                              jdobs=cat['jdobs'], rmscell_abs=cat['rmscell_abs'], source_id=source_id)
     assert t['uuid'].dtype == '<i8'
 
 
 def test_write_catalog_table_to_fits(tmp_path):
     cat = np.load(TEST_NPZ)
     source_id = np.arange(cat['xpos_abs'].shape[0], dtype=np.int)
-    t = catalogutils.npz_to_table(xpos_abs=cat['xpos_abs'], ypos_abs=cat['ypos_abs'], ra_abs=cat['ra_abs'],
-                                  dec_abs=cat['dec_abs'], pkflux_abs=cat['pkflux_abs'], bmaj_abs=cat['bmaj_abs'],
-                                  bmin_abs=cat['bmin_abs'], bpa_abs=cat['bpa_abs'], dateobs=cat['dateobs'],
-                                  jdobs=cat['jdobs'], rmscell_abs=cat['rmscell_abs'], source_id=source_id)
+    t = catalogutils.to_table(xpos_abs=cat['xpos_abs'], ypos_abs=cat['ypos_abs'], ra_abs=cat['ra_abs'],
+                              dec_abs=cat['dec_abs'], pkflux_abs=cat['pkflux_abs'], bmaj_abs=cat['bmaj_abs'],
+                              bmin_abs=cat['bmin_abs'], bpa_abs=cat['bpa_abs'], dateobs=cat['dateobs'],
+                              jdobs=cat['jdobs'], rmscell_abs=cat['rmscell_abs'], source_id=source_id)
     fits = tmp_path / 'cat.fits'
     t.write(fits.as_posix())
     t2 = Table.read(fits.as_posix())

@@ -12,8 +12,8 @@ from astropy.table import Table
 import numpy as np
 
 
-def npz_to_table(xpos_abs, ypos_abs, ra_abs, dec_abs, pkflux_abs, bmaj_abs, bmin_abs, bpa_abs, dateobs, jdobs,
-                 rmscell_abs, source_id: Optional[np.array] = None, extra_meta: Optional[Dict] = None) -> Table:
+def to_table(xpos_abs, ypos_abs, ra_abs, dec_abs, pkflux_abs, bmaj_abs, bmin_abs, bpa_abs, dateobs, jdobs,
+             rmscell_abs, source_id: Optional[np.array] = None, extra_meta: Optional[Dict] = None) -> Table:
     """
     Convert npz from Marin's source_find.py as
     Aegean SimpleSource-like catalog as astropy Table with metadata. Most of the arguments are familiar to
@@ -51,7 +51,7 @@ def npz_to_table(xpos_abs, ypos_abs, ra_abs, dec_abs, pkflux_abs, bmaj_abs, bmin
 
 def read_npz(npz_file: str):
     cat = np.load(npz_file)
-    return npz_to_table(xpos_abs=cat['xpos_abs'], ypos_abs=cat['ypos_abs'], ra_abs=cat['ra_abs'],
-                        dec_abs=cat['dec_abs'], pkflux_abs=cat['pkflux_abs'], bmaj_abs=cat['bmaj_abs'],
-                        bmin_abs=cat['bmin_abs'], bpa_abs=cat['bpa_abs'], dateobs=cat['dateobs'],
-                        jdobs=cat['jdobs'], rmscell_abs=cat['rmscell_abs'])
+    return to_table(xpos_abs=cat['xpos_abs'], ypos_abs=cat['ypos_abs'], ra_abs=cat['ra_abs'],
+                    dec_abs=cat['dec_abs'], pkflux_abs=cat['pkflux_abs'], bmaj_abs=cat['bmaj_abs'],
+                    bmin_abs=cat['bmin_abs'], bpa_abs=cat['bpa_abs'], dateobs=cat['dateobs'],
+                    jdobs=cat['jdobs'], rmscell_abs=cat['rmscell_abs'])

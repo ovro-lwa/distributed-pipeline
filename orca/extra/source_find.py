@@ -309,7 +309,7 @@ def sourcefind(imagecell: np.array, bmajpix, bminpix, bpahdr, plotimagecell: boo
 
 
 def sourcefind_multithread(fitsfile: str, beam: Tuple[float, float, float], n_proc: int = 16,
-                           plot_cell: Optional[int] = None, plot_sources: bool = False):
+                           plot_cell: Optional[int] = None, plot_sources: bool = False, write_fits: bool = False):
     """
     Generate sources dictionary for input fitsfile.
 
@@ -319,6 +319,7 @@ def sourcefind_multithread(fitsfile: str, beam: Tuple[float, float, float], n_pr
         n_proc: number of parellel source_find processes (not exceeding the number of cells).
         plot_cell: the cell to create diagnostic plots on.
         plot_sources: whether to make plot for detected sources.
+        write_fits: whether to write fits catalog rather than the npz format.
 
     Returns:
 
@@ -416,16 +417,27 @@ def sourcefind_multithread(fitsfile: str, beam: Tuple[float, float, float], n_pr
         bpa_abs.extend(np.array(bpas[cellnum]))
         rmscell_abs.extend(np.array(rmscell[cellnum]))
 
-    # save to numpy file
     outfilename = os.path.splitext(os.path.abspath(fitsfile))[0] + '_sfind'
-    np.savez(outfilename, xpos_abs=xpos_abs, ypos_abs=ypos_abs, ra_abs=ra_abs,
-             dec_abs=dec_abs, pkflux_abs=pkflux_abs, bmaj_abs=bmaj_abs, bmin_abs=bmin_abs,
-             bpa_abs=bpa_abs, dateobs=dateobs, jdobs=jdobs, rmscell_abs=rmscell_abs)
-    
     if plot_sources:
         _plot_detected_sources(bmaj_abs, bmin_abs, bpa_abs, fitsfile, image_mask, outfilename, pixscale, pkflux_abs,
                                xpos_abs, ypos_abs)
-    return outfilename + '.npz'
+
+    if write_fits:
+        out_fits = f'{outfilename}.fits'
+        from .catalogutils import to_table
+        t = to_table(xpos_abs=xpos_abs, ypos_abs=ypos_abs, ra_abs=ra_abs,
+                     dec_abs=dec_abs, pkflux_abs=pkflux_abs, bmaj_abs=bmaj_abs, bmin_abs=bmin_abs,
+                     bpa_abs=bpa_abs, dateobs=dateobs, jdobs=jdobs, rmscell_abs=rmscell_abs)
+        t.write(out_fits)
+        return out_fits
+    else:
+        # save to numpy file
+        np.savez(outfilename, xpos_abs=xpos_abs, ypos_abs=ypos_abs, ra_abs=ra_abs,
+                 dec_abs=dec_abs, pkflux_abs=pkflux_abs, bmaj_abs=bmaj_abs, bmin_abs=bmin_abs,
+                 bpa_abs=bpa_abs, dateobs=dateobs, jdobs=jdobs, rmscell_abs=rmscell_abs)
+
+        return outfilename + '.npz'
+
 
 def _plot_detected_sources(bmaj_abs, bmin_abs, bpa_abs, fitsfile, image_mask, outfilename, pixscale, pkflux_abs,
                            xpos_abs, ypos_abs):
@@ -455,11 +467,13 @@ def main():
     parser.add_argument("--plot", default=False, action='store_true', help="Produce \
                         jpeg of source clustering.")
     parser.add_argument("--nprocs", default=1, type=int, help="Number of processes to use.")
+    parser.add_argument("--write-fits", default=False, action='store_true', help="Produce \
+                        fits format catalog instead of the npz format.")
     args = parser.parse_args()
 
     # TODO make this an input argument
     beam = (0.463562791015488, 0.216336343658053, 92.95)  # Narrow band
-    sourcefind_multithread(args.fitsfile, beam, plot_sources=args.plot, n_proc=args.nprocs)
+    sourcefind_multithread(args.fitsfile, beam, plot_sources=args.plot, n_proc=args.nprocs, write_fits=args.write_fits)
 
 
 if __name__ == '__main__':
