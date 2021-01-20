@@ -16,7 +16,7 @@ import numpy as np
 
 
 def to_table(xpos_abs, ypos_abs, ra_abs, dec_abs, pkflux_abs, bmaj_abs, bmin_abs, bpa_abs, dateobs, jdobs,
-             rmscell_abs, source_id: Optional[np.array] = None, extra_meta: Optional[Dict] = None) -> Table:
+             rmscell_abs, extra_meta: Optional[Dict] = None) -> Table:
     """
     Convert npz from Marin's source_find.py as
     Aegean SimpleSource-like catalog as astropy Table with metadata. Most of the arguments are familiar to
@@ -34,7 +34,6 @@ def to_table(xpos_abs, ypos_abs, ra_abs, dec_abs, pkflux_abs, bmaj_abs, bmin_abs
         dateobs: date of the observation and goes to header
         jdobs: JD of observation and goes to header.
         rmscell_abs: renamed local_rms
-        source_id: source_id, an array of integers, renamed uuid (np.uint16)
         extra_meta: Extra metadata. Make sure that these are ok FITS header values (str, float, int, etc). Things like
             beam shape can go here.
 
@@ -43,13 +42,14 @@ def to_table(xpos_abs, ypos_abs, ra_abs, dec_abs, pkflux_abs, bmaj_abs, bmin_abs
     """
     data = {'x': xpos_abs, 'y': ypos_abs, 'ra': ra_abs, 'dec': dec_abs,
             'peak_flux': pkflux_abs, 'a': bmaj_abs, 'b': bmin_abs, 'pa': bpa_abs, 'local_rms': rmscell_abs}
-    if source_id is not None:
-        assert source_id.dtype == np.int64, 'source_id must be type np.int64'
-        data['uuid'] = source_id
     default_meta = {'DATE': str(dateobs), 'JDOBS': float(jdobs)}
     if extra_meta:
         default_meta.update(extra_meta)
     return Table(data, meta=default_meta)
+
+
+def add_id_column(t: Table) -> None:
+    t.add_column(np.arange(len(t)), name='id')
 
 
 def read_npz(npz_file: str):
