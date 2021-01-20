@@ -27,7 +27,6 @@ def get_test_table():
 
 
 def test_create_table():
-    cat = np.load(TEST_NPZ)
     t = get_test_table()
     for c in ('x', 'y', 'ra', 'dec'):
         assert c in t.columns
