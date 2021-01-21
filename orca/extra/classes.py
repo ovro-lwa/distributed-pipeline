@@ -3,10 +3,11 @@ from enum import IntEnum
 
 class Classes(IntEnum):
     NA = 0
-    AIRPLANE = 1
-    METEOR = 2
-    RFI = 3
-    SIDELOBE = 4
-    SCINT = 5
-    OTHER = 6
-    CANDIDATE = 7
+    CANDIDATE = 1
+    AIRPLANE = 2
+    METEOR = 3
+    RFI = 4
+    SIDELOBE = 5
+    SCINT = 6
+    OTHER = 7
+    REFRACTION = 8
