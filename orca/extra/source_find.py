@@ -330,7 +330,7 @@ def sourcefind_multithread(fitsfile: str, beam: Tuple[float, float, float], n_pr
     wcs     = WCS(header)
     pixscale= header['CDELT2']
     dateobs = header['date-obs']
-    if header['BMAJ'] == 0:
+    if ('BMAJ' not in header) or (header['BMAJ'] == 0):
         bmaj    = beam[0]
         bmin    = beam[1]
         bpa     = beam[2]

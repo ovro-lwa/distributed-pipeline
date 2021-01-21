@@ -8,6 +8,7 @@ from orca.proj.celery import app
 from orca.wrapper import dada2ms, change_phase_centre, wsclean
 from orca.transform import peeling, integrate, gainscaling, spectrum, calibration, image_sub
 from orca.utils import fitsutils
+from orca.extra import source_find
 from numpy import array
 
 try:
@@ -147,6 +148,12 @@ def add(x: int, y: int) -> int:
 @app.task
 def str_concat(first, second, third=''):
     return f'{first}{second}{third}'
+
+
+@app.task
+def run_source_find(fitsfile, beam) -> str:
+    return source_find.sourcefind_multithread(fitsfile, beam, n_proc=1, write_fits=True)
+
 
 """
 For debugging
