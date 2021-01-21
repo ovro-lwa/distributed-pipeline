@@ -26,7 +26,7 @@ class SiftingWidget(widgets.HBox):
         self.after_ims = after_ims
         self.outputs = outputs
 
-        self.curr_scan += 1
+        self.curr_scan = 0
         self.cat = self._load_catalog(self.catalogs[self.curr_scan])
         self.diff_im, self.header = fitsutils.read_image_fits(self.diff_ims[self.curr_scan])
         self.before_im, _ = fitsutils.read_image_fits(self.before_ims[self.curr_scan])
@@ -73,13 +73,14 @@ class SiftingWidget(widgets.HBox):
     def make_buttons(self):
         buttons = [widgets.Button(description=name) for name, _ in Classes.__members__.items()]
         skip = widgets.Button(description='skip')
-        skip.on_click(self.update)
         buttons.append(skip)
+        for b in buttons:
+            b.on_click(self.update)
         return widgets.VBox(buttons)
 
     def update(self, b):
         if b.description != 'skip':
-            self.cat['classification'][self.curr] = Classes[b.description.upper()]
+            self.cat['class'][self.curr] = Classes[b.description.upper()]
         if self.curr == len(self.cat) - 1:
             self._init_next_scan()
         self.curr += 1
@@ -116,13 +117,13 @@ class SiftingWidget(widgets.HBox):
                           f"pk={self.cat['peak_flux'][self.curr]:.1f} Jy"
 
     def _load_catalog(self, cat_fits) -> Table:
-        t = Table(cat_fits)
+        t = Table.read(cat_fits)
         add_id_column(t)
         if self.min_alt_deg:
             # The split gets rid of the fractional second
-            timestamp = datetime.strptime(t.meta['DATE'].split['.'][0], "%Y-%m-%dT%H:%M:%S")
+            timestamp = datetime.strptime(t.meta['DATE'].split('.')[0], "%Y-%m-%dT%H:%M:%S")
             alt = coordutils.get_altaz_at_ovro(SkyCoord(t['ra'], t['dec'], unit=u.deg), timestamp).alt
-            t = t[alt > self.min_alt_deg]
+            t = t[alt > (self.min_alt_deg * u.deg)]
         t.add_column(Classes.NA.value, name='class')
         return t
 
