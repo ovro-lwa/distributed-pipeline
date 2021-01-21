@@ -1,6 +1,7 @@
 import pytest
 
 from os import path
+from datetime import datetime
 import numpy as np
 
 from orca.extra import catalogutils
@@ -16,6 +17,8 @@ def test_npz_to_table():
                      ('a', '<f8'), ('b', '<f8'), ('pa', '<f8'), ('local_rms', '<f8')])
     assert 'JDOBS' in t.meta
     assert 'DATE' in t.meta
+    # test casting to datetime
+    datetime.strptime(str(t.meta['DATE']).split('.')[0], "%Y-%m-%dT%H:%M:%S")
 
 
 def get_test_table():

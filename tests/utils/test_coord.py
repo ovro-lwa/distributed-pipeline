@@ -35,8 +35,15 @@ def test_sun_icrs(t, expected_pos):
     (datetime(2018, 3, 22, 3, 30, 14), SkyCoord('19h59m24s +40d44m50s'), 355.27 * u.deg, -11.78 * u.deg)
 ])
 def test_get_altaz_at_ovro(t, direction, expected_az, expected_alt):
-    assert coordutils.get_altaz_at_ovro(direction, t).az - expected_az < 0.1 * u.deg
-    assert coordutils.get_altaz_at_ovro(direction, t).alt - expected_alt < 0.1 * u.deg
+    assert np.all(coordutils.get_altaz_at_ovro(direction, t).az - expected_az < 0.1 * u.deg)
+    assert np.all(coordutils.get_altaz_at_ovro(direction, t).alt - expected_alt < 0.1 * u.deg)
+
+
+def test_multiple_get_altaz_at_ovro():
+    ans = coordutils.get_altaz_at_ovro(SkyCoord(['19h59m24s +40d44m50s', '20h37m12s +36d57m49s']),
+                                 datetime(2018, 3, 22, 3, 30, 14))
+    assert not ans.az[0] == ans.az[1]
+    assert not ans.alt[0] == ans.alt[1]
 
 
 @mark.parametrize('az, expected_alt', [
