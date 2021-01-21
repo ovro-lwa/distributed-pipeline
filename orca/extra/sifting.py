@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List
 from datetime import datetime
 
 import ipywidgets as widgets
@@ -10,7 +10,7 @@ from matplotlib.colors import Normalize
 
 from orca.extra.catalogutils import add_id_column
 from orca.extra.classes import Classes
-from orca.utils import fitsutils, coordutils
+from orca.utils import fitsutils, coordutils, gitutils
 
 WIDTH = 128
 
@@ -125,6 +125,7 @@ class SiftingWidget(widgets.HBox):
             alt = coordutils.get_altaz_at_ovro(SkyCoord(t['ra'], t['dec'], unit=u.deg), timestamp).alt
             t = t[alt > (self.min_alt_deg * u.deg)]
         t.add_column(Classes.NA.value, name='class')
+        t.meta['ORCA_COMMIT'] = gitutils.get_commit_id()
         return t
 
     def _save_curr_catalog(self, cat_fits):
