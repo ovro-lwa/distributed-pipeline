@@ -26,6 +26,7 @@ ovro-lwa-orca = {editable = true,path = "."}
 psutil = "*"
 cryptography = ">=3.2"
 gitpython = "*"
+jedi = "==0.17.2"
 
 [dev-packages]
 pytest = '*'
