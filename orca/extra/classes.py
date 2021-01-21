@@ -1,12 +1,12 @@
-from enum import Enum
+from enum import IntEnum
 
 
-class Classes(Enum):
-    unclassified = 0
-    airplane = 1
-    meteor = 2
-    rfi = 3
-    sidelobe = 4
-    artifact = 5
-    scintillation = 6
-    candidate = 7
+class Classes(IntEnum):
+    NA = 0
+    AIRPLANE = 1
+    METEOR = 2
+    RFI = 3
+    SIDELOBE = 4
+    SCINT = 5
+    OTHER = 6
+    CANDIDATE = 7

@@ -1,30 +1,42 @@
-from typing import List
+from typing import List, Optional
+from datetime import datetime
 
 import ipywidgets as widgets
 import matplotlib.pyplot as plt
-from orca.utils import fitsutils
 from astropy.coordinates import SkyCoord
 import astropy.units as u
-import numpy as np
+from astropy.table import Table
 from matplotlib.colors import Normalize
+
+from orca.extra.catalogutils import add_id_column
+from orca.extra.classes import Classes
+from orca.utils import fitsutils, coordutils
 
 WIDTH = 128
 
 
 class SiftingWidget(widgets.HBox):
-    def __init__(self, labels: List[str]):
+    def __init__(self, catalogs: List[str], diff_ims: List[str],
+                 before_ims: List[str], after_ims: List[str], outputs: List[str], min_alt_deg: float = None):
         super().__init__()
-        # TODO add start_time and end_time
-        self.init_single_scan(
-            '/lustre/yuping/0-100-hr-reduction/final-narrow/sidereal_narrow_diff/2018-03-21/hh=01/diff_2018-03-21T01:38:41-image_sfind.npz',
-            '/lustre/yuping/0-100-hr-reduction/final-narrow/sidereal_narrow_diff/2018-03-21/hh=01/diff_2018-03-21T01:38:41-image.fits',
-            '/lustre/yuping/0-100-hr-reduction/final-narrow/narrow_long/2018-03-21/hh=01/2018-03-21T01:38:41-image.fits',
-            '/lustre/yuping/0-100-hr-reduction/final-narrow/narrow_long/2018-03-22/hh=01/2018-03-22T01:34:45-image.fits')
+        self.min_alt_deg = min_alt_deg
+        self.catalogs = catalogs
+        self.diff_ims = diff_ims
+        self.before_ims = before_ims
+        self.after_ims = after_ims
+        self.outputs = outputs
+
+        self.curr_scan += 1
+        self.cat = self._load_catalog(self.catalogs[self.curr_scan])
+        self.diff_im, self.header = fitsutils.read_image_fits(self.diff_ims[self.curr_scan])
+        self.before_im, _ = fitsutils.read_image_fits(self.before_ims[self.curr_scan])
+        self.after_im, _ = fitsutils.read_image_fits(self.after_ims[self.curr_scan])
+        self.curr = 0
 
         snapshot = widgets.Output()
         cutouts = widgets.Output()
         spectrum = widgets.Output()
-        buttons = self.make_buttons(labels)
+        buttons = self.make_buttons()
         self.text = widgets.HTML()
 
         with snapshot:
@@ -42,14 +54,14 @@ class SiftingWidget(widgets.HBox):
                 ax.set_frame_on(False)
                 ax.tick_params(labelbottom=False, labelleft=False, length=0)
             self.diff_imshow = axs2[0].imshow(
-                self.diff_im.T[self.cat['xpos_abs'][self.curr] - WIDTH: self.cat['xpos_abs'][self.curr] + WIDTH,
-                self.cat['ypos_abs'][self.curr] - WIDTH: self.cat['ypos_abs'][self.curr] + WIDTH].T)
+                self.diff_im.T[self.cat['x'][self.curr] - WIDTH: self.cat['x'][self.curr] + WIDTH,
+                self.cat['y'][self.curr] - WIDTH: self.cat['y'][self.curr] + WIDTH].T)
             self.before_imshow = axs2[1].imshow(
-                self.before_im.T[self.cat['xpos_abs'][self.curr] - WIDTH: self.cat['xpos_abs'][self.curr] + WIDTH,
-                self.cat['ypos_abs'][self.curr] - WIDTH: self.cat['ypos_abs'][self.curr] + WIDTH].T)
+                self.before_im.T[self.cat['x'][self.curr] - WIDTH: self.cat['x'][self.curr] + WIDTH,
+                self.cat['y'][self.curr] - WIDTH: self.cat['y'][self.curr] + WIDTH].T)
             self.after_imshow = axs2[2].imshow(
-                self.after_im.T[self.cat['xpos_abs'][self.curr] - WIDTH: self.cat['xpos_abs'][self.curr] + WIDTH,
-                self.cat['ypos_abs'][self.curr] - WIDTH: self.cat['ypos_abs'][self.curr] + WIDTH].T)
+                self.after_im.T[self.cat['x'][self.curr] - WIDTH: self.cat['x'][self.curr] + WIDTH,
+                self.cat['y'][self.curr] - WIDTH: self.cat['y'][self.curr] + WIDTH].T)
             self.load_text()
 
         with spectrum:
@@ -58,47 +70,66 @@ class SiftingWidget(widgets.HBox):
 
         self.children = [snapshot, widgets.VBox([cutouts, self.text, spectrum]), buttons]
 
-    def init_single_scan(self, catalog, diff, before, after):
-        self.cat = np.load(catalog)
-        self.diff_im, self.header = fitsutils.read_image_fits(diff)
-        self.before_im, _ = fitsutils.read_image_fits(before)
-        self.after_im, _ = fitsutils.read_image_fits(after)
-        self.curr = 0
-
-    def make_buttons(self, labels):
-        buttons = [widgets.Button(description=label) for label in labels]
+    def make_buttons(self):
+        buttons = [widgets.Button(description=name) for name, _ in Classes.__members__.items()]
         skip = widgets.Button(description='skip')
         skip.on_click(self.update)
         buttons.append(skip)
         return widgets.VBox(buttons)
 
     def update(self, b):
-        print(b.description)
-        self.curr += 1
         if b.description != 'skip':
-            # should save the label
-            print(f'label {b.description}')
+            self.cat['classification'][self.curr] = Classes[b.description.upper()]
+        if self.curr == len(self.cat) - 1:
+            self._init_next_scan()
+        self.curr += 1
         self.load_mpl_im()
         self.fig2.canvas.draw()
         self.load_text()
 
+    def _init_next_scan(self):
+        if self.curr_scan > -1:
+            self._save_curr_catalog(self.outputs[self.curr_scan])
+        self.curr_scan += 1
+        self.cat = self._load_catalog(self.catalogs[self.curr_scan])
+        self.diff_im, self.header = fitsutils.read_image_fits(self.diff_ims[self.curr_scan])
+        self.before_im, _ = fitsutils.read_image_fits(self.before_ims[self.curr_scan])
+        self.after_im, _ = fitsutils.read_image_fits(self.after_ims[self.curr_scan])
+        self.curr = 0
+
     def load_mpl_im(self):
         self.diff_imshow.set_data(
-            self.diff_im.T[self.cat['xpos_abs'][self.curr] - WIDTH: self.cat['xpos_abs'][self.curr] + WIDTH,
-            self.cat['ypos_abs'][self.curr] - WIDTH: self.cat['ypos_abs'][self.curr] + WIDTH])
+            self.diff_im.T[self.cat['x'][self.curr] - WIDTH: self.cat['x'][self.curr] + WIDTH,
+            self.cat['y'][self.curr] - WIDTH: self.cat['y'][self.curr] + WIDTH])
         self.before_imshow.set_data(
-            self.before_im.T[self.cat['xpos_abs'][self.curr] - WIDTH: self.cat['xpos_abs'][self.curr] + WIDTH,
-            self.cat['ypos_abs'][self.curr] - WIDTH: self.cat['ypos_abs'][self.curr] + WIDTH])
+            self.before_im.T[self.cat['x'][self.curr] - WIDTH: self.cat['x'][self.curr] + WIDTH,
+            self.cat['y'][self.curr] - WIDTH: self.cat['y'][self.curr] + WIDTH])
         self.after_imshow.set_data(
-            self.after_im.T[self.cat['xpos_abs'][self.curr] - WIDTH: self.cat['xpos_abs'][self.curr] + WIDTH,
-            self.cat['ypos_abs'][self.curr] - WIDTH: self.cat['ypos_abs'][self.curr] + WIDTH])
+            self.after_im.T[self.cat['x'][self.curr] - WIDTH: self.cat['x'][self.curr] + WIDTH,
+            self.cat['y'][self.curr] - WIDTH: self.cat['y'][self.curr] + WIDTH])
 
     def load_text(self):
-        coord = SkyCoord(ra=self.cat['ra_abs'][self.curr] * u.deg, dec=self.cat['dec_abs'][self.curr] * u.deg)
+        coord = SkyCoord(ra=self.cat['ra'][self.curr] * u.deg, dec=self.cat['dec'][self.curr] * u.deg)
         self.text.value = f"{coord.ra.to_string(u.hour)} {coord.dec.to_string()} " \
-                          f"x={self.cat['xpos_abs'][self.curr]}, y={self.cat['ypos_abs'][self.curr]} " \
-                          f"{self.cat['bmaj_abs'][self.curr] * 60:.2f}' x {self.cat['bmin_abs'][self.curr] * 60:.2f}' " \
-                          f"pk={self.cat['pkflux_abs'][self.curr]:.1f} Jy"
+                          f"x={self.cat['x'][self.curr]}, y={self.cat['y'][self.curr]} " \
+                          f"{self.cat['a'][self.curr] * 60:.2f}' x {self.cat['b'][self.curr] * 60:.2f}' " \
+                          f"pk={self.cat['peak_flux'][self.curr]:.1f} Jy"
 
-    def save_and_load_next_scan(self):
-        pass
+    def _load_catalog(self, cat_fits) -> Table:
+        t = Table(cat_fits)
+        add_id_column(t)
+        if self.min_alt_deg:
+            # The split gets rid of the fractional second
+            timestamp = datetime.strptime(t.meta['DATE'].split['.'][0], "%Y-%m-%dT%H:%M:%S")
+            alt = coordutils.get_altaz_at_ovro(SkyCoord(t['ra'], t['dec'], unit=u.deg), timestamp).alt
+            t = t[alt > self.min_alt_deg]
+        t.add_column(Classes.NA.value, name='class')
+        return t
+
+    def _save_curr_catalog(self, cat_fits):
+        # Save table to another place
+        self.cat.write(cat_fits)
+
+
+# TODO need a back button
+# TODO a subclass that deals with PathsManager
