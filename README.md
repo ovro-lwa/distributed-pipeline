@@ -45,3 +45,12 @@ TBA, but meanwhile see scripts in `proj` directory. celery admin notes are in `c
 `orca` is where the wrappers and functions that do single units of work sit.
 
 `proj` contains code that executes the pipeline with celery.
+
+## Install new packages/dependencies
+`pipenv.lock` is the definitive source of all the dependencies (it records the version number, the buid, etc).
+When you call `pipenv sync`, it installs all the packages recorded in `pipenv.lock`. To add a new package as
+dependency to the project, instead of calling `pip install`, do `pipenv install --keep-oudated` with the package
+so that it installs the package, update the minimal set of packages required, and then write the current state
+of the packages into `pipenv.lock`.
+
+Alternatively, you can specify the package in `Pipfile` (maybe with a version or something) and then run `pipenv lock --keep-outdated` (I'm not 100% sure about this...).
