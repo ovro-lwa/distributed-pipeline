@@ -125,7 +125,7 @@ class SiftingWidget(widgets.HBox):
             alt = coordutils.get_altaz_at_ovro(SkyCoord(t['ra'], t['dec'], unit=u.deg), timestamp).alt
             t = t[alt > (self.min_alt_deg * u.deg)]
         t.add_column(Classes.NA.value, name='class')
-        t.meta['ORCA_COMMIT'] = gitutils.get_commit_id()
+        t.meta['COMMIT'] = gitutils.get_commit_id()
         return t
 
     def _save_curr_catalog(self, cat_fits):
