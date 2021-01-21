@@ -43,11 +43,12 @@ def to_table(xpos_abs, ypos_abs, ra_abs, dec_abs, pkflux_abs, bmaj_abs, bmin_abs
     data = {'x': xpos_abs, 'y': ypos_abs, 'ra': ra_abs, 'dec': dec_abs,
             'peak_flux': pkflux_abs, 'a': bmaj_abs, 'b': bmin_abs, 'pa': bpa_abs, 'local_rms': rmscell_abs}
 
-    if isinstance(dateobs, np.ndarray):
-        # When read from npz file, need the follows to extract the datetime as a string
+    if isinstance(dateobs, np.ndarray) and dateobs.dtype == '|S21':
+        # When read from npz file that has dtype |21 as opposed to <U21
+        # need the follows to extract the datetime as a string.
         default_meta = {'DATE': dateobs.tobytes().decode('utf8'), 'JDOBS': float(jdobs)}
     else:
-        default_meta = {'DATE': dateobs, 'JDOBS': float(jdobs)}
+        default_meta = {'DATE': str(dateobs), 'JDOBS': float(jdobs)}
     if extra_meta:
         default_meta.update(extra_meta)
     return Table(data, meta=default_meta)
