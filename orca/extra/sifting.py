@@ -44,7 +44,7 @@ class SiftingWidget(widgets.HBox):
             fig1.canvas.header_visible = False
             ax1.set_frame_on(False)
             ax1.tick_params(labelbottom=False, labelleft=False, length=0)
-            ax1.imshow(self.diff_im, norm=Normalize(-2, 5), origin='lower')
+            ax1.imshow(self.diff_im, norm=Normalize(-2, 5), cmap='gray', origin='lower')
 
         # TODO swap for a vbox of three plots so that I can lock the colorscale?
         with cutouts:
@@ -55,13 +55,16 @@ class SiftingWidget(widgets.HBox):
                 ax.tick_params(labelbottom=False, labelleft=False, length=0)
             self.diff_imshow = axs2[0].imshow(
                 self.diff_im.T[self.cat['x'][self.curr] - WIDTH: self.cat['x'][self.curr] + WIDTH,
-                self.cat['y'][self.curr] - WIDTH: self.cat['y'][self.curr] + WIDTH].T)
+                self.cat['y'][self.curr] - WIDTH: self.cat['y'][self.curr] + WIDTH].T,
+                cmap='gray', origin='lower')
             self.before_imshow = axs2[1].imshow(
                 self.before_im.T[self.cat['x'][self.curr] - WIDTH: self.cat['x'][self.curr] + WIDTH,
-                self.cat['y'][self.curr] - WIDTH: self.cat['y'][self.curr] + WIDTH].T)
+                self.cat['y'][self.curr] - WIDTH: self.cat['y'][self.curr] + WIDTH].T,
+                cmap='gray', origin='lower')
             self.after_imshow = axs2[2].imshow(
                 self.after_im.T[self.cat['x'][self.curr] - WIDTH: self.cat['x'][self.curr] + WIDTH,
-                self.cat['y'][self.curr] - WIDTH: self.cat['y'][self.curr] + WIDTH].T)
+                self.cat['y'][self.curr] - WIDTH: self.cat['y'][self.curr] + WIDTH].T,
+                cmap='gray', origin='lower')
             self.load_text()
 
         with spectrum:
@@ -101,17 +104,18 @@ class SiftingWidget(widgets.HBox):
     def load_mpl_im(self):
         self.diff_imshow.set_data(
             self.diff_im.T[self.cat['x'][self.curr] - WIDTH: self.cat['x'][self.curr] + WIDTH,
-            self.cat['y'][self.curr] - WIDTH: self.cat['y'][self.curr] + WIDTH])
+            self.cat['y'][self.curr] - WIDTH: self.cat['y'][self.curr] + WIDTH].T)
         self.before_imshow.set_data(
             self.before_im.T[self.cat['x'][self.curr] - WIDTH: self.cat['x'][self.curr] + WIDTH,
-            self.cat['y'][self.curr] - WIDTH: self.cat['y'][self.curr] + WIDTH])
+            self.cat['y'][self.curr] - WIDTH: self.cat['y'][self.curr] + WIDTH].T)
         self.after_imshow.set_data(
             self.after_im.T[self.cat['x'][self.curr] - WIDTH: self.cat['x'][self.curr] + WIDTH,
-            self.cat['y'][self.curr] - WIDTH: self.cat['y'][self.curr] + WIDTH])
+            self.cat['y'][self.curr] - WIDTH: self.cat['y'][self.curr] + WIDTH].T)
 
     def load_text(self):
         coord = SkyCoord(ra=self.cat['ra'][self.curr] * u.deg, dec=self.cat['dec'][self.curr] * u.deg)
-        self.text.value = f"{coord.ra.to_string(u.hour)} {coord.dec.to_string()} " \
+        self.text.value = f"{self.curr + 1}/{len(self.cat)} candidates, {self.curr_scan + 1}/{len(self.catalogs)} scans" \
+                          f"<br> {coord.ra.to_string(u.hour)} {coord.dec.to_string()} " \
                           f"x={self.cat['x'][self.curr]}, y={self.cat['y'][self.curr]} " \
                           f"{self.cat['a'][self.curr] * 60:.2f}' x {self.cat['b'][self.curr] * 60:.2f}' " \
                           f"pk={self.cat['peak_flux'][self.curr]:.1f} Jy"

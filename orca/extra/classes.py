@@ -11,3 +11,4 @@ class Classes(IntEnum):
     SCINT = 6
     OTHER = 7
     REFRACTION = 8
+    STATIONARY = 9
