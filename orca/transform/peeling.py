@@ -10,6 +10,7 @@ import tempfile
 from os import path
 import json
 import numpy as np
+import shutil
 
 import casacore.tables as tables
 from orca.utils import coordutils
@@ -130,6 +131,12 @@ def zest_with_casa(ms: str, reverse: bool = False):
         applycal(msfilemodels_YX, gaintable=[dcalfile], flagbackup=False)
         # put back into MODEL_DATA of ms, uvsub from DATA, and put result in CORRECTED_DATA
         _model_data_uvsub(ms, modelmsfile)
+        shutil.rmtree(msfilemodels_XX)
+        shutil.rmtree(msfilemodels_XY)
+        shutil.rmtree(msfilemodels_YX)
+        shutil.rmtree(msfilemodels_YY)
+        shutil.rmtree(bcalfileflags)
+        shutil.rmtree(modelmsfile)
     return ms
 
 

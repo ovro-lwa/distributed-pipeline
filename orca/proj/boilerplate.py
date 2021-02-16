@@ -1,13 +1,13 @@
 import logging
 from datetime import datetime
-import sys
+import sys, os, shutil
 from typing import Optional, List
 
-from orca.flagging import flagoperations, flag_bad_chans, flag_bad_ants
+from orca.flagging import flagoperations, flag_bad_chans, flag_bad_ants, flag_bad_bls
 from orca.proj.celery import app
 from orca.wrapper import dada2ms, change_phase_centre, wsclean
 from orca.transform import peeling, integrate, gainscaling, spectrum, calibration, image_sub
-from orca.utils import fitsutils
+from orca.utils import fitsutils, calibrationutils
 from orca.extra import source_find
 from numpy import array
 
@@ -51,6 +51,12 @@ def run_chgcentre(ms_file: str, direction: str) -> str:
 
 
 @app.task
+def run_wsclean(ms_list: List[str], out_dir: str, filename_prefix: str, extra_arg_list: List[str]) -> str:
+    wsclean.wsclean(ms_list, out_dir, filename_prefix, extra_arg_list)
+    return f'{out_dir}/{filename_prefix}'
+
+
+@app.task
 def peel(ms_file: str, utc_datetime: str) -> str:
     return peeling.ttcal_peel_from_data_to_corrected_data(ms_file,
                                                           datetime.strptime(utc_datetime, "%Y-%m-%dT%H:%M:%S"))
@@ -75,6 +81,22 @@ def do_bandpass_correction(spectrum_file, bcal_file=None, plot=False):
 def do_applycal(ms_file: str, cal_tables: List[str]) -> str:
     casatasks.applycal(ms_file, gaintable=cal_tables, flagbackup=False)
     return ms_file
+    
+@app.task
+def do_split(ms_file: str):
+    tmpname = f'{os.path.splitext(ms_file)[0]}_tmp.ms'
+    casatasks.split(ms_file, tmpname)
+    shutil.rmtree(ms_file)
+    shutil.move(tmpname, ms_file)
+    return ms_file
+
+@app.task
+def do_modelvis_subtract(ms_file: str, npz_file: str, cmplist_file: str):
+    calibrationutils.gen_model_from_dict(ms_file, npz_file)
+    casatasks.clearcal(vis=ms_file, addmodel=True)
+    casatasks.ft(vis=ms_file, complist=cmplist_file, usescratch=True)
+    casatasks.uvsub(vis=ms_file)
+    return ms_file
 
 @app.task
 def apply_a_priori_flags(ms_file: str, flag_npy_path: str) -> str:
@@ -88,10 +110,10 @@ def apply_ant_flag(ms_file: str, ants: list) -> str:
     return ms_file
 
 @app.task
-def flag_ants(ms_file: str, tavg: bool = False) -> str:
+def flag_ants(ms_file: str, tavg: bool = False, thresh: float = 4) -> str:
     from casacore.tables import table, taql
     import numpy as np
-    ant_file = flag_bad_ants.flag_ants_from_postcal_autocorr(ms_file, tavg = tavg)
+    ant_file = flag_bad_ants.flag_ants_from_postcal_autocorr(ms_file, tavg = tavg, thresh = thresh)
     if ant_file:
         antsarray = np.genfromtxt(ant_file, dtype=int, delimiter=',')
         ants = antsarray.tolist()
@@ -100,13 +122,21 @@ def flag_ants(ms_file: str, tavg: bool = False) -> str:
     return ms_file
 
 @app.task
+def do_bl_flags(ms_file: str) -> str:
+    bl_file = flag_bad_bls.flag_bad_bls(ms_file, usedatacol=False)
+    if bl_file:
+        return flagoperations.flag_bls(ms_file, bl_file)
+    else:
+        return ms_file
+
+@app.task
 def apply_bl_flag(ms_file: str, bl_file: str) -> str:
     return flagoperations.flag_bls(ms_file, bl_file)
 
 
 @app.task
-def flag_chans(ms: str, spw: str, crosshand: bool = False, uvcut_m: float = None) -> str:
-    return flag_bad_chans.flag_bad_chans(ms, spw, apply_flag=True, crosshand=crosshand, uvcut_m=uvcut_m)
+def flag_chans(ms: str, spw: str, crosshand: bool = False, uvcut_m: float = None, usedatacol: bool = False) -> str:
+    return flag_bad_chans.flag_bad_chans(ms, spw, apply_flag=True, crosshand=crosshand, uvcut_m=uvcut_m, usedatacol=usedatacol)
 
 
 @app.task

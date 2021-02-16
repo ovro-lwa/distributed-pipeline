@@ -137,7 +137,50 @@ def gen_model_ms_stokes(ms: str, zest: bool = False):
         cl.done()
         return clname
 
+def gen_model_from_dict(ms: str, npzfile: str):
+    """
+    """
+    Ateamdict = np.load(npzfile)
+    sourcename_list = Ateamdict['sourcename']
+    source_Vflux_list = Ateamdict['pkflux']
+    source_ra_list = Ateamdict['ra_pos']
+    source_dec_list = Ateamdict['dec_pos']
+    freq_val = Ateamdict['frqval']
+    src_list = [{'label': 'VirA', 'flux': '2400', 'alpha': -0.86, 'ref_freq': 80.0,
+                 'position': 'J2000 12h30m49.42338s +12d23m28.0439s'},
+                {'label': 'TauA', 'flux': '1770', 'alpha': -0.27, 'ref_freq': 80.0,
+                 'position': 'J2000 05h34m31.94s +22d00m52.2s'},
+                {'label': 'CasA', 'flux': 16530, 'alpha': -0.72, 'ref_freq': 80.0,
+                 'position': 'J2000 23h23m24s +58d48m54s'}]
+    freq = freq_val/1.e6
+    sub_srcs = []
+    for s,src in enumerate(src_list):
+        if not np.isnan(source_Vflux_list[s]) and not np.isnan(source_ra_list[s]) and not np.isnan(source_dec_list[s]):
+            src_list[s]['Stokes'] = [0, 0, 0, -source_Vflux_list[s]]
+            new_pos = SkyCoord(source_ra_list[s], source_dec_list[s], frame='icrs', unit='deg')
+            src_list[s]['position'] = f'J2000 {new_pos.to_string("hmsdms")}'
+            sub_srcs.append(src_list[s])
 
+    if not sub_srcs:
+        return
+
+    cl = componentlist()
+    cl.done()
+    clname = '%s.cl' % path.splitext(path.abspath(ms))[0]
+    try:
+        shutil.rmtree(clname)
+    except OSError:
+        pass
+    for s,src in enumerate(sub_srcs):
+        cl.addcomponent(flux=src['Stokes'], polarization='Stokes', 
+                        dir=src['position'], label=src['label'])
+        cl.setstokesspectrum(which=s, type='spectral index', 
+                             index=[src['alpha'], 0, 0, 0], reffreq='%sMHz' % freq)
+    cl.rename(clname)
+    cl.done()
+    return clname
+        
+        
 def _flux80_47(flux_hi, sp, output_freq, ref_freq):
     # given a flux at 80 MHz and a sp_index,
     # return the flux at MS center-frequency.

@@ -56,8 +56,9 @@ def image_sub(file1: Union[str, List[str]], file2: Union[str, List[str]], out_di
 
 
 # take rms of image within given box
-def getimrms(filepath,radius=0):
-    filelist = np.sort(glob(filepath))
+def getimrms(filepath: List[str], radius=0):
+    #filelist = np.sort(glob(filepath))
+    filelist = filepath
     rmsarray = np.zeros(len(filelist))
     medarray = np.zeros(len(filelist))
     frqarray = np.zeros(len(filelist))
@@ -69,9 +70,9 @@ def getimrms(filepath,radius=0):
         xax = np.arange(0, naxis)
         x, y = np.meshgrid(xax, xax)
         apertureind = np.where(rot_ellipse(x.ravel(), y.ravel(), naxis/2., naxis/2., radius, radius, 0) <= 1.)
-        imgind  = zip(x.ravel()[apertureind], y.ravel()[apertureind])
-    for ind, file in enumerate(filelist):
-        hdulist = fits.open(file)
+        imgind  = list(zip(x.ravel()[apertureind], y.ravel()[apertureind]))
+    for ind, filen in enumerate(filelist):
+        hdulist = fits.open(filen)
         header = hdulist[0].header
         image = hdulist[0].data[0,0].T
         naxis = header['NAXIS1']
