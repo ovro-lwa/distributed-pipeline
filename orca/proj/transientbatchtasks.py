@@ -169,8 +169,8 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
 def _copy_snapshots_back(snapshot_image_dir, snapshots1, snapshots2, timestamps1, timestamps2):
     # Copy images that we care about back to snapshot_image_dir
     for i, (im1, im2) in enumerate(zip(snapshots1, snapshots2)):
-        outdir1 = f'{snapshot_image_dir}/{timestamps1[i].date()}/hh={timestamps1[i].hour:02d}'
-        outdir2 = f'{snapshot_image_dir}/{timestamps2[i].date()}/hh={timestamps2[i].hour:02d}'
+        outdir1 = f'{snapshot_image_dir}/before/{timestamps1[i].date()}/hh={timestamps1[i].hour:02d}'
+        outdir2 = f'{snapshot_image_dir}/after/{timestamps2[i].date()}/hh={timestamps2[i].hour:02d}'
         os.makedirs(outdir1, exist_ok=True)
         os.makedirs(outdir2, exist_ok=True)
         shutil.copy(im1, outdir1)

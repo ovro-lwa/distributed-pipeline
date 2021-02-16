@@ -86,8 +86,6 @@ def subtraction_step(start_time_day1: datetime, end_time_day1: datetime, chunk_s
     sid_long = 'sidereal_long_diff'
     sid_narrow = 'sidereal_narrow_diff'
 
-    timestamp_chunks[-1] = timestamp_chunks[-1][:-1]
-    timestamp_chunks_day2[-1] = timestamp_chunks_day2[-1][:-1]
     logging.info('Making directories.')
     for out_dir in [sid_diff, sid_long, sid_narrow, narrow_long, long]:
         for c1, c2 in zip(timestamp_chunks, timestamp_chunks_day2):
