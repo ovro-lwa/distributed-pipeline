@@ -17,10 +17,12 @@ import numpy as np
 from orca.utils import fitsutils, coordutils
 from orca.wrapper import wsclean
 
+NARROW_ONLY = True
+
 log = logging.getLogger(__name__)
 
-CLEAN_THRESHOLD_JY = 5
-CLEAN_THRESHOLD_JY_CRAB = 20
+CLEAN_THRESHOLD_SUN_JY = 50 if NARROW_ONLY else 5
+CLEAN_THRESHOLD_JY = 50 if NARROW_ONLY else 20
 
 CLEAN_MGAIN = 0.8
 SUN_CHANNELS_OUT = 2
@@ -58,7 +60,7 @@ def make_movie_from_fits(fits_tuple: Tuple[str], output_dir: str, scale: float,
 
 
 def make_residual_image_with_source_removed(ms_list: List[str], timestamp: datetime, output_dir: str,
-                                            output_prefix: str, tmp_dir: str,
+                                            output_prefix: str, tmp_dir: str, briggs: float = 0.,
                                             inner_tukey: Optional[int] = None, n_thread: int = 10,
                                             more_args: Optional[List[str]] = None) -> str:
     """Make images with bright source(s) removed.
@@ -70,6 +72,7 @@ def make_residual_image_with_source_removed(ms_list: List[str], timestamp: datet
         output_dir: Output directory for the images.
         output_prefix: Image prefix (as required by wsclean).
         tmp_dir: Temporary directory to hold wsclean re-ordered files.
+        briggs: briggs weighting
         inner_tukey: Inner Tukey Parameter.
         n_thread: Number of threads for wsclean to use.
         more_args: Extra parameters for imaging.
@@ -78,10 +81,11 @@ def make_residual_image_with_source_removed(ms_list: List[str], timestamp: datet
 
     """
     log.info(f'Imaging {ms_list[0]}... with length {len(ms_list)}.')
-    dirty_image = make_dirty_image(ms_list, output_dir, output_prefix, inner_tukey=inner_tukey)
+    dirty_image = make_dirty_image(ms_list, output_dir, output_prefix, briggs=briggs,
+                                   inner_tukey=inner_tukey, more_args=more_args)
 
     extra_args = ['-size', str(IMSIZE), str(IMSIZE), '-scale', str(IM_SCALE_DEGREE),
-                  '-weight', 'briggs', '0',
+                  '-weight', 'briggs', str(briggs),
                   '-no-update-model-required',
                   '-j', str(n_thread), '-niter', '4000', '-tempdir', tmp_dir]
     if more_args:
@@ -106,8 +110,7 @@ def make_residual_image_with_source_removed(ms_list: List[str], timestamp: datet
     if coordutils.is_visible(sun_icrs, timestamp):
         fits_mask_center_list.append(get_peak_around_source(im_T, sun_icrs, wcs.WCS(header)))
         fits_mask_width_list.append(81)
-        if len(ms_list) > 11:
-            channelsout = SUN_CHANNELS_OUT
+        channelsout = SUN_CHANNELS_OUT
         log.info(f'Removing the Sun by splitting in {channelsout} bands.')
 
     if fits_mask_width_list:
@@ -118,7 +121,7 @@ def make_residual_image_with_source_removed(ms_list: List[str], timestamp: datet
         if channelsout:
             wsclean.wsclean(ms_list, output_dir, output_prefix, extra_arg_list=extra_args +
                             ['-channelsout', str(channelsout), '-fitsmask', fits_mask,
-                             '-threshold', str(CLEAN_THRESHOLD_JY),
+                             '-threshold', str(CLEAN_THRESHOLD_SUN_JY),
                              '-mgain', str(CLEAN_MGAIN)] +
                             taper_args)
             log.info('Renaming the MFS-residual fits file to image after source removal.')
@@ -127,7 +130,7 @@ def make_residual_image_with_source_removed(ms_list: List[str], timestamp: datet
             wsclean.wsclean(ms_list, output_dir, output_prefix,
                             extra_arg_list=extra_args +
                                            ['-fitsmask', fits_mask, '-threshold',
-                                            str(CLEAN_THRESHOLD_JY_CRAB),
+                                            str(CLEAN_THRESHOLD_JY),
                                             '-mgain', str(CLEAN_MGAIN)] +
                                            taper_args)
             log.info('Renaming the residual fits file to image after source removal.')
@@ -150,7 +153,8 @@ def get_peak_around_source(im_T: np.ndarray, source_coord: SkyCoord, w: wcs.WCS)
 
 
 def make_dirty_image(ms_list: List[str], output_dir: str, output_prefix: str, make_psf: bool = False,
-                     inner_tukey: Optional[int] = None, n_thread: int = 10) -> Union[str, Tuple[str, str]]:
+                     briggs: float = 0, inner_tukey: Optional[int] = None, n_thread: int = 10,
+                     more_args: Optional[List[str]] = None) -> Union[str, Tuple[str, str]]:
     """Make dirty image out of list of measurement sets.
 
     Args:
@@ -158,8 +162,10 @@ def make_dirty_image(ms_list: List[str], output_dir: str, output_prefix: str, ma
         output_dir:
         output_prefix:
         make_psf:
+        briggs:
         inner_tukey:
         n_thread:
+        more_args:
 
     Returns: if make_psf, (image path, psf path), else just the image path.
 
@@ -167,13 +173,16 @@ def make_dirty_image(ms_list: List[str], output_dir: str, output_prefix: str, ma
     taper_args = ['-taper-inner-tukey', str(inner_tukey)] if inner_tukey else []
 
     extra_args = ['-size', str(IMSIZE), str(IMSIZE), '-scale', str(IM_SCALE_DEGREE),
-                  '-niter', '0', '-weight', 'briggs', '0',
+                  '-niter', '0', '-weight', 'briggs', str(briggs),
                   '-no-update-model-required', '-no-reorder',
                   '-j', str(n_thread)] + taper_args
+
+    if more_args:
+        extra_args += more_args
     wsclean.wsclean(ms_list, output_dir, output_prefix, extra_arg_list=extra_args)
     if make_psf:
         extra_args = ['-size', str(2 * IMSIZE), str(2 * IMSIZE), '-scale', str(IM_SCALE_DEGREE),
-                      '-niter', '0', '-weight', 'briggs', '0',
+                      '-niter', '0', '-weight', 'briggs', str(briggs),
                       '-no-update-model-required', '-no-reorder', '-make-psf-only',
                       '-j', str(n_thread)] + taper_args
         wsclean.wsclean(ms_list, output_dir, output_prefix, extra_arg_list=extra_args)

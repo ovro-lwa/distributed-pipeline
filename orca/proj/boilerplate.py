@@ -8,6 +8,7 @@ from orca.proj.celery import app
 from orca.wrapper import dada2ms, change_phase_centre, wsclean
 from orca.transform import peeling, integrate, gainscaling, spectrum, calibration, image_sub
 from orca.utils import fitsutils
+from orca.extra import source_find
 from numpy import array
 
 try:
@@ -147,6 +148,44 @@ def add(x: int, y: int) -> int:
 @app.task
 def str_concat(first, second, third=''):
     return f'{first}{second}{third}'
+
+
+@app.task
+def run_source_find(fitsfile, beam) -> str:
+    return source_find.sourcefind_multithread(fitsfile, beam, n_proc=1, write_fits=True)
+
+
+"""
+For debugging
+"""
+
+import shutil
+import os
+import numpy as np
+from casacore.tables import table
+
+
+@app.task
+def pcp(source, target_dir):
+    os.makedirs(target_dir, exist_ok=True)
+    shutil.copy(source, target_dir)
+
+
+@app.task
+def pcp_tree(source, target_dir):
+    os.makedirs(target_dir, exist_ok=True)
+    shutil.copytree(source, f'{target_dir}/{os.path.basename(source)}')
+
+
+@app.task
+def read_dada(dada):
+    arr = np.fromfile(dada, dtype=np.int32, offset=4096)
+
+
+@app.task
+def read_ms(ms, lock):
+    with table(ms, ack=False, readonly=lock) as t:
+        arr = t.getcol('DATA')
 
 
 @app.task
