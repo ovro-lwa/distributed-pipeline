@@ -118,7 +118,8 @@ class SiftingWidget(widgets.HBox):
                           f"<br> {coord.ra.to_string(u.hour)} {coord.dec.to_string()} " \
                           f"x={self.cat['x'][self.curr]}, y={self.cat['y'][self.curr]} " \
                           f"{self.cat['a'][self.curr] * 60:.2f}' x {self.cat['b'][self.curr] * 60:.2f}' " \
-                          f"pk={self.cat['peak_flux'][self.curr]:.1f} Jy"
+                          f"pk={self.cat['peak_flux'][self.curr]:.1f} Jy, " \
+                          f"noise={self.cat['local_rms'][self.curr]}:.2f Jy"
 
     def _load_catalog(self, cat_fits) -> Table:
         t = Table.read(cat_fits)

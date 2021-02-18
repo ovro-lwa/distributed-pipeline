@@ -18,6 +18,7 @@ import uuid
 from billiard.pool import Pool, MapResult
 
 from orca.transform import imaging, gainscaling, image_sub
+from orca.utils import fitsutils
 from orca.wrapper import change_phase_centre
 from orca.flagging.flagoperations import merge_group_flags
 
@@ -30,8 +31,9 @@ NARROW_ONLY = True
 def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str],
                         ms_parent_after_end: str, ms_parent_after_end_day2: str,
                         snapshot_image_dir: str, snapshot_narrow_dir: str, snapshot_diff_outdir: str,
+                        narrow_long_dir: str, sidereal_diff_dir: str, sidereal_narrow_dir: str, sidereal_long_dir: str,
                         scratch_dir: str, narrow_chan_width: int = 30,
-                        spw_list: Optional[List[str]] = None) -> Tuple[List[str], List[str], List[str], List[str]]:
+                        spw_list: Optional[List[str]] = None) -> None:
     """
     Make snapshot images for two chunks of data separated by 1 sidereal day that are sidereal subtraction ready.
     Also makes subsequent frame subtraction images.
@@ -55,6 +57,10 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
         snapshot_image_dir: Output base directory for fullband snapshot image
         snapshot_narrow_dir: Output base directory for narrow-band snapshot image
         snapshot_diff_outdir: Output base directory for fullband subsequent diff images.
+        narrow_long_dir:
+        sidereal_diff_dir:
+        sidereal_narrow_dir:
+        sidereal_long_dir:
         scratch_dir: Scratch directory to put the copied ms and other intermediate data products.
         narrow_chan_width: frequency width in number of channels for the narrow-band image around 60 MHz.
         spw_list: list of spectral windows.
@@ -89,14 +95,14 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
         # Just so I don't overwrite the original files.
         ms_parent_list, ms_parent_day2_list, ms_parent_after_end, ms_parent_after_end_day2 = [], [], '', ''
 
+        log.info('Merging flags.')
+        _parallel_merge_flags(large_pool, copied_ms_parent_list + copied_ms_parent_day2_list, spw_list)
+
         copied_after_end = copied_ms_parent_list[-1]
         copied_ms_parent_list = copied_ms_parent_list[:-1]
 
         copied_after_end_day2 = copied_ms_parent_day2_list[-1]
         copied_ms_parent_day2_list = copied_ms_parent_day2_list[:-1]
-
-        log.info('Merging flags.')
-        _parallel_merge_flags(large_pool, copied_ms_parent_list + copied_ms_parent_day2_list, spw_list)
 
         log.info('Start imaging.')
         if not NARROW_ONLY:
@@ -152,6 +158,22 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
 
         # Copy images that we care about back to snapshot_image_dir
         _copy_snapshots_back(snapshot_narrow_dir, narrow_snapshots1, narrow_snapshots2, timestamps1, timestamps2)
+
+        # Make subtraction and co-added images.
+        coadd1 = fitsutils.co_add(narrow_snapshots1,
+                                  _im_to_product(narrow_snapshots1[0], f'{narrow_long_dir}/before', '.fits', ''))
+        coadd2 = fitsutils.co_add(narrow_snapshots2,
+                                  _im_to_product(narrow_snapshots2[0], f'{narrow_long_dir}/after', '.fits', ''))
+        image_sub.image_sub(coadd1, coadd2,
+                            os.path.dirname(_im_to_product(narrow_snapshots1[0], sidereal_narrow_dir, '.fits', '')))
+
+        if not NARROW_ONLY:
+            # deal with snapshots1 and snapshots2
+            # Sidereal
+            # Subsequent
+            # Co-add & subtract
+            raise NotImplementedError
+
     finally:
         log.info('Closing down pools.')
         small_pool.close()
@@ -160,10 +182,10 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
         large_pool.join()
         shutil.rmtree(temp)
 
-    if NARROW_ONLY:
-        return [], [], narrow_snapshots1, narrow_snapshots2
-    else:
-        return snapshots1, snapshots2, narrow_snapshots1, narrow_snapshots2
+
+def _im_to_product(image_path, outdir, suffix, prefix):
+    timestamp = datetime.strptime('-'.join(os.path.basename(image_path).split('-')[:-1]), "%Y-%m-%dT%H:%M:%S")
+    return f'{outdir}/{str(timestamp.date())}/hh={timestamp.hour:02d}/{prefix}{timestamp.isoformat()}{suffix}'
 
 
 def _copy_snapshots_back(snapshot_image_dir, snapshots1, snapshots2, timestamps1, timestamps2):

@@ -49,16 +49,40 @@ def imaging_steps(start_time_day1: datetime, end_time_day1: datetime, chunk_size
     ms_parent_chunks = [[pm.get_ms_parent_path(ts) for ts in c] for c in timestamp_chunks]
     ms_parent_chunks_day2 = [[pm.get_ms_parent_path(ts) for ts in c] for c in timestamp_chunks_day2]
 
-    ms_after_last_day1 = pm.get_ms_parent_path(end_time_day1)
-    ms_after_last_day2 = pm.get_ms_parent_path(end_time_day1 + SIDEREAL_DAY)
+    last_timestamp = list(pm.utc_times_mapping.keys())[-1]
+    ms_after_last_day1 = pm.get_ms_parent_path(last_timestamp + INTEGRATION_TIME)
+    ms_after_last_day2 = pm.get_ms_parent_path(last_timestamp + INTEGRATION_TIME + SIDEREAL_DAY)
     assert len(ms_parent_chunks) == len(ms_parent_chunks_day2)
     logging.info(f'Chunk size is {len(ms_parent_chunks)} with last chunk size {len(ms_parent_chunks[-1])}.')
+
+    narrow_long = 'narrow_long'
+    long = 'long'
+
+    sid_diff = 'sidereal_diff'
+    sid_long = 'sidereal_long_diff'
+    sid_narrow = 'sidereal_narrow_diff'
+
+    logging.info('Making directories.')
+    for out_dir in [sid_diff, sid_long, sid_narrow]:
+        for c1, c2 in zip(timestamp_chunks, timestamp_chunks_day2):
+            for ts in itertools.chain(c1, c2):
+                os.makedirs(f'{pm.working_dir}/{out_dir}/{ts.date()}/hh={ts.hour:02d}', exist_ok=True)
+
+    for out_dir in [f'{narrow_long}/before', f'{narrow_long}/after', f'{long}/before', f'{long}/after']:
+        for c1, c2 in zip(timestamp_chunks, timestamp_chunks_day2):
+            for ts in itertools.chain(c1, c2):
+                os.makedirs(f'{pm.working_dir}/{out_dir}/{ts.date()}/hh={ts.hour:02d}', exist_ok=True)
+
     group([make_image_products.s(c1, c2,
                                  ms_parent_chunks[i+1][0],
                                  ms_parent_chunks_day2[i+1][0],
                                  f'{pm.working_dir}/snapshot',
                                  f'{pm.working_dir}/narrow',
                                  f'{pm.working_dir}/subsequent_diff',
+                                 f'{pm.working_dir}/{narrow_long}',
+                                 f'{pm.working_dir}/{sid_diff}',
+                                 f'{pm.working_dir}/{sid_narrow}',
+                                 f'{pm.working_dir}/{sid_long}',
                                  TMP_DIR, spw_list=[12])
            for i, (c1, c2) in enumerate(zip(ms_parent_chunks[:-1], ms_parent_chunks_day2[:-1]))
            ])()
@@ -68,6 +92,10 @@ def imaging_steps(start_time_day1: datetime, end_time_day1: datetime, chunk_size
                               f'{pm.working_dir}/snapshot',
                               f'{pm.working_dir}/narrow',
                               f'{pm.working_dir}/subsequent_diff',
+                              f'{pm.working_dir}/{narrow_long}',
+                              f'{pm.working_dir}/{sid_diff}',
+                              f'{pm.working_dir}/{sid_narrow}',
+                              f'{pm.working_dir}/{sid_long}',
                               TMP_DIR, spw_list=[12])
 
 
@@ -87,7 +115,12 @@ def subtraction_step(start_time_day1: datetime, end_time_day1: datetime, chunk_s
     sid_narrow = 'sidereal_narrow_diff'
 
     logging.info('Making directories.')
-    for out_dir in [sid_diff, sid_long, sid_narrow, narrow_long, long]:
+    for out_dir in [sid_diff, sid_long, sid_narrow]:
+        for c1, c2 in zip(timestamp_chunks, timestamp_chunks_day2):
+            for ts in itertools.chain(c1, c2):
+                os.makedirs(f'{pm.working_dir}/{out_dir}/{ts.date()}/hh={ts.hour:02d}', exist_ok=True)
+
+    for out_dir in [f'{narrow_long}/before', f'{narrow_long}/after', f'{long}/before', f'{long}/after']:
         for c1, c2 in zip(timestamp_chunks, timestamp_chunks_day2):
             for ts in itertools.chain(c1, c2):
                 os.makedirs(f'{pm.working_dir}/{out_dir}/{ts.date()}/hh={ts.hour:02d}', exist_ok=True)
@@ -96,23 +129,23 @@ def subtraction_step(start_time_day1: datetime, end_time_day1: datetime, chunk_s
     for c1, c2 in zip(timestamp_chunks, timestamp_chunks_day2):
         # for each image, subtract each snapshot, add subtracted images across time.
         if not NARROW_ONLY:
-            day1_snapshots = [pm.dpp(ts1, snapshot, '-image.fits') for ts1 in c1]
-            day2_snapshots = [pm.dpp(ts2, snapshot, '-image.fits') for ts2 in c2]
-            group(run_image_sub.s(pm.dpp(ts1, snapshot, '-image.fits'),
-                                  pm.dpp(ts2, snapshot, '-image.fits'),
+            day1_snapshots = [pm.dpp(ts1, f'{snapshot}/before', '-image.fits') for ts1 in c1]
+            day2_snapshots = [pm.dpp(ts2, f'{snapshot}/after', '-image.fits') for ts2 in c2]
+            group(run_image_sub.s(pm.dpp(ts1, f'{snapshot}/before', '-image.fits'),
+                                  pm.dpp(ts2, f'{snapshot}/after', '-image.fits'),
                                   os.path.dirname(pm.dpp(ts1, sid_diff, '.fits')), 'diff_') for ts1, ts2 in zip(c1, c2))()
             run_image_sub.delay(day1_snapshots,
                                 day2_snapshots,
                                 os.path.dirname(pm.dpp(c1[0], sid_long, '.fits')), 'diff_')
-            run_co_add.delay(day1_snapshots, pm.dpp(c1[0], long, '-image.fits'), 0)
-            run_co_add.delay(day2_snapshots, pm.dpp(c2[0], long, '-image.fits'), 0)
+            run_co_add.delay(day1_snapshots, pm.dpp(c1[0], f'{long}/before', '-image.fits'), 0)
+            run_co_add.delay(day2_snapshots, pm.dpp(c2[0], f'{long}/after', '-image.fits'), 0)
 
-        day1_narrows = [pm.dpp(ts1, narrow, '-image.fits') for ts1 in c1]
-        day2_narrows = [pm.dpp(ts2, narrow, '-image.fits') for ts2 in c2]
+        day1_narrows = [pm.dpp(ts1, f'{narrow}/before', '-image.fits') for ts1 in c1]
+        day2_narrows = [pm.dpp(ts2, f'{narrow}/after', '-image.fits') for ts2 in c2]
         run_image_sub.delay(day1_narrows,
                             day2_narrows,
                             os.path.dirname(pm.dpp(c1[0], sid_narrow, '.fits')), 'diff_')
         # Create coadd as well since the pipeline needs it.
-        run_co_add.delay(day1_narrows, pm.dpp(c1[0], narrow_long, '-image.fits'), 0)
-        run_co_add.delay(day2_narrows, pm.dpp(c2[0], narrow_long, '-image.fits'), 0)
+        run_co_add.delay(day1_narrows, pm.dpp(c1[0], f'{narrow_long}/before', '-image.fits'), 0)
+        run_co_add.delay(day2_narrows, pm.dpp(c2[0], f'{narrow_long}/after', '-image.fits'), 0)
 
