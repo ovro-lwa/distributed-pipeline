@@ -4,7 +4,7 @@ import numpy as np
 import numpy.ma as ma
 import pdb
 
-def gen_spectrum(ms: str, sourcename: str, data_column: str = 'CORRECTED_DATA', timeavg: bool = False):
+def gen_spectrum(ms: str, sourcename: str, data_column: str = 'CORRECTED_DATA', timeavg: bool = False, outdir: str = None):
     """
     Generate spectrum (I,V,XX,XY,YX,YY) from the visibilities; assumes source of interest
     is already phase center.
@@ -51,7 +51,10 @@ def gen_spectrum(ms: str, sourcename: str, data_column: str = 'CORRECTED_DATA', 
         specI  = specI.mean(axis=0)
         specV  = specV.mean(axis=0)
     #
-    outfile   = path.splitext(path.abspath(ms))[0]+'_'+sourcename+'-spectrum'
+    if outdir:
+        outfile = f'{outdir}/{path.splitext(path.basename(ms))[0]}_{sourcename}-spectrum'
+    else:
+        outfile = f'{path.splitext(path.abspath(ms))[0]}_{sourcename}-spectrum'
     datacol_ma.set_fill_value(np.nan)
     specI.set_fill_value(np.nan)
     specV.set_fill_value(np.nan)

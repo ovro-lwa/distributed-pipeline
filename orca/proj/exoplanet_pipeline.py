@@ -225,14 +225,27 @@ def imaging_pipeline(start_time: datetime, end_time:datetime, pathman: OfflinePa
 
 
 def spectrum_pipeline(target_coordinates: str, target_name: str, start_time: datetime,
-                      end_time: datetime, pathman: OfflinePathsManager = pm_20200117):
+                      end_time: datetime, pathman: OfflinePathsManager = pm_20200117,
+                      image: bool = False):
     pm      = pathman.time_filter(start_time=start_time, end_time=end_time)
+    outdir  = f'{pm.working_dir}/spectra/{target_name}'
+    if not os.path.exists(outdir):
+        os.mkdir(outdir)
     results = group([
         run_chgcentre.s(pm.get_ms_path(t, f'{s:02d}'), target_coordinates) |
-        get_spectrum.s(target_name, 'DATA') 
+        get_spectrum.s(target_name, 'DATA', outdir=outdir)
         for t in pm.utc_times_mapping.keys() for s in range(2,8)
     ])()
     spectra = results.get()
+    
+    if image:
+        group([
+            run_wsclean.s([pm.get_ms_path(t, f'{s:02d}') for s in range(2,8)], \
+                outdir, t.isoformat(), \
+                extra_arg_list=['-pol', 'I,V', '-size', '4096', '4096', '-scale', \
+                    '0.03125', '-weight', 'briggs', '0.5', '-taper-inner-tukey', '30'])
+            for t in pm.utc_times_mapping.keys()
+        ])()
     
     timestamps = [t.isoformat() for t in pm.utc_times_mapping.keys()]
     Nints = len(timestamps)
