@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import sys,os,inspect
 from casacore import tables
+from scipy.interpolate import griddata as gd
 
 BEAM_FILE_PATH = os.path.abspath('/lustre/mmanders/LWA/modules/beam')
 
@@ -101,14 +102,23 @@ class jones:
         self.CRFREQ = float(tables.table(msfile+'/SPECTRAL_WINDOW', ack=False).getcell('NAME', 0))/1.e6 # center frequency in MHz
         self.path   = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe()))) # absolute path to module
         # load 4096x4096 grid of azimuth,elevation values
-        self.lmgrid  = np.load(BEAM_FILE_PATH+'/lmgrid.npy')
-        self.gridsize = self.lmgrid.shape[-1]
-        # load 4096x4096 grid of complex Co, Cx values
-        self.beamjonesfile = BEAM_FILE_PATH+'/beamJones.npz'
+        #self.lmgrid  = np.load(BEAM_FILE_PATH+'/lmgrid.npy')
+        #self.gridsize = self.lmgrid.shape[-1]
+        ## load 4096x4096 grid of complex Co, Cx values
+        #self.beamjonesfile = BEAM_FILE_PATH+'/beamJones.npz'
+        self.beamjonesfile = BEAM_FILE_PATH+'/beamLudwig3rd.npz'
         if os.path.exists(self.beamjonesfile):
+            #self.beamjones = np.load(self.beamjonesfile)
+            #self.Co    = self.beamjones['Co']
+            #self.Cx    = self.beamjones['Cx']
             self.beamjones = np.load(self.beamjonesfile)
-            self.Co    = self.beamjones['Co']
-            self.Cx    = self.beamjones['Cx']
+            self.Co = self.beamjones['cofull']
+            self.Cx = self.beamjones['cxfull']
+            self.Corot90 = self.beamjones['cofull_rot90']
+            self.Cxnrot90 = self.beamjones['cxfull_nrot90']
+            self.l = self.beamjones['lfull']
+            self.m = self.beamjones['mfull']
+            self.freqs = self.beamjones['freqfull']
         else:
             print >> sys.stderr, 'Beam .npz file does not exist at %s. Check your frequency. \
                                   May need to generate new beam file.' % str(self.CRFREQ)
@@ -123,17 +133,27 @@ class jones:
         Returns: Jones matrix at coordinates (l,m)
 
         """
-        def knn_search(arr,grid):
-            '''
-            Find 'nearest neighbor' of array of points in multi-dimensional grid
-            Source: glowingpython.blogspot.com/2012/04/k-nearest-neighbor-search.html
-            '''
-            gridsize = grid.shape[1]
-            dists    = np.sqrt(((grid - arr[:,:gridsize])**2.).sum(axis=0))
-            return np.argsort(dists)[0]
-        # index where grid equals source az el values
-        index = knn_search(np.array([ [l], [m] ]), self.lmgrid.reshape(2,self.gridsize*self.gridsize))
-        Jonesmat = np.array([ [self.Co.reshape(self.gridsize*self.gridsize)[index], self.Cx.reshape(self.gridsize*self.gridsize)[index]],
-                              [-np.rot90(self.Cx).reshape(self.gridsize*self.gridsize)[index], np.rot90(self.Co).reshape(self.gridsize*self.gridsize)[index]] ])
+        #def knn_search(arr,grid):
+        #    '''
+        #    Find 'nearest neighbor' of array of points in multi-dimensional grid
+        #    Source: glowingpython.blogspot.com/2012/04/k-nearest-neighbor-search.html
+        #    '''
+        #    gridsize = grid.shape[1]
+        #    dists    = np.sqrt(((grid - arr[:,:gridsize])**2.).sum(axis=0))
+        #    return np.argsort(dists)[0]
+        ## index where grid equals source az el values
+        #index = knn_search(np.array([ [l], [m] ]), self.lmgrid.reshape(2,self.gridsize*self.gridsize))
+        #Jonesmat = np.array([ [self.Co.reshape(self.gridsize*self.gridsize)[index], self.Cx.reshape(self.gridsize*self.gridsize)[index]],
+        #                      [-np.rot90(self.Cx).reshape(self.gridsize*self.gridsize)[index], np.rot90(self.Co).reshape(self.gridsize*self.gridsize)[index]] ])
+        coval = gd( (self.l.ravel(), self.m.ravel(), self.freqs.ravel()), \
+                selfs.Co.ravel(), (l, m, self.CRFREQ), method='linear')
+        cxval = gd( (self.l.ravel(), self.m.ravel(), self.freqs.ravel()), \
+                selfs.Cx.ravel(), (l, m, self.CRFREQ), method='linear')
+        corot90val  = gd( (self.l.ravel(), self.m.ravel(), self.freqs.ravel()), \
+                  self.Corot90.ravel(), (l, m, self.CRFREQ), method='linear')
+        cxnrot90val = gd( (self.l.ravel(), self.m.ravel(), self.freqs.ravel()), \
+                  self.Cxnrot90.ravel(), (l, m, self.CRFREQ), method='linear')
+        Jonesmat = np.array([ [coval,       cxval     ], 
+                          [cxnrot90val, corot90val] ])
         return Jonesmat
 
