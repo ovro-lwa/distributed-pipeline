@@ -86,6 +86,7 @@ def imaging_steps(start_time_day1: datetime, end_time_day1: datetime, chunk_size
                                  TMP_DIR, spw_list=[12])
            for i, (c1, c2) in enumerate(zip(ms_parent_chunks[:-1], ms_parent_chunks_day2[:-1]))
            ])()
+
     # TODO what if the last chunk has only one element?
     make_image_products.delay(ms_parent_chunks[-1], ms_parent_chunks_day2[-1],
                               ms_after_last_day1, ms_after_last_day2,

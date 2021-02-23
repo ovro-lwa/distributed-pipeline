@@ -15,7 +15,10 @@ import shutil
 from glob import glob
 import logging
 import uuid
+
 from billiard.pool import Pool, MapResult
+from casacore.tables import table
+import numpy as np
 
 from orca.transform import imaging, gainscaling, image_sub
 from orca.utils import fitsutils
@@ -94,7 +97,8 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
                                                                         temp, phase_center, spw_list)
         # Just so I don't overwrite the original files.
         ms_parent_list, ms_parent_day2_list, ms_parent_after_end, ms_parent_after_end_day2 = [], [], '', ''
-
+        copied_ms_parent_list, copied_ms_parent_day2_list = _exclude_flagged(
+            large_pool, copied_ms_parent_list, copied_ms_parent_day2_list, spw_list)
         log.info('Merging flags.')
         _parallel_merge_flags(large_pool, copied_ms_parent_list + copied_ms_parent_day2_list, spw_list)
 
@@ -103,6 +107,7 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
 
         copied_after_end_day2 = copied_ms_parent_day2_list[-1]
         copied_ms_parent_day2_list = copied_ms_parent_day2_list[:-1]
+
 
         log.info('Start imaging.')
         if not NARROW_ONLY:
@@ -156,7 +161,6 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
         narrow_snapshots1 = narrow_snapshots1.get()
         narrow_snapshots2 = narrow_snapshots2.get()
 
-        # Copy images that we care about back to snapshot_image_dir
         _copy_snapshots_back(snapshot_narrow_dir, narrow_snapshots1, narrow_snapshots2, timestamps1, timestamps2)
 
         # Make subtraction and co-added images.
@@ -295,9 +299,48 @@ def _parallel_wsclean_snapshot_sources_removed_async(pool, ms_parent_list, temp,
     return images, timestamps
 
 
+def _exclude_flagged(pool, ms_parents_day1, ms_parents_day2, spw_list, thres=0.9):
+    """
+    Exclude integrations with flag fraction higher than thred in any of the subbands.
+
+    Args:
+        pool:
+        ms_parents_day1:
+        ms_parents_day2:
+        spw_list:
+        thres: flag fraction threshold
+
+    Returns:
+        day1 and day2 ms_parents after flagging.
+
+    """
+    ms_parents_day1_flagged = []
+    ms_parents_day2_flagged = []
+    p_mff = partial(_max_flag_frac, spw_list=spw_list)
+    flag_fracs_result1 = pool.map_async(p_mff, ms_parents_day1)
+    flag_fracs_result2 = pool.map_async(p_mff, ms_parents_day2)
+    flag_fracs_day1 = flag_fracs_result1.get()
+    flag_fracs_day2 = flag_fracs_result2.get()
+    for i, _ in enumerate(ms_parents_day1):
+        if (flag_fracs_day1[i] < thres) and (flag_fracs_day2[i] < thres):
+            ms_parents_day1_flagged.append(ms_parents_day1[i])
+            ms_parents_day2_flagged.append(ms_parents_day2[i])
+    return ms_parents_day1_flagged, ms_parents_day2_flagged
+
+
 def _parallel_merge_flags(pool, ms_parent_list, spw_list):
     pool.map(merge_group_flags, [[f'{ms_parent}/{_fn(ms_parent, spw)}' for ms_parent in ms_parent_list]
                                  for spw in spw_list])
+
+
+def _max_flag_frac(ms_parent: str, spw_list: List[str]):
+    assert isinstance(spw_list, list)
+    frac = 0.
+    for s in spw_list:
+        with table(f'{ms_parent}/{_fn(ms_parent, s)}', ack=False) as t:
+            flagcol = t.getcol('FLAG')
+            frac = max(frac, np.sum(flagcol)/flagcol.size)
+    return frac
 
 
 def _fn(ms_parent_path: str, spw: str) -> str:
