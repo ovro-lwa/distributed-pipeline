@@ -97,6 +97,9 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
                                                                         temp, phase_center, spw_list)
         # Just so I don't overwrite the original files.
         ms_parent_list, ms_parent_day2_list, ms_parent_after_end, ms_parent_after_end_day2 = [], [], '', ''
+        day1_ms_parent0 = copied_ms_parent_list[0]
+        day2_ms_parent0 = copied_ms_parent_day2_list[0]
+
         copied_ms_parent_list, copied_ms_parent_day2_list = _exclude_flagged(
             large_pool, copied_ms_parent_list, copied_ms_parent_day2_list, spw_list)
         log.info('Merging flags.')
@@ -165,11 +168,11 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
 
         # Make subtraction and co-added images.
         coadd1 = fitsutils.co_add(narrow_snapshots1,
-                                  _im_to_product(narrow_snapshots1[0], f'{narrow_long_dir}/before', '.fits', ''))
+                                  _ms_parent_to_product(day1_ms_parent0, f'{narrow_long_dir}/before', '.fits', ''))
         coadd2 = fitsutils.co_add(narrow_snapshots2,
-                                  _im_to_product(narrow_snapshots2[0], f'{narrow_long_dir}/after', '.fits', ''))
+                                  _ms_parent_to_product(day2_ms_parent0, f'{narrow_long_dir}/after', '.fits', ''))
         image_sub.image_sub(coadd1, coadd2,
-                            os.path.dirname(_im_to_product(narrow_snapshots1[0], sidereal_narrow_dir, '.fits', '')))
+                            os.path.dirname(_ms_parent_to_product(day1_ms_parent0, sidereal_narrow_dir, '.fits', '')))
 
         if not NARROW_ONLY:
             # deal with snapshots1 and snapshots2
@@ -187,8 +190,8 @@ def make_image_products(ms_parent_list: List[str], ms_parent_day2_list: List[str
         shutil.rmtree(temp)
 
 
-def _im_to_product(image_path, outdir, suffix, prefix):
-    timestamp = datetime.strptime('-'.join(os.path.basename(image_path).split('-')[:-1]), "%Y-%m-%dT%H:%M:%S")
+def _ms_parent_to_product(ms_parent, outdir, suffix, prefix):
+    timestamp = datetime.strptime(os.path.basename(ms_parent).rstrip('/'), "%Y-%m-%dT%H:%M:%S")
     return f'{outdir}/{str(timestamp.date())}/hh={timestamp.hour:02d}/{prefix}{timestamp.isoformat()}{suffix}'
 
 
