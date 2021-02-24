@@ -1,5 +1,5 @@
 from typing import List
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import ipywidgets as widgets
 import matplotlib.pyplot as plt
@@ -11,10 +11,12 @@ from matplotlib.colors import Normalize
 from orca.extra.catalogutils import add_id_column
 from orca.extra.classes import Classes
 from orca.utils import fitsutils, coordutils, gitutils
+from orca.metadata.pathsmanagers import OfflinePathsManager
 
 WIDTH = 128
 
 
+# TODO need a back button
 class SiftingWidget(widgets.HBox):
     def __init__(self, catalogs: List[str], diff_ims: List[str],
                  before_ims: List[str], after_ims: List[str], outputs: List[str], min_alt_deg: float = None):
@@ -138,5 +140,23 @@ class SiftingWidget(widgets.HBox):
         self.cat.write(cat_fits)
 
 
-# TODO need a back button
-# TODO a subclass that deals with PathsManager
+class OfflineSifter(SiftingWidget):
+    def __init__(self, pm: OfflinePathsManager, start_time: datetime, end_time: datetime, interval: timedelta,
+                 subtraction_interval: timedelta,
+                 diff: str, before: str, after: str, min_alt_deg: float = None):
+        # Or use the first scan to anchor the thing. Also need integration time though.
+        times = pm.utc_times_mapping.keys()
+        assert start_time in times, 'start_time must be a valid scan time.'
+        assert start_time + interval in times, 'interval must be a multiple of the snapshot integration time.'
+        assert start_time != end_time, 'To look at one integration, add a small time delta to end_time (say, 1s).'
+        ts = start_time
+        catalogs, diff_ims, before_ims, after_ims, outputs = [], [], [], [], []
+        while ts < end_time:
+            catalogs.append(pm.dpp(ts, diff, '_sfind.fits', 'diff'))
+            diff_ims.append(pm.dpp(ts, diff, '.fits', 'diff'))
+            before_ims.append(pm.dpp(ts, before, '.fits'))
+            after_ims.append(pm.dpp(ts + subtraction_interval, after, '.fits'))
+            outputs.append(pm.dpp(ts, diff, '_sfind_sift.fits', 'diff'))
+            ts += interval
+
+        super(OfflineSifter, self).__init__(catalogs, diff_ims, before_ims, after_ims, outputs, min_alt_deg)
