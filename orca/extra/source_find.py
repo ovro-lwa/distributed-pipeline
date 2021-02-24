@@ -472,7 +472,7 @@ def main():
     args = parser.parse_args()
 
     # TODO make this an input argument
-    beam = (0.463562791015488, 0.216336343658053, 92.95)  # Narrow band
+    beam = (0.377258102146608, 0.216336343658053, 92.95)  # Narrow band
     sourcefind_multithread(args.fitsfile, beam, plot_sources=args.plot, n_proc=args.nprocs, write_fits=args.write_fits)
 
 
