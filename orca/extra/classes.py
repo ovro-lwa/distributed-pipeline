@@ -12,3 +12,4 @@ class Classes(IntEnum):
     OTHER = 7
     REFRACTION = 8
     STATIONARY = 9
+    SUN = 10
