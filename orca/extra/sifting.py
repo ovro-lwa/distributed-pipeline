@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Tuple
 from datetime import datetime, timedelta
 import numpy as np
 
@@ -33,7 +33,7 @@ class SiftingWidget(widgets.HBox):
         self.outputs = outputs
 
         self.curr_scan = 0
-        self.cat = self._load_catalog(self.catalogs[self.curr_scan])
+        self.cat, self.alt_deg = self._load_catalog(self.catalogs[self.curr_scan])
         self.diff_im, self.header = fitsutils.read_image_fits(self.diff_ims[self.curr_scan])
         self.before_im, _ = fitsutils.read_image_fits(self.before_ims[self.curr_scan])
         self.after_im, _ = fitsutils.read_image_fits(self.after_ims[self.curr_scan])
@@ -105,7 +105,7 @@ class SiftingWidget(widgets.HBox):
         if self.curr_scan > -1:
             self._save_curr_catalog(self.outputs[self.curr_scan])
         self.curr_scan += 1
-        self.cat = self._load_catalog(self.catalogs[self.curr_scan])
+        self.cat, self.alt_deg = self._load_catalog(self.catalogs[self.curr_scan])
         self.diff_im, self.header = fitsutils.read_image_fits(self.diff_ims[self.curr_scan])
         self.before_im, _ = fitsutils.read_image_fits(self.before_ims[self.curr_scan])
         self.after_im, _ = fitsutils.read_image_fits(self.after_ims[self.curr_scan])
@@ -135,23 +135,27 @@ class SiftingWidget(widgets.HBox):
         coord = SkyCoord(ra=self.cat['ra'][self.curr] * u.deg, dec=self.cat['dec'][self.curr] * u.deg)
         self.text.value = f"{self.cat.meta['DATE']} <br>" \
                           f"{self.curr + 1}/{len(self.cat)} candidates, {self.curr_scan + 1}/{len(self.catalogs)} scans" \
-                          f"<br> {coord.ra.to_string(u.hour)} {coord.dec.to_string()} " \
+                          f"<br> {coord.ra.to_string(u.hour, sep=' ')} {coord.dec.to_string(sep=' ')} " \
+                          f"alt={self.alt_deg[self.curr]:.1f} deg " \
                           f"x={self.cat['x'][self.curr]}, y={self.cat['y'][self.curr]} " \
-                          f"{self.cat['a'][self.curr] * 60:.2f}' x {self.cat['b'][self.curr] * 60:.2f}' " \
+                          f"{self.cat['a'][self.curr] * 60:.1f}' x {self.cat['b'][self.curr] * 60:.1f}' " \
                           f"pk={self.cat['peak_flux'][self.curr]:.1f} Jy, " \
                           f"noise={self.cat['local_rms'][self.curr]:.2f} Jy"
 
-    def _load_catalog(self, cat_fits) -> Table:
+    def _load_catalog(self, cat_fits) -> Tuple[Table, np.array]:
         t = Table.read(cat_fits)
         add_id_column(t)
+        t = t[t['peak_flux']/t['local_rms'] > SNR_CUTOFF]
+        # The split gets rid of the fractional second
+        timestamp = datetime.strptime(t.meta['DATE'].split('.')[0], "%Y-%m-%dT%H:%M:%S")
+        alt = coordutils.get_altaz_at_ovro(SkyCoord(t['ra'], t['dec'], unit=u.deg), timestamp).alt
         if self.min_alt_deg:
-            # The split gets rid of the fractional second
-            timestamp = datetime.strptime(t.meta['DATE'].split('.')[0], "%Y-%m-%dT%H:%M:%S")
-            alt = coordutils.get_altaz_at_ovro(SkyCoord(t['ra'], t['dec'], unit=u.deg), timestamp).alt
-            t = t[(alt > (self.min_alt_deg * u.deg)) & (t['peak_flux']/t['local_rms'] > SNR_CUTOFF)]
+            mask = (alt > (self.min_alt_deg * u.deg)) & (~np.isnan(alt.value))
+            t = t[mask]
+            alt = alt[mask]
         t.add_column(Classes.NA.value, name='class')
         t.meta['COMMIT'] = gitutils.get_commit_id()
-        return t
+        return t, alt.to(u.deg).value
 
     def _save_curr_catalog(self, cat_fits):
         # Save table to another place
