@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Union, Optional
 
 import numpy as np
 from astropy.coordinates import SkyCoord
@@ -33,6 +33,12 @@ def phase_shift_vis(t: table, freqs: np.array, phase_center: SkyCoord, pos: SkyC
                               freqs, phase_center.ra.rad, phase_center.dec.rad,
                               pos.ra.rad, pos.dec.rad)
     return data
+
+
+def phase_data_to_pos_inplace(data: np.array, uvw: np.array, freqs: np.array,
+                              ra0_rad: float, dec0_rad: float, ra_rad: float, dec_rad: float,
+                              weights: Optional[np.array] = None):
+    raise NotImplementedError
 
 
 def phase_data_to_pos_inplace(data: np.array, uvw: np.array, freqs: np.array,

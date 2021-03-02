@@ -4,7 +4,7 @@ import numpy as np
 from astropy.coordinates import SkyCoord
 from casacore.tables import table
 
-from orca.transform import phasecenter
+from orca.transform import dftspectrum
 from ..common import TEST_MS
 
 from os import path
@@ -18,7 +18,7 @@ def test_dimensions():
     data = np.zeros((n_bl, n_freqs, n_pols), dtype='complex64')
     uvw = np.zeros((n_bl, 3))
     freqs = np.zeros((1, n_freqs))
-    phasecenter.phase_data_to_pos_inplace(data, uvw, freqs, 0., 0., 0., 0.)
+    dftspectrum.phase_data_to_pos_inplace(data, uvw, freqs, 0., 0., 0., 0.)
 
 
 def test_against_chgcentre_spectrum():
@@ -29,7 +29,7 @@ def test_against_chgcentre_spectrum():
         ra, dec = tfield.getcol('PHASE_DIR')[0][0]
         phase_center = SkyCoord(ra=ra, dec=dec, frame='icrs', unit='radian')
     with table(TEST_MS) as t:
-        ans = phasecenter.phase_shift_vis(t, freqs, phase_center, pos, 'DATA')
+        ans = dftspectrum.phase_shift_vis(t, freqs, phase_center, pos, 'DATA')
     # from summing real parts of the chgcentre'd data column
     expected = np.load(f'{path.dirname(__file__)}/../resources/phased_spec.npy')
     corr_ratio = np.abs((np.mean(ans.real, axis=0) - expected)/expected)
