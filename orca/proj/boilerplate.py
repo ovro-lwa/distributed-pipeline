@@ -66,8 +66,8 @@ def zest(ms_file):
     return peeling.zest_with_casa(ms_file)
 
 @app.task
-def get_spectrum(ms_file: str, source: str, data_column: str = 'CORRECTED_DATA', timeavg: bool = False, outdir: str = None) -> str:
-    return spectrum.gen_spectrum(ms_file, source, data_column, timeavg, outdir)
+def get_spectrum(ms_file: str, source: str, data_column: str = 'CORRECTED_DATA', timeavg: bool = False, outdir: str = None, target_coordinates: str = None) -> str:
+    return spectrum.gen_spectrum(ms_file, source, data_column, timeavg, outdir, target_coordinates)
 
 @app.task
 def do_calibration(ms_file):

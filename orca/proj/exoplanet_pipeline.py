@@ -225,57 +225,48 @@ def imaging_pipeline(start_time: datetime, end_time:datetime, pathman: OfflinePa
 
 
 def spectrum_pipeline(target_coordinates: str, target_name: str, start_time: datetime,
-                      end_time: datetime, pathman: OfflinePathsManager = pm_20200117,
-                      image: bool = False):
+                      end_time: datetime, pathman: OfflinePathsManager = pm_20200117):
     pm      = pathman.time_filter(start_time=start_time, end_time=end_time)
     outdir  = f'{pm.working_dir}/spectra/{target_name}'
     if not os.path.exists(outdir):
         os.mkdir(outdir)
     results = group([
-        run_chgcentre.s(pm.get_ms_path(t, f'{s:02d}'), target_coordinates) |
-        get_spectrum.s(target_name, 'DATA', outdir=outdir)
+        get_spectrum.s(pm.get_ms_path(t, f'{s:02d}'), target_name, 'DATA', outdir=outdir,
+                       target_coordinates=target_coordinates)
         for t in pm.utc_times_mapping.keys() for s in range(2,8)
     ])()
     spectra = results.get()
     
-    if image:
-        group([
-            run_wsclean.s([pm.get_ms_path(t, f'{s:02d}') for s in range(2,8)], \
-                outdir, t.isoformat(), \
-                extra_arg_list=['-pol', 'I,V', '-size', '4096', '4096', '-scale', \
-                    '0.03125', '-weight', 'briggs', '0.5', '-taper-inner-tukey', '30'])
-            for t in pm.utc_times_mapping.keys()
-        ])()
-    
     timestamps = [t.isoformat() for t in pm.utc_times_mapping.keys()]
-    Nints = len(timestamps)
+    timesonly  = [timestamp.split('T')[1] for timestamp in timestamps]
+    spectra    = [outdir+'/'+os.path.splitext(os.path.basename(
+                    pm.get_ms_path(t, f'{s:02d}')))[0]+'_'+target_name+'-spectrum.npz' 
+                    for t in pm.utc_times_mapping.keys() for s in range(2,8)]
+    Nints      = len(timestamps)
     spwcounter = 0
     intcounter = 0
-    dynI = np.zeros((109*6,Nints))
-    dynV = np.zeros((109*6,Nints))
-    times = np.zeros(Nints)
-    freqs = np.zeros(6*109)
+    dynI       = np.zeros((109*6, Nints))
+    dynV       = np.copy(dynI)
+    times      = np.zeros(Nints)
+    freqs      = np.zeros(6*109)
     for spectrum in spectra:
-        tmp = np.load(spectrum)
-        dynI[109*spwcounter:109*(1+spwcounter),intcounter] = tmp['specI'][0]
-        dynV[109*spwcounter:109*(1+spwcounter),intcounter] = tmp['specV'][0]
-        times[intcounter] = tmp['timearr']
+        try:
+            tmp = np.load(spectrum)
+            dynI[109*spwcounter:109*(1+spwcounter),intcounter] = tmp['specI'][0]
+            dynV[109*spwcounter:109*(1+spwcounter),intcounter] = tmp['specV'][0]
+            times[intcounter] = tmp['timearr']
+        except:
+            dynI[109*spwcounter:109*(1+spwcounter),intcounter] = np.nan
+            dynV[109*spwcounter:109*(1+spwcounter),intcounter] = np.nan
+            times[intcounter] = np.nan
         if spwcounter == 5:
             spwcounter = 0
             intcounter += 1
         else:
             spwcounter += 1
-    for ind,spectrum in enumerate(spectra[0:6]):
+    for ind, spectrum in enumerate(spectra[0:6]):
         tmp = np.load(spectrum)
         freqs[ind*109:109*(ind+1)] = tmp['frqarr']
-    
-    pdb.set_trace()    
-    #import pylab as p
-    #p.ion()
-    #p.imshow(dynV, origin='lower', vmin=-100, vmax=100, extent=[0,553,freqs[0]/1.e6, 
-    #         freqs[-1]/1.e6], aspect='auto', cmap='rainbow')
-    #cbar = p.colorbar()
-    #cbar.set_label('Jy', labelpad=20, fontsize=12)
-    #p.xlabel('Integration number', fontsize=12)
-    #p.ylabel('Frequency [MHz]', fontsize=12)
-    #p.title(f'{target_name}, Stokes V', fontsize=14)
+    shutil.rmtree(outdir)
+    np.savez(outdir, dynI=dynI, dynV=dynV, times=times, freqs=freqs, timestamps=timestamps,
+             timesonly=timesonly, target_name=target_name)
