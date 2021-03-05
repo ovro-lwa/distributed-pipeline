@@ -46,8 +46,16 @@ def run_dada2ms(dada_file: str, out_ms: str, gaintable: Optional[str] = None, ad
 
 
 @app.task
-def run_chgcentre(ms_file: str, direction: str) -> str:
-    return change_phase_centre.change_phase_center(ms_file, direction)
+def run_chgcentre(ms_file: str, direction: str = None) -> str:
+    if direction:
+        return change_phase_centre.change_phase_center(ms_file, direction)
+    else:
+        from casacore.tables import table
+        from astropy.coordinates import SkyCoord
+        with table(f'{ms_file}/FIELD') as tfield:
+            ra, dec = tfield.getcol('REFERENCE_DIR')[0][0]
+            zenith  = SkyCoord(ra=ra, dec=dec, frame='icrs', unit='radian')
+        return change_phase_centre.change_phase_center(ms_file, zenith.to_string('hmsdms'))
 
 
 @app.task

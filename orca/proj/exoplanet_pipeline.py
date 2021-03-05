@@ -201,6 +201,7 @@ def processing_pipeline2(CALdate: date, start_time: datetime, end_time: datetime
     ])()
     output = result.get()
 
+
 def imaging_pipeline(start_time: datetime, end_time:datetime, pathman: OfflinePathsManager = pm_20200117):
     pm = pathman.time_filter(start_time=start_time, end_time=end_time)
     # concatenate in time per spw
@@ -224,6 +225,22 @@ def imaging_pipeline(start_time: datetime, end_time:datetime, pathman: OfflinePa
     return timesarr[np.where(rmsarr >= np.median(rmsarr) + 2*np.std(rmsarr))]
 
 
+def imaging_zenith_pipeline(start_time: datetime, end_time: datetime, pathman: OfflinePathsManager = pm_20200117):
+    pm = pathman.time_filter(start_time=start_time, end_time=end_time)
+    msfiles = group([
+        run_chgcentre.s(pm.get_ms_path(t, f'{s:02d}')) 
+        for t in pm.utc_times_mapping.keys() for s in range(2,8)
+    ])()
+    snapshots = group([
+        run_wsclean.s([pm.get_ms_path(t, f'{s:02d}') for s in range(2,8)], \
+    	    pm.get_ms_parent_path(t), t.isoformat(), \
+            extra_arg_list=['-pol', 'I,V', '-j', '1', '-tempdir', '/dev/shm/mmanders', '-size', 
+                            '4096', '4096', '-scale', '0.03125', '-weight', 'briggs', '0.5', 
+                            '-taper-inner-tukey', '30'])
+        for t in pm.utc_times_mapping.keys()
+    ])()
+
+
 def spectrum_pipeline(target_coordinates: str, target_name: str, start_time: datetime,
                       end_time: datetime, pathman: OfflinePathsManager = pm_20200117):
     pm      = pathman.time_filter(start_time=start_time, end_time=end_time)
@@ -235,7 +252,7 @@ def spectrum_pipeline(target_coordinates: str, target_name: str, start_time: dat
                        target_coordinates=target_coordinates)
         for t in pm.utc_times_mapping.keys() for s in range(2,8)
     ])()
-    spectra = results.get()
+    spectra = results.get(propagate=False)
     
     timestamps = [t.isoformat() for t in pm.utc_times_mapping.keys()]
     timesonly  = [timestamp.split('T')[1] for timestamp in timestamps]
