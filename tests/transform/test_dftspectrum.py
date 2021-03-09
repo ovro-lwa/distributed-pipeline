@@ -29,9 +29,9 @@ def test_against_chgcentre_spectrum():
         ra, dec = tfield.getcol('PHASE_DIR')[0][0]
         phase_center = SkyCoord(ra=ra, dec=dec, frame='icrs', unit='radian')
     with table(TEST_MS) as t:
-        ans = dftspectrum.phase_shift_vis(t, freqs, phase_center, pos, 'DATA')
+        ans = np.mean(np.real(dftspectrum.phase_shift_vis(t, freqs, phase_center, pos, 'DATA')), axis=0)
     # from summing real parts of the chgcentre'd data column
     expected = np.load(f'{path.dirname(__file__)}/../resources/phased_spec.npy')
-    corr_ratio = np.abs((np.mean(ans.real, axis=0) - expected)/expected)
-    assert max(corr_ratio[:, 0].max(), corr_ratio[:, 0].max()) < 1e-4
+    corr_ratio = np.abs((ans - expected)/expected)
+    assert max(corr_ratio[:, 0].max(), corr_ratio[:, 3].max()) < 1e-4
     assert max(corr_ratio[:, 1].max(), corr_ratio[:, 2].max()) < 1e-1
