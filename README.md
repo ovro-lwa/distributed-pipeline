@@ -51,6 +51,23 @@ TBA, but meanwhile see scripts in `proj` directory. celery admin notes are in `c
 When you call `pipenv sync`, it installs all the packages recorded in `pipenv.lock`. To add a new package as
 dependency to the project, instead of calling `pip install`, do `pipenv install --keep-oudated` with the package
 so that it installs the package, update the minimal set of packages required, and then write the current state
-of the packages into `pipenv.lock`.
+of the packages into `pipenv.lock`. Add a `--dev` flag to `instaill` if you only want the package in the `dev`
+environment (say, if you're only gonna use this for your notebooks/offline analyses instead of your pipeline)
 
-Alternatively, you can specify the package in `Pipfile` (maybe with a version or something) and then run `pipenv lock --keep-outdated` (I'm not 100% sure about this...).
+## Updating package
+`pipenv install` is still the command to call. Say I want to upgrade numpy to 1.19.1, I'd do
+```
+pipenv install --keep-outdated 'numpy==1.19.1'
+```
+This would update both `Pipfile.lock` and `Pipfile`. I then usually do the following so that I don't spec these
+packages in the `Pipfile` (so that the versions don't get accidentally locked)
+```
+git checkout -- Pipfile
+```
+Note that the new environment is still stored in `Pipfile.lock`.
+
+`pipenv update` would try to update the entire environment, no matter what you call it with. I don't use it. It is
+useful to see what's oudated with
+```
+pipenv update --dry-run
+```
