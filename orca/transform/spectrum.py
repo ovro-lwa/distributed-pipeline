@@ -6,16 +6,19 @@ import numpy as np
 import numpy.ma as ma
 import pdb
 
-def gen_spectrum(ms: str, sourcename: str, data_column: str = 'CORRECTED_DATA', timeavg: bool = False, outdir: str = None, target_coordinates: str = None):
+def gen_spectrum(ms: str, sourcename: str, data_column: str = 'CORRECTED_DATA', timeavg: bool = False, outdir: str = None, target_coordinates: str = None, apply_weights: str = None):
     """
     Generate spectrum (I,V,XX,XY,YX,YY) from the visibilities; if target_coordinates not assigned, assumes source of interest
-    is already at phase center.
+    is already at phase center; if apply_weights not assigned, no weights applied.
 
     Args:
         ms: The measurement set.
         sourcename: The source for which spectrum is being generated. Used for naming output file.
         data_column: MS data column on which to operate. Default is CORRECTED_DATA.
         timeavg: Average in time. Default is False.
+        outdir: Path to where output .npz file should be written. Default is path to input ms.
+        apply_weights: Imaging weights npy file (from wsclean-2.5 -store-imaging-weights,
+            IMAGING_WEIGHT_SPECTRUM column).
 
     Returns:
         Path to output .npz file containing spectrum.
@@ -41,6 +44,11 @@ def gen_spectrum(ms: str, sourcename: str, data_column: str = 'CORRECTED_DATA', 
     Ncorrs  = datacol.shape[2]
     Nspw    = freqcol.shape[0]
     Nints   = int(datacol.shape[0]/(Nbls*Nspw))
+    #
+    # apply weights
+    if apply_weights:
+        weights = np.load(apply_weights)
+        datacol = np.multiply(datacol, weights)
     #
     # reorder visibilities by Nints, Nbls, Nchans*Nspw, Ncorr and take the mean on the Nbls axis
     datacol_ma = ma.masked_array(datacol, mask=flagcol, fill_value=np.nan).reshape(Nspw, Nints, Nbls, Nchans, Ncorrs).transpose(1,2,0,3,4).reshape(Nints,Nbls,-1,Ncorrs).mean(axis=1)
