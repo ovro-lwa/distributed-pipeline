@@ -135,7 +135,8 @@ class SiftingWidget(widgets.HBox):
         coord = SkyCoord(ra=self.cat['ra'][self.curr] * u.deg, dec=self.cat['dec'][self.curr] * u.deg)
         self.text.value = f"{self.cat.meta['DATE']} <br>" \
                           f"{self.curr + 1}/{len(self.cat)} candidates, {self.curr_scan + 1}/{len(self.catalogs)} scans" \
-                          f"<br> {coord.ra.to_string(u.hour, sep=' ')} {coord.dec.to_string(sep=' ')} " \
+                          f"<br> {coord.ra.to_string(u.hour, sep=' ', precision=1)}"\
+                          f"{coord.dec.to_string(sep=' ', precision=1)} " \
                           f"alt={self.alt_deg[self.curr]:.1f} deg " \
                           f"x={self.cat['x'][self.curr]}, y={self.cat['y'][self.curr]} " \
                           f"{self.cat['a'][self.curr] * 60:.1f}' x {self.cat['b'][self.curr] * 60:.1f}' " \
