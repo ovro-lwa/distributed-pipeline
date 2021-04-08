@@ -99,11 +99,22 @@ class SiftingWidget(widgets.HBox):
                 cmap='gray', norm=norm, origin='lower')
             self.load_text()
 
+        self.vmin_ctrl = widgets.Text(value=f'{-peak:.1f}', placeholder='-10', description='vmin:',
+                                      disabled=False, layout=widgets.Layout(width='20%'), continuous_update=False)
+        self.vmin_ctrl.observe(self._update_vmin, names='value')
+        self.vmax_ctrl = widgets.Text(value=f'{peak:.1f}', placeholder='10', description='vmax:',
+                                      disabled=False, layout=widgets.Layout(width='20%'), continuous_update=False)
+        self.vmax_ctrl.observe(self._update_vmax, names='value')
+        self.cmap_ctrl = widgets.Dropdown(value='gray', options=['gray', 'gray_r', 'viridis', 'viridis_r'],
+                                          description='cmap:', disable=False, layout=widgets.Layout(width='20%'))
+        self.cmap_ctrl.observe(self._update_cmap, names='value')
+        plot_control = widgets.HBox([self.vmin_ctrl, self.vmax_ctrl, self.cmap_ctrl])
+
         with spectrum:
             fig3, ax3 = plt.subplots(constrained_layout=True, figsize=(10, 3), dpi=72)
             fig3.canvas.header_visible = False
 
-        self.children = [snapshot, widgets.VBox([cutouts, self.text, spectrum]), buttons]
+        self.children = [snapshot, widgets.VBox([cutouts, plot_control, self.text, spectrum]), buttons]
 
     def make_buttons(self):
         buttons = [widgets.Button(description=name) for name, _ in Classes.__members__.items()]
@@ -125,6 +136,32 @@ class SiftingWidget(widgets.HBox):
         self.load_mpl_im()
         self.fig2.canvas.draw()
         self.load_text()
+
+    def _update_vmin(self, change):
+        try:
+            norm = Normalize(vmin=float(change['new']), vmax=float(self.vmax_ctrl.value))
+            self.diff_imshow.set_norm(norm)
+            self.before_imshow.set_norm(norm)
+            self.after_imshow.set_norm(norm)
+            self.fig2.canvas.draw()
+        except Exception:
+            logging.exception()
+
+    def _update_vmax(self, change):
+        try:
+            norm = Normalize(vmin=float(self.vmin_ctrl.value), vmax=float(change['new']))
+            self.diff_imshow.set_norm(norm)
+            self.before_imshow.set_norm(norm)
+            self.after_imshow.set_norm(norm)
+            self.fig2.canvas.draw()
+        except Exception:
+            logging.exception()
+
+    def _update_cmap(self, change):
+        self.diff_imshow.set_cmap(change['new'])
+        self.before_imshow.set_cmap(change['new'])
+        self.after_imshow.set_cmap(change['new'])
+        self.fig2.canvas.draw()
 
     def _back(self, b):
         # This back button is an afterthought.
@@ -163,24 +200,34 @@ class SiftingWidget(widgets.HBox):
         self.diff_imshow.set_data(
             self.diff_im.T[self.cat['x'][self.curr] - WIDTH: self.cat['x'][self.curr] + WIDTH,
             self.cat['y'][self.curr] - WIDTH: self.cat['y'][self.curr] + WIDTH].T)
-        self.diff_imshow.set_norm(norm)
         self.before_imshow.set_data(
             self.before_im.T[self.cat['x'][self.curr] - WIDTH: self.cat['x'][self.curr] + WIDTH,
             self.cat['y'][self.curr] - WIDTH: self.cat['y'][self.curr] + WIDTH].T)
-        self.before_imshow.set_norm(norm)
         self.after_imshow.set_data(
             self.after_im.T[self.cat['x'][self.curr] - WIDTH: self.cat['x'][self.curr] + WIDTH,
             self.cat['y'][self.curr] - WIDTH: self.cat['y'][self.curr] + WIDTH].T)
+        self.diff_imshow.set_norm(norm)
+        self.before_imshow.set_norm(norm)
         self.after_imshow.set_norm(norm)
+
+        self.vmax_ctrl.unobserve(self._update_vmax, names='value')
+        self.vmin_ctrl.unobserve(self._update_vmmin, names='value')
+        self.vmax_cmap.unobserve(self._update_cmap, names='value')
+        self.vmax_ctrl.value = peak
+        self.vmin_ctrl.value = -peak
+        self.vmax_ctrl.value = 'gray'
+        self.vmax_ctrl.observe(self._update_vmax, names='value')
+        self.vmin_ctrl.observe(self._update_vmmin, names='value')
+        self.vmax_cmap.observe(self._update_cmap, names='value')
 
     def load_text(self):
         coord = self.coords[self.curr]
-        self.text.value = f"{self.cat.meta['DATE']} <br>" \
+        self.text.value = f"{self.cat.meta['DATE']} ---" \
                           f"{self.curr + 1}/{len(self.cat)} candidates, " \
-                          f"{self.curr_scan + 1}/{len(self.catalogs)} scans" \
-                          f"<br> {coord.ra.to_string(u.hour, sep=' ', precision=1)}"\
+                          f"{self.curr_scan + 1}/{len(self.catalogs)} scans --- " \
+                          f"{coord.ra.to_string(u.hour, sep=' ', precision=1)}"\
                           f"{coord.dec.to_string(sep=' ', precision=1)} " \
-                          f"alt={self.alt_deg[self.curr]:.1f} deg " \
+                          f"<br> alt={self.alt_deg[self.curr]:.1f} deg " \
                           f"x={self.cat['x'][self.curr]}, y={self.cat['y'][self.curr]} " \
                           f"{self.cat['a'][self.curr] * 60:.1f}' x {self.cat['b'][self.curr] * 60:.1f}' " \
                           f"pk={self.cat['peak_flux'][self.curr]:.1f} Jy, " \
