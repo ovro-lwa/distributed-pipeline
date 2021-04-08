@@ -197,7 +197,21 @@ class SiftingWidget(widgets.HBox):
 class OfflineSifter(SiftingWidget):
     def __init__(self, pm: OfflinePathsManager, start_time: datetime, end_time: datetime, interval: timedelta,
                  subtraction_interval: timedelta,
-                 diff: str, before: str, after: str, min_alt_deg: float = None):
+                 diff: str, before: str, after: str, output_suffix: str, min_alt_deg: float = None):
+        """
+
+        Args:
+            pm:
+            start_time:
+            end_time:
+            interval:
+            subtraction_interval:
+            diff:
+            before:
+            after:
+            output_suffix: For example '_sfind_sift.fits'
+            min_alt_deg:
+        """
         # Or use the first scan to anchor the thing. Also need integration time though.
         times = pm.utc_times_mapping.keys()
         assert start_time in times, 'start_time must be a valid scan time.'
@@ -210,7 +224,7 @@ class OfflineSifter(SiftingWidget):
             diff_ims.append(pm.dpp(ts, diff, '.fits', 'diff'))
             before_ims.append(pm.dpp(ts, before, '.fits'))
             after_ims.append(pm.dpp(ts + subtraction_interval, after, '.fits'))
-            outputs.append(pm.dpp(ts, diff, '_sfind_sift.fits', 'diff'))
+            outputs.append(pm.dpp(ts, diff, output_suffix, 'diff'))
             ts += interval
 
         super(OfflineSifter, self).__init__(catalogs, diff_ims, before_ims, after_ims, outputs, min_alt_deg)
