@@ -14,7 +14,7 @@ def test_init_offlinesifter(super_init):
                              working_dir='/tmp/')
     OfflineSifter(pm, datetime(2019, 10, 28, 23, 2, 47), datetime(2019, 10, 28, 23, 3, 52), timedelta(seconds=13),
                   SIDEREAL_DAY,
-                  'sidereal_narrow_diff', 'sidereal_long/before', 'sidereal_long/after')
+                  'sidereal_narrow_diff', 'sidereal_long/before', 'sidereal_long/after', '_sfind_sift.fits')
     catalogs, diff_ims, before_ims, after_ims, outputs, _ = super_init.call_args.args
     assert len(catalogs) == 5
     assert len(diff_ims) == 5
