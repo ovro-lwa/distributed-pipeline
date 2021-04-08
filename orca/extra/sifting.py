@@ -4,11 +4,11 @@ import numpy as np
 
 import ipywidgets as widgets
 import matplotlib.pyplot as plt
-from matplotlib.colors import Normalize
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 from astropy.table import Table
 from matplotlib.colors import Normalize
+import logging
 
 from orca.extra.catalogutils import add_id_column
 from orca.extra.classes import Classes
@@ -19,13 +19,34 @@ WIDTH = 128
 
 SNR_CUTOFF = 6.5
 
+PERSISTANT_CAT = '/home/yuping/catalog-scripts/merged_sourcecatalog_rev1.fits'
+
+# Maximum distance for associating a source with a persistent source
+MAX_ASSOC_DIST = 22 * u.arcmin
+
 
 # TODO need a back button
 class SiftingWidget(widgets.HBox):
     def __init__(self, catalogs: List[str], diff_ims: List[str],
-                 before_ims: List[str], after_ims: List[str], outputs: List[str], min_alt_deg: float = None):
+                 before_ims: List[str], after_ims: List[str], outputs: List[str],
+                 min_alt_deg: float = None, min_brightening_factor: float = None, min_ncp_dist_deg: float = None):
+        """
+
+        Args:
+            catalogs: List of catalog fits files.
+            diff_ims: Lit of differenced images, ordered as catalogs.
+            before_ims: List of before_ims, ordered as catalogs
+            after_ims: List of after_ims, ordered as catalogs
+            outputs: List of output catalog names, ordered as catalogs
+            min_alt_deg: minimum altitude angle cutoff in degrees. None means not doing cutoff.
+            min_brightening_factor: Factor with which a persistent source should brighten before being considered a
+                candidate. None means not looking at the persistent source catalog.
+            min_ncp_dist_deg: minimum distance from the NCP. None means not doing NCP masking.
+        """
         super().__init__()
         self.min_alt_deg = min_alt_deg
+        self.min_brightening_factor = min_brightening_factor
+        self.min_ncp_dist_deg = min_ncp_dist_deg
         self.catalogs = catalogs
         self.diff_ims = diff_ims
         self.before_ims = before_ims
@@ -33,12 +54,13 @@ class SiftingWidget(widgets.HBox):
         self.outputs = outputs
 
         self.curr_scan = 0
-        self.cat, self.alt_deg = self._load_catalog(self.catalogs[self.curr_scan])
+        self.cat, self.coords, self.alt_deg = self._load_catalog(self.catalogs[self.curr_scan])
         self.diff_im, self.header = fitsutils.read_image_fits(self.diff_ims[self.curr_scan])
         self.before_im, _ = fitsutils.read_image_fits(self.before_ims[self.curr_scan])
         self.after_im, _ = fitsutils.read_image_fits(self.after_ims[self.curr_scan])
         self.curr = 0
-
+        if self.min_brightening_factor:
+            self.persist_cat = Table.read(PERSISTANT_CAT)
         snapshot = widgets.Output()
         cutouts = widgets.Output()
         spectrum = widgets.Output()
@@ -105,7 +127,7 @@ class SiftingWidget(widgets.HBox):
         if self.curr_scan > -1:
             self._save_curr_catalog(self.outputs[self.curr_scan])
         self.curr_scan += 1
-        self.cat, self.alt_deg = self._load_catalog(self.catalogs[self.curr_scan])
+        self.cat, self.coords, self.alt_deg = self._load_catalog(self.catalogs[self.curr_scan])
         self.diff_im, self.header = fitsutils.read_image_fits(self.diff_ims[self.curr_scan])
         self.before_im, _ = fitsutils.read_image_fits(self.before_ims[self.curr_scan])
         self.after_im, _ = fitsutils.read_image_fits(self.after_ims[self.curr_scan])
@@ -132,7 +154,7 @@ class SiftingWidget(widgets.HBox):
         self.after_imshow.set_norm(norm)
 
     def load_text(self):
-        coord = SkyCoord(ra=self.cat['ra'][self.curr] * u.deg, dec=self.cat['dec'][self.curr] * u.deg)
+        coord = self.coords[self.curr]
         self.text.value = f"{self.cat.meta['DATE']} <br>" \
                           f"{self.curr + 1}/{len(self.cat)} candidates, {self.curr_scan + 1}/{len(self.catalogs)} scans" \
                           f"<br> {coord.ra.to_string(u.hour, sep=' ', precision=1)}"\
@@ -143,20 +165,29 @@ class SiftingWidget(widgets.HBox):
                           f"pk={self.cat['peak_flux'][self.curr]:.1f} Jy, " \
                           f"noise={self.cat['local_rms'][self.curr]:.2f} Jy"
 
-    def _load_catalog(self, cat_fits) -> Tuple[Table, np.array]:
+    def _load_catalog(self, cat_fits) -> Tuple[Table, SkyCoord, np.array]:
         t = Table.read(cat_fits)
         add_id_column(t)
         t = t[t['peak_flux']/t['local_rms'] > SNR_CUTOFF]
         # The split gets rid of the fractional second
         timestamp = datetime.strptime(t.meta['DATE'].split('.')[0], "%Y-%m-%dT%H:%M:%S")
-        alt = coordutils.get_altaz_at_ovro(SkyCoord(t['ra'], t['dec'], unit=u.deg), timestamp).alt
+        coords = SkyCoord(t['ra'], t['dec'], unit=u.deg)
+        alt = coordutils.get_altaz_at_ovro(coords, timestamp).alt
+        mask = np.ones_like(alt, dtype=bool)
         if self.min_alt_deg:
-            mask = (alt > (self.min_alt_deg * u.deg)) & (~np.isnan(alt.value))
+            mask &= (alt > (self.min_alt_deg * u.deg)) & (~np.isnan(alt.value))
+        if self.min_brightening_factor:
+            idx, sep2d, _ = coords.match_to_catalog_sky(self.persist_cat)
+            # mask &= ((sep2d > MAX_ASSOC_DIST) & (flux1/flux2 > self.min_brightening_factor))
+            logging.warning("min_brightening_factor doesn't do anything yet "
+                            "because the persistent cat does not have fluxes.")
+        if not np.all(mask):
             t = t[mask]
             alt = alt[mask]
+            coords = coords[mask]
         t.add_column(Classes.NA.value, name='class')
         t.meta['COMMIT'] = gitutils.get_commit_id()
-        return t, alt.to(u.deg).value
+        return t, coords, alt.to(u.deg).value
 
     def _save_curr_catalog(self, cat_fits):
         # Save table to another place
