@@ -111,6 +111,9 @@ class SiftingWidget(widgets.HBox):
         buttons.append(skip)
         for b in buttons:
             b.on_click(self.update)
+        back = widgets.Button(description='back')
+        back.on_click((self._back))
+        buttons.append(back)
         return widgets.VBox(buttons)
 
     def update(self, b):
@@ -119,6 +122,23 @@ class SiftingWidget(widgets.HBox):
         self.curr += 1
         if self.curr == len(self.cat):
             self._init_next_scan()
+        self.load_mpl_im()
+        self.fig2.canvas.draw()
+        self.load_text()
+
+    def _back(self, b):
+        # This back button is an afterthought.
+        if self.curr == 0:
+            # if first cand of scan, go back 2 scans, load next scan. Need to re-open the output cat file.
+            self.curr_scan -= 2
+            self._init_next_scan()
+            self.cat = Table.read(self.outputs[self.curr_scan])
+            assert len(self.cat) == len(self.alt_deg), "I did not get the back button correct."
+            self.curr = len(self.cat) - 1
+        else:
+            self.curr -= 1
+
+        self.cat['class'][self.curr] = Classes.NA
         self.load_mpl_im()
         self.fig2.canvas.draw()
         self.load_text()
@@ -156,7 +176,8 @@ class SiftingWidget(widgets.HBox):
     def load_text(self):
         coord = self.coords[self.curr]
         self.text.value = f"{self.cat.meta['DATE']} <br>" \
-                          f"{self.curr + 1}/{len(self.cat)} candidates, {self.curr_scan + 1}/{len(self.catalogs)} scans" \
+                          f"{self.curr + 1}/{len(self.cat)} candidates, " \
+                          f"{self.curr_scan + 1}/{len(self.catalogs)} scans" \
                           f"<br> {coord.ra.to_string(u.hour, sep=' ', precision=1)}"\
                           f"{coord.dec.to_string(sep=' ', precision=1)} " \
                           f"alt={self.alt_deg[self.curr]:.1f} deg " \
@@ -173,9 +194,9 @@ class SiftingWidget(widgets.HBox):
         timestamp = datetime.strptime(t.meta['DATE'].split('.')[0], "%Y-%m-%dT%H:%M:%S")
         coords = SkyCoord(t['ra'], t['dec'], unit=u.deg)
         alt = coordutils.get_altaz_at_ovro(coords, timestamp).alt
-        mask = np.ones_like(alt, dtype=bool)
+        mask = np.ones_like(alt.value, dtype=bool)
         if self.min_alt_deg:
-            mask &= (alt > (self.min_alt_deg * u.deg)) & (~np.isnan(alt.value))
+            mask &= ((alt.to(u.deg).value > self.min_alt_deg) & (~np.isnan(alt.value)))
         if self.min_brightening_factor:
             idx, sep2d, _ = coords.match_to_catalog_sky(self.persist_cat)
             # mask &= ((sep2d > MAX_ASSOC_DIST) & (flux1/flux2 > self.min_brightening_factor))
@@ -191,7 +212,7 @@ class SiftingWidget(widgets.HBox):
 
     def _save_curr_catalog(self, cat_fits):
         # Save table to another place
-        self.cat.write(cat_fits)
+        self.cat.write(cat_fits, overwrite=True)
 
 
 class OfflineSifter(SiftingWidget):
@@ -217,6 +238,7 @@ class OfflineSifter(SiftingWidget):
         assert start_time in times, 'start_time must be a valid scan time.'
         assert start_time + interval in times, 'interval must be a multiple of the snapshot integration time.'
         assert start_time != end_time, 'To look at one integration, add a small time delta to end_time (say, 1s).'
+        assert output_suffix.endswith('.fits'), 'output_suffix needs to end with .fits.'
         ts = start_time
         catalogs, diff_ims, before_ims, after_ims, outputs = [], [], [], [], []
         while ts < end_time:
