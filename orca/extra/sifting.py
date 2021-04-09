@@ -164,13 +164,9 @@ class SiftingWidget(widgets.HBox):
         self.fig2.canvas.draw()
 
     def _back(self, b):
-        # This back button is an afterthought.
         if self.curr == 0:
             # if first cand of scan, go back 2 scans, load next scan. Need to re-open the output cat file.
-            self.curr_scan -= 2
-            self._init_next_scan()
-            self.cat = Table.read(self.outputs[self.curr_scan])
-            assert len(self.cat) == len(self.alt_deg), "I did not get the back button correct."
+            self._init_prev_scan()
             self.curr = len(self.cat) - 1
         else:
             self.curr -= 1
@@ -181,9 +177,30 @@ class SiftingWidget(widgets.HBox):
         self.cat['class'][self.curr] = Classes.NA
 
     def _init_next_scan(self):
-        if self.curr_scan > -1:
-            self._save_curr_catalog(self.outputs[self.curr_scan])
-        self.curr_scan += 1
+        while True:
+            if self.curr_scan > -1:
+                self._save_curr_catalog(self.outputs[self.curr_scan])
+            self._load_scan_data(increment=1)
+            if len(self.cat) == 0:
+                logging.info(f'{self.catalogs[self.curr_scan]} has 0 filtered candidates, skipping.')
+                self._save_curr_catalog(self.outputs[self.curr_scan])
+            else:
+                break
+        self.fig1.canvas.draw()
+
+    def _init_prev_scan(self):
+        while True:
+            self._load_scan_data(increment=-1)
+            self.cat = Table.read(self.outputs[self.curr_scan])
+            assert len(self.cat) == len(self.alt_deg), "I did not get the back button correct."
+            if len(self.cat) == 0:
+                logging.info(f'{self.catalogs[self.curr_scan]} has 0 filtered candidates, skipping.')
+            else:
+                break
+        self.fig1.canvas.draw()
+
+    def _load_scan_data(self, increment: int):
+        self.curr_scan += increment
         self.cat, self.coords, self.alt_deg = self._load_catalog(self.catalogs[self.curr_scan])
         self.diff_im, self.header = fitsutils.read_image_fits(self.diff_ims[self.curr_scan])
         self.before_im, _ = fitsutils.read_image_fits(self.before_ims[self.curr_scan])
@@ -191,11 +208,7 @@ class SiftingWidget(widgets.HBox):
         rms = np.median(np.unique(self.cat['local_rms']))
         self.big_diff_imshow.set_data(self.diff_im)
         self.big_diff_imshow.set_norm(Normalize(vmin=-6 * rms, vmax=6 * rms))
-        self.fig1.canvas.draw()
         self.curr = 0
-
-    def _init_prev_scan(self):
-        pass
 
     def load_mpl_im(self):
         peak = np.abs(self.cat['peak_flux'][self.curr])
@@ -212,23 +225,26 @@ class SiftingWidget(widgets.HBox):
         self.diff_imshow.set_norm(norm)
         self.before_imshow.set_norm(norm)
         self.after_imshow.set_norm(norm)
+        self.diff_imshow.set_cmap('gray')
+        self.before_imshow.set_cmap('gray')
+        self.after_imshow.set_cmap('gray')
 
         self.vmax_ctrl.unobserve(self._update_vmax, names='value')
-        self.vmin_ctrl.unobserve(self._update_vmmin, names='value')
-        self.vmax_cmap.unobserve(self._update_cmap, names='value')
-        self.vmax_ctrl.value = peak
-        self.vmin_ctrl.value = -peak
-        self.vmax_ctrl.value = 'gray'
+        self.vmin_ctrl.unobserve(self._update_vmin, names='value')
+        self.cmap_ctrl.unobserve(self._update_cmap, names='value')
+        self.vmax_ctrl.value = f'{peak:.1f}'
+        self.vmin_ctrl.value = f'{(-peak):.1f}'
+        self.cmap_ctrl.value = 'gray'
         self.vmax_ctrl.observe(self._update_vmax, names='value')
-        self.vmin_ctrl.observe(self._update_vmmin, names='value')
-        self.vmax_cmap.observe(self._update_cmap, names='value')
+        self.vmin_ctrl.observe(self._update_vmin, names='value')
+        self.cmap_ctrl.observe(self._update_cmap, names='value')
 
     def load_text(self):
         coord = self.coords[self.curr]
         self.text.value = f"{self.cat.meta['DATE']} ---" \
                           f"{self.curr + 1}/{len(self.cat)} candidates, " \
                           f"{self.curr_scan + 1}/{len(self.catalogs)} scans --- " \
-                          f"{coord.ra.to_string(u.hour, sep=' ', precision=1)}"\
+                          f"{coord.ra.to_string(u.hour, sep=' ', precision=1)}, "\
                           f"{coord.dec.to_string(sep=' ', precision=1)} " \
                           f"<br> alt={self.alt_deg[self.curr]:.1f} deg " \
                           f"x={self.cat['x'][self.curr]}, y={self.cat['y'][self.curr]} " \
