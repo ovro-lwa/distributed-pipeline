@@ -145,7 +145,7 @@ class SiftingWidget(widgets.HBox):
             self.after_imshow.set_norm(norm)
             self.fig2.canvas.draw()
         except Exception:
-            logging.exception()
+            logging.exception('Exception while updating vmin.')
 
     def _update_vmax(self, change):
         try:
@@ -155,7 +155,7 @@ class SiftingWidget(widgets.HBox):
             self.after_imshow.set_norm(norm)
             self.fig2.canvas.draw()
         except Exception:
-            logging.exception()
+            logging.exception('Exception while updating vmax.')
 
     def _update_cmap(self, change):
         self.diff_imshow.set_cmap(change['new'])
@@ -175,10 +175,10 @@ class SiftingWidget(widgets.HBox):
         else:
             self.curr -= 1
 
-        self.cat['class'][self.curr] = Classes.NA
         self.load_mpl_im()
         self.fig2.canvas.draw()
         self.load_text()
+        self.cat['class'][self.curr] = Classes.NA
 
     def _init_next_scan(self):
         if self.curr_scan > -1:
@@ -193,6 +193,9 @@ class SiftingWidget(widgets.HBox):
         self.big_diff_imshow.set_norm(Normalize(vmin=-6 * rms, vmax=6 * rms))
         self.fig1.canvas.draw()
         self.curr = 0
+
+    def _init_prev_scan(self):
+        pass
 
     def load_mpl_im(self):
         peak = np.abs(self.cat['peak_flux'][self.curr])
