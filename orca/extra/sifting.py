@@ -1,4 +1,4 @@
-from typing import List, Tuple
+from typing import List, Tuple, Sized
 from datetime import datetime, timedelta
 import numpy as np
 
@@ -29,7 +29,7 @@ MAX_ASSOC_DIST = 22 * u.arcmin
 class SiftingWidget(widgets.HBox):
     def __init__(self, catalogs: List[str], diff_ims: List[str],
                  before_ims: List[str], after_ims: List[str], outputs: List[str],
-                 min_alt_deg: float = None, min_amplification: float = None, min_ncp_dist_deg: float = None):
+                 min_alt_deg: float = None, min_amplification: float = None, max_dec_deg: Sized[float] = None):
         """
 
         Args:
@@ -41,12 +41,16 @@ class SiftingWidget(widgets.HBox):
             min_alt_deg: minimum altitude angle cutoff in degrees. None means not doing cutoff.
             min_amplification: Factor with which a persistent source should brighten before being considered a
                 candidate. None means not looking at the persistent source catalog.
-            min_ncp_dist_deg: minimum distance from the NCP. None means not doing NCP masking.
+            max_dec_deg: A list of maximum declinations, i.e. minimum distances from the NCP,
+                one for each scan. None means not doing NCP masking.
         """
         super().__init__()
         self.min_alt_deg = min_alt_deg
         self.min_brightening_factor = min_amplification
-        self.min_ncp_dist_deg = min_ncp_dist_deg
+        if max_dec_deg is not None:
+            assert len(max_dec_deg) == len(diff_ims), \
+                'max_dec_deg and diff_ims (and other lists) should have the same len.'
+        self.max_dec_deg = max_dec_deg
         self.catalogs = catalogs
         self.diff_ims = diff_ims
         self.before_ims = before_ims
@@ -270,11 +274,13 @@ class SiftingWidget(widgets.HBox):
         mask = np.ones_like(alt.value, dtype=bool)
         if self.min_alt_deg:
             mask &= ((alt.to(u.deg).value > self.min_alt_deg) & (~np.isnan(alt.value)))
-        if self.min_brightening_factor:
+        if self.min_brightening_factor is not None:
             idx, sep2d, _ = coords.match_to_catalog_sky(self.persist_cat)
             # mask &= ((sep2d > MAX_ASSOC_DIST) & (flux1/flux2 > self.min_brightening_factor))
             logging.warning("min_brightening_factor doesn't do anything yet "
                             "because the persistent cat does not have fluxes.")
+        if self.max_dec_deg:
+            mask &= (coords.dec.to(u.deg).value < self.max_dec_deg[self.curr_scan])
         if not np.all(mask):
             t = t[mask]
             alt = alt[mask]
