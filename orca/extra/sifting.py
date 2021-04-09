@@ -29,7 +29,7 @@ MAX_ASSOC_DIST = 22 * u.arcmin
 class SiftingWidget(widgets.HBox):
     def __init__(self, catalogs: List[str], diff_ims: List[str],
                  before_ims: List[str], after_ims: List[str], outputs: List[str],
-                 min_alt_deg: float = None, min_brightening_factor: float = None, min_ncp_dist_deg: float = None):
+                 min_alt_deg: float = None, min_amplification: float = None, min_ncp_dist_deg: float = None):
         """
 
         Args:
@@ -39,13 +39,13 @@ class SiftingWidget(widgets.HBox):
             after_ims: List of after_ims, ordered as catalogs
             outputs: List of output catalog names, ordered as catalogs
             min_alt_deg: minimum altitude angle cutoff in degrees. None means not doing cutoff.
-            min_brightening_factor: Factor with which a persistent source should brighten before being considered a
+            min_amplification: Factor with which a persistent source should brighten before being considered a
                 candidate. None means not looking at the persistent source catalog.
             min_ncp_dist_deg: minimum distance from the NCP. None means not doing NCP masking.
         """
         super().__init__()
         self.min_alt_deg = min_alt_deg
-        self.min_brightening_factor = min_brightening_factor
+        self.min_brightening_factor = min_amplification
         self.min_ncp_dist_deg = min_ncp_dist_deg
         self.catalogs = catalogs
         self.diff_ims = diff_ims
@@ -97,6 +97,13 @@ class SiftingWidget(widgets.HBox):
                 self.after_im.T[self.cat['x'][self.curr] - WIDTH: self.cat['x'][self.curr] + WIDTH,
                 self.cat['y'][self.curr] - WIDTH: self.cat['y'][self.curr] + WIDTH].T,
                 cmap='gray', norm=norm, origin='lower')
+            reticle_style_kwargs = {'linewidth': 2, 'color': 'm'}
+            inner, outer = 0.02, 0.07
+            for a in axs2:
+                a.axvline(x=WIDTH, ymin=0.5 - inner, ymax=0.5 - outer,
+                          **reticle_style_kwargs)
+                a.axhline(y=WIDTH, xmin=0.5 - inner, xmax=0.5 - outer,
+                          **reticle_style_kwargs)
             self.load_text()
 
         self.vmin_ctrl = widgets.Text(value=f'{-peak:.1f}', placeholder='-10', description='vmin:',
