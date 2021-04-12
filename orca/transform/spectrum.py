@@ -44,15 +44,22 @@ def gen_spectrum(ms: str, sourcename: str, data_column: str = 'CORRECTED_DATA', 
     Ncorrs  = datacol.shape[2]
     Nspw    = freqcol.shape[0]
     Nints   = int(datacol.shape[0]/(Nbls*Nspw))
+
     #
+    # reorder visibilities by Nints, Nbls, Nchans*Nspw, Ncorr
+    datacol_ma = ma.masked_array(datacol, mask=flagcol, fill_value=np.nan).reshape(Nspw, Nints, Nbls, Nchans, Ncorrs).transpose(1,2,0,3,4).reshape(Nints,Nbls,-1,Ncorrs)
+
     # apply weights
     if apply_weights:
-        weights = np.load(apply_weights)
-        datacol = np.multiply(datacol, weights)
-    #
-    # reorder visibilities by Nints, Nbls, Nchans*Nspw, Ncorr and take the mean on the Nbls axis
-    datacol_ma = ma.masked_array(datacol, mask=flagcol, fill_value=np.nan).reshape(Nspw, Nints, Nbls, Nchans, Ncorrs).transpose(1,2,0,3,4).reshape(Nints,Nbls,-1,Ncorrs).mean(axis=1)
-    #
+        weights = np.load(apply_weights).reshape(Nspw, Nints, Nbls, Nchans, Ncorrs).transpose(1,2,0,3,4).reshape(Nints,Nbls,-1,Ncorrs)
+        datacol_ma *= np.multiply(datacol, weights)
+        Nbls_eff = np.sum((~datacol_ma * weights), axis=1)
+    else:
+        Nbls_eff = np.sum(~datacol_ma, axis=1)
+
+    # Weighted mean along the bl axis.
+    datacol_ma = datacol_ma.sum(axis=1) / Nbls_eff
+
     specI      = 0.5 * (datacol_ma[:,:,0] + datacol_ma[:,:,3]).real
     specV      = 0.5 * (datacol_ma[:,:,1] - datacol_ma[:,:,2]).imag
     #
