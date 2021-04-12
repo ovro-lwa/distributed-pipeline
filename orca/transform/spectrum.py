@@ -53,9 +53,9 @@ def gen_spectrum(ms: str, sourcename: str, data_column: str = 'CORRECTED_DATA', 
     if apply_weights:
         weights = np.load(apply_weights).reshape(Nspw, Nints, Nbls, Nchans, Ncorrs).transpose(1,2,0,3,4).reshape(Nints,Nbls,-1,Ncorrs)
         datacol_ma *= np.multiply(datacol, weights)
-        Nbls_eff = np.sum((~datacol_ma * weights), axis=1)
+        Nbls_eff = np.sum((~datacol_ma.mask * weights), axis=1)
     else:
-        Nbls_eff = np.sum(~datacol_ma, axis=1)
+        Nbls_eff = np.sum(~datacol_ma.mask, axis=1)
 
     # Weighted mean along the bl axis.
     datacol_ma = datacol_ma.sum(axis=1) / Nbls_eff
