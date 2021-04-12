@@ -155,7 +155,7 @@ def sourcefit(xguess, yguess, peakguess, bmajpix, bminpix, bpahdr, locvals, imag
         return None
 
 
-def sourcefind(imagecell: np.array, bmajpix, bminpix, bpahdr, plotimagecell: bool = False):
+def sourcefind(imagecell: np.ndarray, bmajpix, bminpix, bpahdr, plotimagecell: bool = False):
     """
     Function that takes in image matrix (of any size), and returns list of identified 
     sources.

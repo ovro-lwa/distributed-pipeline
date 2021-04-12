@@ -5,7 +5,7 @@ import numpy as np
 from typing import Tuple, List, Optional
 
 
-def read_image_fits(fn: str) -> Tuple[np.array, fits.Header]:
+def read_image_fits(fn: str) -> Tuple[np.ndarray, fits.Header]:
     with fits.open(fn) as hdulist:
         image = hdulist[0].data[0, 0]
         header = hdulist[0].header

@@ -23,7 +23,8 @@ def auto_corr_data_and_flag(t: table, data_column: str) -> Tuple[np.ndarray, np.
     return data, flag
 
 
-def calculate_gain_scale(to_scale_data: np.array, to_scale_flag: np.array, target_data: np.array, target_flag: np.array):
+def calculate_gain_scale(to_scale_data: np.ndarray, to_scale_flag: np.ndarray,
+                         target_data: np.ndarray, target_flag: np.ndarray):
     """
     Calcualte the gain scaling factor required to scale to_scale to target.
 

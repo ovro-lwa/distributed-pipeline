@@ -8,8 +8,8 @@ from casacore.tables import table
 INVERSE_C_MS = 3.3356409519815204e-09
 
 
-def phase_shift_vis(t: table, freqs: np.array, phase_center: SkyCoord, pos: SkyCoord, columnname: str,
-                    startrow: int=0, nrow: int=-1, rowincr: int = 1) -> np.array:
+def phase_shift_vis(t: table, freqs: np.ndarray, phase_center: SkyCoord, pos: SkyCoord, columnname: str,
+                    startrow: int=0, nrow: int=-1, rowincr: int = 1) -> np.ndarray:
     """
     Phase shift visibility data column and return the shifted data. It does not write back to the table, nor does it
     shift the UVW coordinates. Only works with data with one spectral window.
@@ -35,9 +35,9 @@ def phase_shift_vis(t: table, freqs: np.array, phase_center: SkyCoord, pos: SkyC
     return data
 
 
-def dftspectrum(data: np.array, uvw: np.array, freqs: np.array,
-                ra0_rad: float, dec0_rad: float, ra_rad: np.array, dec_rad: np.array,
-                weights: Optional[np.array] = None):
+def dftspectrum(data: np.ndarray, uvw: np.ndarray, freqs: np.ndarray,
+                ra0_rad: float, dec0_rad: float, ra_rad: np.ndarray, dec_rad: np.ndarray,
+                weights: Optional[np.ndarray] = None):
     raise NotImplementedError('This is not working yet')
     n_freqs = freqs.shape[-1]
     n_uvws = uvw.shape[0]
@@ -63,8 +63,7 @@ def dftspectrum(data: np.array, uvw: np.array, freqs: np.array,
     return data.dot(ph[:, :, np.newaxis])
 
 
-
-def phase_data_to_pos_inplace(data: np.array, uvw: np.array, freqs: np.array,
+def phase_data_to_pos_inplace(data: np.ndarray, uvw: np.ndarray, freqs: np.ndarray,
                               ra0_rad: float, dec0_rad: float, ra_rad: float, dec_rad: float):
     n_freqs = freqs.shape[-1]
     n_uvws = uvw.shape[0]

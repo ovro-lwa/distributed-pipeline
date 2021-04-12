@@ -264,7 +264,7 @@ class SiftingWidget(widgets.HBox):
                           f"pk={self.cat['peak_flux'][self.curr]:.1f} Jy, " \
                           f"noise={self.cat['local_rms'][self.curr]:.2f} Jy"
 
-    def _load_catalog(self, cat_fits) -> Tuple[Table, SkyCoord, np.array]:
+    def _load_catalog(self, cat_fits) -> Tuple[Table, SkyCoord, np.ndarray]:
         t = Table.read(cat_fits)
         add_id_column(t)
         t = t[t['peak_flux']/t['local_rms'] > SNR_CUTOFF]
