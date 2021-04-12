@@ -1,4 +1,4 @@
-from typing import List, Tuple, Sized
+from typing import List, Tuple, Optional, Union
 from datetime import datetime, timedelta
 import numpy as np
 
@@ -29,7 +29,8 @@ MAX_ASSOC_DIST = 22 * u.arcmin
 class SiftingWidget(widgets.HBox):
     def __init__(self, catalogs: List[str], diff_ims: List[str],
                  before_ims: List[str], after_ims: List[str], outputs: List[str],
-                 min_alt_deg: float = None, min_amplification: float = None, max_dec_deg: Sized[float] = None):
+                 min_alt_deg: float = None, min_amplification: float = None,
+                 max_dec_deg: Optional[Union[List[float], np.ndarray, Tuple[float]]] = None):
         """
 
         Args:
