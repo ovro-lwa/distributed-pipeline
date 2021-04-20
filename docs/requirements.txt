@@ -55,7 +55,7 @@ pockets==0.9.1
 prometheus-client==0.8.0
 prompt-toolkit==3.0.5
 ptyprocess==0.6.0
-py==1.9.0
+py==1.10.0
 pycparser==2.20
 Pygments==2.8.0
 PyNaCl==1.4.0
