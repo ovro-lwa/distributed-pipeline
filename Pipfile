@@ -20,8 +20,8 @@ tornado = '*'
 pyyaml = "*"
 fabric = "*"
 flower = '*'
-casatools = {version = '*',index = 'nrao'}
-casatasks = {version = '*',index = 'nrao'}
+casatools = "==6.1.2.7"
+casatasks = "==6.1.2.7"
 ovro-lwa-orca = {editable = true,path = "."}
 psutil = "*"
 cryptography = ">=3.2"
