@@ -19,10 +19,10 @@ WIDTH = 128
 
 SNR_CUTOFF = 6.5
 
-PERSISTANT_CAT = '/home/yuping/catalog-scripts/merged_sourcecatalog_rev1.fits'
+PERSISTENT_CAT = '/home/yuping/catalog-scripts/persistent_source_cat_with_flux.fits'
 
 # Maximum distance for associating a source with a persistent source
-MAX_ASSOC_DIST = 22 * u.arcmin
+MAX_ASSOC_DIST = 10 * u.arcmin
 
 
 # TODO need a back button
@@ -48,9 +48,16 @@ class SiftingWidget(widgets.HBox):
         super().__init__()
         self.min_alt_deg = min_alt_deg
         self.min_brightening_factor = min_amplification
+        if self.min_brightening_factor is not None:
+            self.persist_cat = Table.read(PERSISTENT_CAT)
+            self.persist_cat_coords = SkyCoord(self.persist_cat['ra'], self.persist_cat['dec'], unit=u.deg)
         if max_dec_deg is not None:
-            assert len(max_dec_deg) == len(diff_ims), \
-                'max_dec_deg and diff_ims (and other lists) should have the same len.'
+            try:
+                assert len(max_dec_deg) == len(diff_ims), \
+                    'max_dec_deg and diff_ims (and other lists) should have the same len.'
+            except TypeError:
+                # It's a float
+                pass
         self.max_dec_deg = max_dec_deg
         self.catalogs = catalogs
         self.diff_ims = diff_ims
@@ -64,8 +71,6 @@ class SiftingWidget(widgets.HBox):
         self.before_im, _ = fitsutils.read_image_fits(self.before_ims[self.curr_scan])
         self.after_im, _ = fitsutils.read_image_fits(self.after_ims[self.curr_scan])
         self.curr = 0
-        if self.min_brightening_factor:
-            self.persist_cat = Table.read(PERSISTANT_CAT)
         snapshot = widgets.Output()
         cutouts = widgets.Output()
         spectrum = widgets.Output()
@@ -276,16 +281,16 @@ class SiftingWidget(widgets.HBox):
         if self.min_alt_deg:
             mask &= ((alt.to(u.deg).value > self.min_alt_deg) & (~np.isnan(alt.value)))
         if self.min_brightening_factor is not None:
-            idx, sep2d, _ = coords.match_to_catalog_sky(self.persist_cat)
-            # mask &= ((sep2d > MAX_ASSOC_DIST) & (flux1/flux2 > self.min_brightening_factor))
-            logging.warning("min_brightening_factor doesn't do anything yet "
-                            "because the persistent cat does not have fluxes.")
+            idx, sep2d, _ = coords.match_to_catalog_sky(self.persist_cat_coords)
+            coincidence_mask = ((sep2d > MAX_ASSOC_DIST) |
+                                (t['peak_flux'] / self.persist_cat['peak_flux'][idx] > self.min_brightening_factor))
+            logging.info(f'{np.sum(~coincidence_mask)} sources in persistent source catalog.')
+            mask &= coincidence_mask
         if self.max_dec_deg:
             mask &= (coords.dec.to(u.deg).value < self.max_dec_deg[self.curr_scan])
-        if not np.all(mask):
-            t = t[mask]
-            alt = alt[mask]
-            coords = coords[mask]
+        t = t[mask]
+        alt = alt[mask]
+        coords = coords[mask]
         t.add_column(Classes.NA.value, name='class')
         t.meta['COMMIT'] = gitutils.get_commit_id()
         return t, coords, alt.to(u.deg).value
@@ -298,7 +303,8 @@ class SiftingWidget(widgets.HBox):
 class OfflineSifter(SiftingWidget):
     def __init__(self, pm: OfflinePathsManager, start_time: datetime, end_time: datetime, interval: timedelta,
                  subtraction_interval: timedelta,
-                 diff: str, before: str, after: str, output_suffix: str, min_alt_deg: float = None):
+                 diff: str, before: str, after: str, output_suffix: str, min_alt_deg: Optional[float] = None,
+                 min_amplification: Optional[float] = None, max_dec_deg: Optional[float] = None):
         """
 
         Args:
@@ -329,4 +335,6 @@ class OfflineSifter(SiftingWidget):
             outputs.append(pm.dpp(ts, diff, output_suffix, 'diff'))
             ts += interval
 
-        super(OfflineSifter, self).__init__(catalogs, diff_ims, before_ims, after_ims, outputs, min_alt_deg)
+        super(OfflineSifter, self).__init__(catalogs, diff_ims, before_ims, after_ims, outputs,
+                                            min_alt_deg=min_alt_deg, min_amplification=min_amplification,
+                                            max_dec_deg=max_dec_deg)
