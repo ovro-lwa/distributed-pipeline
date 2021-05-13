@@ -19,10 +19,10 @@ WIDTH = 128
 
 SNR_CUTOFF = 6.5
 
-PERSISTENT_CAT = '/home/yuping/catalog-scripts/persistent_source_cat_with_flux.fits'
+PERSISTENT_CAT = '/home/yuping/catalog-scripts/persistent_source_cat_with_flux_high_snr.fits'
 
 # Maximum distance for associating a source with a persistent source
-MAX_ASSOC_DIST = 10 * u.arcmin
+MAX_ASSOC_DIST = 20 * u.arcmin
 
 
 # TODO need a back button
@@ -30,7 +30,7 @@ class SiftingWidget(widgets.HBox):
     def __init__(self, catalogs: List[str], diff_ims: List[str],
                  before_ims: List[str], after_ims: List[str], outputs: List[str],
                  min_alt_deg: float = None, min_amplification: float = None,
-                 max_dec_deg: Optional[Union[List[float], np.ndarray, Tuple[float]]] = None):
+                 max_dec_deg: Optional[Union[List[float], np.ndarray, Tuple[float], float]] = None):
         """
 
         Args:
@@ -43,11 +43,12 @@ class SiftingWidget(widgets.HBox):
             min_amplification: Factor with which a persistent source should brighten before being considered a
                 candidate. None means not looking at the persistent source catalog.
             max_dec_deg: A list of maximum declinations, i.e. minimum distances from the NCP,
-                one for each scan. None means not doing NCP masking.
+                one for each scan. Or a single float for all. None means not doing NCP masking.
         """
         super().__init__()
         self.min_alt_deg = min_alt_deg
         self.min_brightening_factor = min_amplification
+        self.coincidence_count = 0
         if self.min_brightening_factor is not None:
             self.persist_cat = Table.read(PERSISTENT_CAT)
             self.persist_cat_coords = SkyCoord(self.persist_cat['ra'], self.persist_cat['dec'], unit=u.deg)
@@ -259,7 +260,7 @@ class SiftingWidget(widgets.HBox):
     def load_text(self):
         coord = self.coords[self.curr]
         self.text.value = f"{self.cat.meta['DATE']} ---" \
-                          f"{self.curr + 1}/{len(self.cat)} candidates, " \
+                          f"{self.curr + 1}/{len(self.cat)} cands, {self.coincidence_count} coincidents " \
                           f"{self.curr_scan + 1}/{len(self.catalogs)} scans --- " \
                           f"{coord.ra.to_string(u.hour, sep=' ', precision=1)}, "\
                           f"{coord.dec.to_string(sep=' ', precision=1)} " \
@@ -277,20 +278,23 @@ class SiftingWidget(widgets.HBox):
         timestamp = datetime.strptime(t.meta['DATE'].split('.')[0], "%Y-%m-%dT%H:%M:%S")
         coords = SkyCoord(t['ra'], t['dec'], unit=u.deg)
         alt = coordutils.get_altaz_at_ovro(coords, timestamp).alt
-        mask = np.ones_like(alt.value, dtype=bool)
+        fil = np.ones_like(alt.value, dtype=bool)
         if self.min_alt_deg:
-            mask &= ((alt.to(u.deg).value > self.min_alt_deg) & (~np.isnan(alt.value)))
+            fil &= ((alt.to(u.deg).value > self.min_alt_deg) & (~np.isnan(alt.value)))
         if self.min_brightening_factor is not None:
             idx, sep2d, _ = coords.match_to_catalog_sky(self.persist_cat_coords)
-            coincidence_mask = ((sep2d > MAX_ASSOC_DIST) |
+            coincidence_fil = ((sep2d > MAX_ASSOC_DIST) |
                                 (t['peak_flux'] / self.persist_cat['peak_flux'][idx] > self.min_brightening_factor))
-            logging.info(f'{np.sum(~coincidence_mask)} sources in persistent source catalog.')
-            mask &= coincidence_mask
+            self.coincidence_count = np.sum(~coincidence_fil)
+            fil &= coincidence_fil
         if self.max_dec_deg:
-            mask &= (coords.dec.to(u.deg).value < self.max_dec_deg[self.curr_scan])
-        t = t[mask]
-        alt = alt[mask]
-        coords = coords[mask]
+            try:
+                fil &= (coords.dec.to(u.deg).value < self.max_dec_deg[self.curr_scan])
+            except TypeError:
+                fil &= (coords.dec.to(u.deg).value < self.max_dec_deg)
+        t = t[fil]
+        alt = alt[fil]
+        coords = coords[fil]
         t.add_column(Classes.NA.value, name='class')
         t.meta['COMMIT'] = gitutils.get_commit_id()
         return t, coords, alt.to(u.deg).value
