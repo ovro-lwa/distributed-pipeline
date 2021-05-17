@@ -1,4 +1,4 @@
-from typing import List, Tuple, Optional, Union
+from typing import List, Tuple, Optional, Union, Sized
 from datetime import datetime, timedelta
 import numpy as np
 
@@ -30,7 +30,7 @@ class SiftingWidget(widgets.HBox):
     def __init__(self, catalogs: List[str], diff_ims: List[str],
                  before_ims: List[str], after_ims: List[str], outputs: List[str],
                  min_alt_deg: float = None, min_amplification: float = None,
-                 max_dec_deg: Optional[Union[List[float], np.ndarray, Tuple[float], float]] = None):
+                 max_dec_deg: Optional[Union[List[float], float]] = None):
         """
 
         Args:
@@ -53,12 +53,9 @@ class SiftingWidget(widgets.HBox):
             self.persist_cat = Table.read(PERSISTENT_CAT)
             self.persist_cat_coords = SkyCoord(self.persist_cat['ra'], self.persist_cat['dec'], unit=u.deg)
         if max_dec_deg is not None:
-            try:
+            if isinstance(max_dec_deg, Sized):
                 assert len(max_dec_deg) == len(diff_ims), \
                     'max_dec_deg and diff_ims (and other lists) should have the same len.'
-            except TypeError:
-                # It's a float
-                pass
         self.max_dec_deg = max_dec_deg
         self.catalogs = catalogs
         self.diff_ims = diff_ims
@@ -288,9 +285,9 @@ class SiftingWidget(widgets.HBox):
             self.coincidence_count = np.sum(~coincidence_fil)
             fil &= coincidence_fil
         if self.max_dec_deg:
-            try:
+            if isinstance(self.max_dec_deg, Sized):
                 fil &= (coords.dec.to(u.deg).value < self.max_dec_deg[self.curr_scan])
-            except TypeError:
+            else:
                 fil &= (coords.dec.to(u.deg).value < self.max_dec_deg)
         t = t[fil]
         alt = alt[fil]
