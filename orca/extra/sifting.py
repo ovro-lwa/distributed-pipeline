@@ -30,7 +30,7 @@ class SiftingWidget(widgets.HBox):
     def __init__(self, catalogs: List[str], diff_ims: List[str],
                  before_ims: List[str], after_ims: List[str], outputs: List[str],
                  min_alt_deg: float = None, min_amplification: float = None,
-                 max_dec_deg: Optional[Union[List[float], float]] = None):
+                 max_dec_deg: Optional[Union[List[float], float]] = None, start_scan: int = 0):
         """
 
         Args:
@@ -63,7 +63,7 @@ class SiftingWidget(widgets.HBox):
         self.after_ims = after_ims
         self.outputs = outputs
 
-        self.curr_scan = 0
+        self.curr_scan = start_scan
         self.cat, self.coords, self.alt_deg = self._load_catalog(self.catalogs[self.curr_scan])
         self.diff_im, self.header = fitsutils.read_image_fits(self.diff_ims[self.curr_scan])
         self.before_im, _ = fitsutils.read_image_fits(self.before_ims[self.curr_scan])
@@ -197,7 +197,7 @@ class SiftingWidget(widgets.HBox):
                 self._save_curr_catalog(self.outputs[self.curr_scan])
             self._load_scan_data(increment=1)
             if len(self.cat) == 0:
-                logging.info(f'{self.catalogs[self.curr_scan]} has 0 filtered candidates, skipping.')
+                logging.warn(f'{self.catalogs[self.curr_scan]} has 0 filtered candidates, skipping.')
                 self._save_curr_catalog(self.outputs[self.curr_scan])
             else:
                 break
@@ -209,7 +209,7 @@ class SiftingWidget(widgets.HBox):
             self.cat = Table.read(self.outputs[self.curr_scan])
             assert len(self.cat) == len(self.alt_deg), "I did not get the back button correct."
             if len(self.cat) == 0:
-                logging.info(f'{self.catalogs[self.curr_scan]} has 0 filtered candidates, skipping.')
+                logging.warn(f'{self.catalogs[self.curr_scan]} has 0 filtered candidates, skipping.')
             else:
                 break
         self.fig1.canvas.draw()
@@ -293,7 +293,11 @@ class SiftingWidget(widgets.HBox):
         t = t[fil]
         alt = alt[fil]
         coords = coords[fil]
-        t.add_column(Classes.NA.value, name='class')
+        if len(t) == 0:
+            # The only way I can find that adds an empty column...
+            t['class'] = []
+        else:
+            t.add_column(Classes.NA.value, name='class')
         t.meta['COMMIT'] = gitutils.get_commit_id()
         return t, coords, alt.to(u.deg).value
 
