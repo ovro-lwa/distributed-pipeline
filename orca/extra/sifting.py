@@ -270,6 +270,7 @@ class SiftingWidget(widgets.HBox):
     def _load_catalog(self, cat_fits) -> Tuple[Table, SkyCoord, np.ndarray]:
         t = Table.read(cat_fits)
         add_id_column(t)
+        t = t[~(np.isnan(t['ra']) | np.isnan(t['dec']))]
         t = t[t['peak_flux']/t['local_rms'] > SNR_CUTOFF]
         # The split gets rid of the fractional second
         timestamp = datetime.strptime(t.meta['DATE'].split('.')[0], "%Y-%m-%dT%H:%M:%S")
