@@ -6,7 +6,7 @@ import numpy as np
 import numpy.ma as ma
 import pdb
 
-def gen_spectrum(ms: str, sourcename: str, data_column: str = 'CORRECTED_DATA', timeavg: bool = False, outdir: str = None, target_coordinates: str = None, apply_weights: str = None):
+def gen_spectrum(ms: str, sourcename: str, data_column: str = 'CORRECTED_DATA', timeavg: bool = False, outdir: str = None, target_coordinates: str = None, apply_weights: str = None, apply_beam: bool = False):
     """
     Generate spectrum (I,V,XX,XY,YX,YY) from the visibilities; if target_coordinates not assigned, assumes source of interest
     is already at phase center; if apply_weights not assigned, no weights applied.
@@ -48,7 +48,7 @@ def gen_spectrum(ms: str, sourcename: str, data_column: str = 'CORRECTED_DATA', 
     # apply weights
     if apply_weights:
         weights = np.load(apply_weights)
-        datacol = np.multiply(datacol, weights)
+        datacol *= weights
     #
     # reorder visibilities by Nints, Nbls, Nchans*Nspw, Ncorr and take the mean on the Nbls axis
     datacol_ma = ma.masked_array(datacol, mask=flagcol, fill_value=np.nan).reshape(Nspw, Nints, Nbls, Nchans, Ncorrs).transpose(1,2,0,3,4).reshape(Nints,Nbls,-1,Ncorrs).mean(axis=1)

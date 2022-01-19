@@ -1,4 +1,4 @@
-from orca.proj.boilerplate import run_dada2ms, flag_chans, apply_ant_flag, flag_ants, apply_bl_flag, do_bl_flags, zest, run_chgcentre, run_integrate_with_concat, do_calibration, get_spectrum, do_bandpass_correction, do_applycal, do_split, run_wsclean
+from orca.proj.boilerplate import run_dada2ms, flag_chans, apply_ant_flag, flag_ants, apply_bl_flag, do_bl_flags, zest, run_chgcentre, run_integrate_with_concat, do_calibration, get_spectrum, do_bandpass_correction, do_applycal, do_split, run_wsclean, run_co_add
 from orca.utils.calibrationutils import calibration_time_range
 from orca.utils.coordutils import CYG_A
 from orca.flagging.flag_bad_ants import flag_bad_ants, concat_dada2ms, plot_autos, flag_ants_from_postcal_autocorr
@@ -39,6 +39,11 @@ pm_20191121 = OfflinePathsManager(
                   dadafile_dir='/lustre/data/2019-11-21_rainydata',
                   working_dir=f'/lustre/{user}/exoplanet/processing',
                   gaintable_dir=f'/lustre/{user}/exoplanet/processing/BCAL')
+#pm_20191121 = OfflinePathsManager(
+#                  utc_times_txt_path='/lustre/data/2019-11-21_rainydata/utc_times.txt',
+#                  dadafile_dir='/lustre/data/2019-11-21_rainydata',
+#                  working_dir=f'/lustre/{user}/exoplanet/processing_zest',
+#                  gaintable_dir=f'/lustre/{user}/exoplanet/processing/BCAL')
 
 start_time_testLSTnopeel = datetime(2020,1,22,9,30,0)
 end_time_testLSTnopeel   = datetime(2020,1,22,11,30,0)
@@ -199,7 +204,6 @@ def processing_pipeline2(CALdate: date, start_time: datetime, end_time: datetime
         zest.s() | do_split.s()
         for t in pm.utc_times_mapping.keys() for s in range(2,8)
     ])()
-    output = result.get()
 
 
 def imaging_pipeline(start_time: datetime, end_time:datetime, pathman: OfflinePathsManager = pm_20200117):
@@ -211,6 +215,18 @@ def imaging_pipeline(start_time: datetime, end_time:datetime, pathman: OfflinePa
     msfiles = group([ run_chgcentre.s(pm.get_ms_path(t, f'{s:02d}'), phase_center) 
         for t in pm.utc_times_mapping.keys() for s in range(2,8)
     ])()
+    snapshots = group([
+        run_wsclean.s([pm.get_ms_path(t, f'{s:02d}') for s in range(2,8)], \
+    	    pm.get_ms_parent_path(t), t.isoformat(), \
+            extra_arg_list=['-pol', 'I', '-j', '1', '-tempdir', '/dev/shm/mmanders', '-size', '4096', '4096', '-scale', '0.03125', '-weight', 'briggs', '0.5', '-taper-inner-tukey', '30'])
+        for t in pm.utc_times_mapping.keys()
+    ])()
+    fitsfile_prefixes = snapshots.get()
+    fitsfiles = [f'{fitsfile_prefix}-dirty.fits' for fitsfile_prefix in fitsfile_prefixes]
+    rmsarr, medarr, frqarr, timesarr = getimrms(fitsfiles, radius=5/0.03125)
+    fitslist_forcoadd = np.asarray(fitsfiles)[np.where(rmsarr < np.median(rmsarr) + 2*np.std(rmsarr))]
+    coaddfits = co_add(fitslist_forcoadd.tolist(), f'{pm.working_dir}/twohourconcat/{os.path.basename(middlems)[3::]}_coadd-I-dirty.fits')
+    #
     snapshots = group([
         run_wsclean.s([pm.get_ms_path(t, f'{s:02d}') for s in range(2,8)], \
     	    pm.get_ms_parent_path(t), t.isoformat(), \
@@ -234,24 +250,78 @@ def imaging_zenith_pipeline(start_time: datetime, end_time: datetime, pathman: O
     snapshots = group([
         run_wsclean.s([pm.get_ms_path(t, f'{s:02d}') for s in range(2,8)], \
     	    pm.get_ms_parent_path(t), t.isoformat(), \
-            extra_arg_list=['-pol', 'I,V', '-j', '1', '-tempdir', '/dev/shm/mmanders', '-size', 
+            extra_arg_list=['-pol', 'V', '-j', '1', '-tempdir', '/dev/shm/mmanders', '-size', 
                             '4096', '4096', '-scale', '0.03125', '-weight', 'briggs', '0.5', 
                             '-taper-inner-tukey', '30'])
         for t in pm.utc_times_mapping.keys()
     ])()
 
 
-def spectrum_pipeline(target_coordinates: str, target_name: str, start_time: datetime,
-                      end_time: datetime, pathman: OfflinePathsManager = pm_20200117):
-    pm      = pathman.time_filter(start_time=start_time, end_time=end_time)
-    outdir  = f'{pm.working_dir}/spectra/{target_name}'
-    if not os.path.exists(outdir):
-        os.mkdir(outdir)
-    results = group([
-        get_spectrum.s(pm.get_ms_path(t, f'{s:02d}'), target_name, 'DATA', outdir=outdir,
-                       target_coordinates=target_coordinates)
+def imaging_coordinates_pipeline(target_coordinates: str, start_time: datetime, end_time: datetime, 
+                                 pathman: OfflinePathsManager = pm_20200117):
+    pm = pathman.time_filter(start_time=start_time, end_time=end_time)
+    msfiles = group([
+        run_chgcentre.s(pm.get_ms_path(t, f'{s:02d}'), target_coordinates) 
         for t in pm.utc_times_mapping.keys() for s in range(2,8)
     ])()
+#    snapshots = group([
+#        run_wsclean.s([pm.get_ms_path(t, f'{s:02d}') for s in range(2,8)], \
+#    	    pm.get_ms_parent_path(t), t.isoformat(), \
+#            extra_arg_list=['-pol', 'I,V', '-j', '1', '-tempdir', '/dev/shm/mmanders', '-size', 
+#                            '4096', '4096', '-scale', '0.03125', '-weight', 'briggs', '0.5', 
+#                            '-taper-inner-tukey', '30'])
+#        for t in pm.utc_times_mapping.keys()
+#    ])()
+##    snapshots = group([
+##        run_wsclean.s([pm.get_ms_path(t, f'{s:02d}') for s in range(2,8)], \
+##    	    pm.get_ms_parent_path(t), f'{t.isoformat()}_tauboo', \
+##            extra_arg_list=['-pol', 'I,V', '-j', '1', '-tempdir', '/dev/shm/mmanders', '-size', 
+##                            '2048', '2048', '-scale', '0.0625', '-weight', 'briggs', '0.5', 
+##                            '-taper-inner-tukey', '30'])
+##        for t in pm.utc_times_mapping.keys()
+##    ])()
+    snapshots = group([
+        run_wsclean.s([pm.get_ms_path(t, f'{s:02d}') for s in range(2,5)], \
+    	    pm.get_ms_parent_path(t), f'{t.isoformat()}_tauboo_lower', \
+            extra_arg_list=['-pol', 'I,V', '-j', '1', '-tempdir', '/dev/shm/mmanders', '-size', 
+                            '2048', '2048', '-scale', '0.0625', '-weight', 'briggs', '0.5', 
+                            '-taper-inner-tukey', '30'])
+        for t in pm.utc_times_mapping.keys()
+    ])()
+    snapshots = group([
+        run_wsclean.s([pm.get_ms_path(t, f'{s:02d}') for s in range(5,8)], \
+    	    pm.get_ms_parent_path(t), f'{t.isoformat()}_tauboo_upper', \
+            extra_arg_list=['-pol', 'I,V', '-j', '1', '-tempdir', '/dev/shm/mmanders', '-size', 
+                            '2048', '2048', '-scale', '0.0625', '-weight', 'briggs', '0.5', 
+                            '-taper-inner-tukey', '30'])
+        for t in pm.utc_times_mapping.keys()
+    ])()
+
+def spectrum_pipeline(target_coordinates: str, target_name: str, start_time: datetime,
+                      end_time: datetime, pathman: OfflinePathsManager = pm_20200117, 
+                      apply_weights: bool = False):
+    pm      = pathman.time_filter(start_time=start_time, end_time=end_time)
+    #outdir  = f'{pm.working_dir}/spectra/{target_name}'
+    outdir  = f'/lustre/{user}/exoplanet/processing/spectra/{target_name}'
+    if not os.path.exists(outdir):
+        os.mkdir(outdir)
+    if apply_weights:
+        results = group([
+            get_spectrum.s(pm.get_ms_path(t, f'{s:02d}'), target_name, 'DATA', outdir=outdir,
+                           target_coordinates=target_coordinates, apply_weights=f'/lustre/mmanders/LWA/modules/weights/test_{s:02d}_weights.npy')
+            for t in pm.utc_times_mapping.keys() for s in range(2,8)
+        ])()
+    else:
+        results = group([
+            get_spectrum.s(pm.get_ms_path(t, f'{s:02d}'), target_name, 'DATA', outdir=outdir,
+                           target_coordinates=target_coordinates)
+            for t in pm.utc_times_mapping.keys() for s in range(2,8)
+        ])()
+    #results = group([
+    #    run_chgcentre.s(pm.get_ms_path(t, f'{s:02d}'), target_coordinates) |
+    #    get_spectrum.s(target_name, 'DATA', outdir=outdir)
+    #    for t in pm.utc_times_mapping.keys() for s in range(2,8)
+    #])()
     spectra = results.get(propagate=False)
     
     timestamps = [t.isoformat() for t in pm.utc_times_mapping.keys()]
@@ -272,6 +342,7 @@ def spectrum_pipeline(target_coordinates: str, target_name: str, start_time: dat
             dynI[109*spwcounter:109*(1+spwcounter),intcounter] = tmp['specI'][0]
             dynV[109*spwcounter:109*(1+spwcounter),intcounter] = tmp['specV'][0]
             times[intcounter] = tmp['timearr']
+            freqs[spwcounter*109:109*(spwcounter+1)] = tmp['frqarr']
         except:
             dynI[109*spwcounter:109*(1+spwcounter),intcounter] = np.nan
             dynV[109*spwcounter:109*(1+spwcounter),intcounter] = np.nan
@@ -281,9 +352,52 @@ def spectrum_pipeline(target_coordinates: str, target_name: str, start_time: dat
             intcounter += 1
         else:
             spwcounter += 1
-    for ind, spectrum in enumerate(spectra[0:6]):
-        tmp = np.load(spectrum)
-        freqs[ind*109:109*(ind+1)] = tmp['frqarr']
     shutil.rmtree(outdir)
     np.savez(outdir, dynI=dynI, dynV=dynV, times=times, freqs=freqs, timestamps=timestamps,
              timesonly=timesonly, target_name=target_name)
+
+def gen_coadds_pipeline(start_time: datetime, end_time: datetime, pathman: OfflinePathsManager = pm_20200117,
+                        fitsfilenames = '_tauboo-V-dirty.fits', use_rfi_mask = True):
+    pm = pathman.time_filter(start_time=start_time, end_time=end_time)
+    fitsfile_suffixes = [fitsfilenames, '_tauboo_lower-V-dirty.fits', '_tauboo_upper-V-dirty.fits']
+    fitsfiles = [f'{pm.get_ms_parent_path(t)}/{t.isoformat()}{fitsfilenames}' \
+                for t in pm.utc_times_mapping.keys() \
+                if os.path.exists(f'{pm.get_ms_parent_path(t)}/{t.isoformat()}{fitsfilenames}')]
+    fitsfiles_lower = [f'{pm.get_ms_parent_path(t)}/{t.isoformat()}{fitsfile_suffixes[1]}' \
+                for t in pm.utc_times_mapping.keys() \
+                if os.path.exists(f'{pm.get_ms_parent_path(t)}/{t.isoformat()}{fitsfile_suffixes[1]}')]
+    fitsfiles_upper = [f'{pm.get_ms_parent_path(t)}/{t.isoformat()}{fitsfile_suffixes[2]}' \
+                for t in pm.utc_times_mapping.keys() \
+                if os.path.exists(f'{pm.get_ms_parent_path(t)}/{t.isoformat()}{fitsfile_suffixes[2]}')]
+    flagfile = f'/lustre/mmanders/exoplanet/tauboo/{start_time.date().isoformat()}_scanflags.npz'
+    coaddslist = f'/lustre/mmanders/exoplanet/tauboo/{start_time.date().isoformat()}_coadds.npz'
+    tmp = np.load(coaddslist, allow_pickle=True)
+    coaddinds = []
+    if use_rfi_mask:
+        mask = np.zeros(len(fitsfiles))
+        flaginfo = np.load(flagfile)
+        scanflags = flaginfo['scanflags']
+        mask[scanflags] = 1
+        fitsfiles_ma = np.ma.masked_array(fitsfiles, mask=mask)
+        fitsfiles_lower_ma = np.ma.masked_array(fitsfiles_lower, mask=mask)
+        fitsfiles_upper_ma = np.ma.masked_array(fitsfiles_upper, mask=mask)
+        fitsfiles = np.delete(fitsfiles_ma.data, fitsfiles_ma.mask).tolist()
+        fitsfiles_lower = np.delete(fitsfiles_lower_ma.data, fitsfiles_lower_ma.mask).tolist()
+        fitsfiles_upper = np.delete(fitsfiles_upper_ma.data, fitsfiles_upper_ma.mask).tolist()
+
+    for coadd_starttime in tmp['coadd_starttimes']:
+        coaddind = np.where(np.array(fitsfiles) == f'{pm.get_ms_parent_path(coadd_starttime)}/{coadd_starttime.isoformat()}{fitsfilenames}')
+        coaddinds.append(coaddind[0])
+
+    coaddfits = group([
+        run_co_add.s( fitsfilesarr[np.int(coaddinds[el][0]):np.int(coaddinds[el+1][0])], 
+            f'/lustre/mmanders/exoplanet/tauboo/{start_time.date().isoformat()}/{el}_{start_time.date().isoformat()}_coadd-{suffix}' )
+        for el in range(0, len(coaddinds)-1) for fitsfilesarr, suffix in zip([fitsfiles, fitsfiles_lower, fitsfiles_upper], fitsfile_suffixes)
+    ])()
+    #for el in range(0, len(coaddinds)-1):
+    #    coaddfile_i = f'/lustre/mmanders/exoplanet/tauboo/{start_time.date().isoformat()}/{el}_{start_time.date().isoformat()}_coadd-{fitsfilenames}'
+    #    fitsfiles_c = fitsfiles[np.int(coaddinds[el][0]):np.int(coaddinds[el+1][0])]
+    #    if use_rfi_mask:
+    #        co_add(np.delete(fitsfiles_c.data, fitsfiles_c.mask), coaddfile_i)
+    #    else:
+    #        co_add(fitsfiles_c, coaddfile_i)
