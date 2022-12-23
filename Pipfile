@@ -20,13 +20,14 @@ tornado = '*'
 pyyaml = "*"
 fabric = "*"
 flower = '*'
-casatools = "==6.1.2.7"
-casatasks = "==6.1.2.7"
+casatools = "*"
+casatasks = "*"
 ovro-lwa-orca = {editable = true,path = "."}
 psutil = "*"
 cryptography = ">=3.2"
 gitpython = "*"
 jedi = "==0.17.2"
+casadata = "*"
 
 [dev-packages]
 pytest = '*'
@@ -42,4 +43,4 @@ sphinx-rtd-theme = '*'
 ipympl = "*"
 
 [requires]
-python_version = "3.6"
+python_version = "3.8"
