@@ -31,3 +31,5 @@ else:
 
 queue_config = SimpleNamespace(**config['queue'])
 telescope = SimpleNamespace(**config['telescope'])
+execs = SimpleNamespace(**config['execs'])
+cluster = config['cluster']

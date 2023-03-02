@@ -4,6 +4,7 @@
 Copy from Marin Anderson 3/8/2019
 """
 from __future__ import division
+from typing import Optional
 import numpy as np
 import casacore.tables as pt
 import os,argparse
@@ -11,16 +12,19 @@ import numpy.ma as ma
 import logging
 from scipy.ndimage import filters
 
+from orca.configmanager import telescope as tele
+
+logger = logging.getLogger(__name__)
 
 def flag_bad_chans(msfile: str, band: str, usedatacol=False, generate_plot=False, apply_flag=False, crosshand=False,
-                   uvcut_m: float = None):
+                   uvcut_m: Optional[float] = None):
     """Flag bad channels.
     Finds remaining bad channels and flags those in the measurement set. Also writes out text file that lists
     flags that were applied.
 
     Args:
         msfile: measurement set to flag.
-        band: spectral window.
+        band: Subband number, must be convertable to integer.
         usedatacol: If True, uses DATA column, else use CORRECTED_DATA.
         generate_plot: generate a plot or not.
         apply_flag: Whether to apply the flags.
@@ -103,13 +107,13 @@ def flag_bad_chans(msfile: str, band: str, usedatacol=False, generate_plot=False
             mpl.use('Agg')
             import matplotlib.pyplot as plt
             plt.figure(figsize=(5,10))
-            chans = np.arange(0,109)
+            chans = np.arange(0, tele.n_chan)
             for chan in chans:
                 if chan not in flaglist:
                     chanpts = np.zeros(len(datacolamp_mask[:,chan,0]))+chan
                     plt.plot(datacolamp_mask[:,chan,0],chanpts, '.', color='Blue', markersize=0.5)
                     plt.plot(datacolamp_mask[:,chan,3],chanpts, '.', color='Green', markersize=0.5)
-            plt.ylim([0,108])
+            plt.ylim([0, tele.n_chan - 1])
             plt.ylabel('channel')
             plt.xlabel('Amp')
             plt.gca().invert_yaxis()
@@ -118,11 +122,11 @@ def flag_bad_chans(msfile: str, band: str, usedatacol=False, generate_plot=False
 
         ################################################
 
-        logging.info('Flaglist size is %i' % flaglist.size)
+        logger.info('Flaglist size is %i' % flaglist.size)
         if flaglist.size > 0:
             # turn flaglist into text file of channel flags
             textfile = os.path.splitext(os.path.abspath(msfile))[0]+'.chans'
-            chans    = np.arange(0,109)
+            chans    = np.arange(0,tele.n_chan)
             chanlist = chans[flaglist]
             with open(textfile, 'w') as f:
                 for chan in chanlist:
@@ -130,7 +134,6 @@ def flag_bad_chans(msfile: str, band: str, usedatacol=False, generate_plot=False
 
             # write flags into FLAG column
             if apply_flag:
-                logging.info('Applying the changes to the measurement set.')
                 flagcol_altered = t.getcol('FLAG')
                 flagcol_altered[:,flaglist,:] = 1
                 t.putcol('FLAG', flagcol_altered)

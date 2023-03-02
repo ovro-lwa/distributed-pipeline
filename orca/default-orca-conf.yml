@@ -5,3 +5,8 @@ telescope:
   n_ant: 352
   n_subband: 16
   n_chan : 192
+
+execs:
+  wsclean: /opt/bin/wsclean
+
+cluster: calim
