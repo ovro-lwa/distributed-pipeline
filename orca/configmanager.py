@@ -8,6 +8,7 @@ import logging
 import pkg_resources
 
 import yaml
+from types import SimpleNamespace
 
 log = logging.getLogger(__name__)
 ORCA_CONF_PATH = f'/home/{getpass.getuser()}/orca-conf.yml'
@@ -28,4 +29,5 @@ else:
     log.info(f'{ORCA_CONF_PATH} not found. Using default configuration.')
     config = load_yaml(pkg_resources.resource_filename('orca', 'default-orca-conf.yml'))
 
-queue_config = config['queue']
+queue_config = SimpleNamespace(**config['queue'])
+telescope = SimpleNamespace(**config['telescope'])

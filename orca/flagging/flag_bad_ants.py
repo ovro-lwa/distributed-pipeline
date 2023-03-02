@@ -10,6 +10,7 @@ import casacore.tables as tables
 from orca.wrapper import dada2ms
 import pdb
 
+from orca.configmanager import telescope as tele
 
 def concat_dada2ms(dadafile_dir: str, BCALdadafile: str, outputdir: str):
     """
@@ -99,7 +100,7 @@ def flag_ants_from_postcal_autocorr(msfile: str, tavg: bool = False, thresh: flo
         return None
 
 
-def flag_bad_ants(msfile: str) -> str:
+def flag_bad_ants(msfile: str, debug: bool = False) -> str:
     """Generates a text file containing the bad antennas.
     DOES NOT ACTUALLY APPLY FLAGS.
 
@@ -113,12 +114,13 @@ def flag_bad_ants(msfile: str) -> str:
     tautos  = t.query('ANTENNA1=ANTENNA2')
     
     # iterate over antenna, 1-->256
-    datacolxx = np.zeros((256,2398))
+    datacolxx = np.zeros((tele.n_ant,
+                          tele.n_chan * tele.n_subband))
     datacolyy = np.copy(datacolxx)
     for antind,tauto in enumerate(tautos.iter("ANTENNA1")):
         for bandind,tband in enumerate(tauto):
-            datacolxx[antind,bandind*109:(bandind+1)*109] = tband["DATA"][:,0]
-            datacolyy[antind,bandind*109:(bandind+1)*109] = tband["DATA"][:,3]
+            datacolxx[antind,bandind*tele.n_chan:(bandind+1)*tele.n_chan] = tband["DATA"][:,0]
+            datacolyy[antind,bandind*tele.n_chan:(bandind+1)*tele.n_chan] = tband["DATA"][:,3]
 
     datacolxxamp = np.sqrt( np.real(datacolxx)**2. + np.imag(datacolxx)**2. )
     datacolyyamp = np.sqrt( np.real(datacolyy)**2. + np.imag(datacolyy)**2. )
@@ -135,11 +137,12 @@ def flag_bad_ants(msfile: str) -> str:
     xthresh_neg = np.median(medamp_perantx) - 2*np.std(medamp_perantx)
     ythresh_pos = np.median(medamp_peranty) + np.std(medamp_peranty)
     ythresh_neg = np.median(medamp_peranty) - 2*np.std(medamp_peranty)
-    flags = np.where( (medamp_perantx > xthresh_pos) | (medamp_perantx < xthresh_neg) |\
-                      (medamp_peranty > ythresh_pos) | (medamp_peranty < ythresh_neg) )
+    flags = np.where((medamp_perantx > xthresh_pos) | (medamp_perantx < xthresh_neg) |\
+                      (medamp_peranty > ythresh_pos) | (medamp_peranty < ythresh_neg) | \
+                        np.isnan(medamp_perantx) | np.isnan(medamp_peranty) )
 
     # use unflagged antennas to generate median spectrum
-    flagmask = np.zeros((256,2398))
+    flagmask = np.zeros((tele.n_ant, tele.n_chan * tele.n_subband))
     flagmask[flags[0],:] = 1
     datacolxxampdb_mask = ma.masked_array(datacolxxampdb, mask=flagmask, fill_value=np.nan)
     datacolyyampdb_mask = ma.masked_array(datacolyyampdb, mask=flagmask, fill_value=np.nan)
@@ -151,7 +154,11 @@ def flag_bad_ants(msfile: str) -> str:
     stdarrayy = np.array( [np.std(antarr/medamp_allantsy) for antarr in datacolyyampdb_mask] )
     
     # this threshold was manually selected...should be changed to something better at some point
-    flags2 = np.where( (stdarrayx > 0.02) | (stdarrayy > 0.02) )
+    if tele.n_ant > 256:
+        thresh = 1
+    else:
+        thresh = 0.02
+    flags2 = np.where( (stdarrayx > thresh) | (stdarrayy > thresh) )
 
     flagsall = np.sort(np.append(flags,flags2))
     flagsallstr = [str(flag) for flag in flagsall]
@@ -162,7 +169,10 @@ def flag_bad_ants(msfile: str) -> str:
         f.write(flagsallstr2)
     
     t.close()
-    return antflagfile
+    if debug:
+        return medamp_perantx, medamp_peranty, stdarrayx, stdarrayy
+    else:
+        return antflagfile
 
 
 def plot_autos(msfile: str):
