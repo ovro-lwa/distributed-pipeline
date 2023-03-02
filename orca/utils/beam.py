@@ -1,3 +1,6 @@
+from abc import ABC, abstractmethod
+from typing import Tuple
+
 import numpy as np
 import matplotlib.pyplot as plt
 import sys,os,inspect
@@ -6,8 +9,29 @@ from scipy.interpolate import griddata as gd
 
 BEAM_FILE_PATH = os.path.abspath('/lustre/mmanders/LWA/modules/beam')
 
+class BaseBeam(ABC):
+    @abstractmethod
+    def __init__(self, msfile: str):
+        pass
 
-class beam:
+    @abstractmethod
+    def srcIQUV(self, az: float, el: float) -> \
+            Tuple[float, float, float, float]:
+        """
+        Args:
+            az: azimuth in degrees
+            el: elevation in degrees
+        """
+        pass
+
+class AnalyticBeam(BaseBeam):
+    def __init__(self, msfile):
+        pass
+
+    def srcIQUV(self, az, el):
+        return np.sin(el * 2 * np.pi/360) ** 1.6, 0, 0, 0
+
+class WoodyBeam(BaseBeam):
     """
     For loading and returning LWA dipole beam values (derived from DW beam simulations) on the ASTM.
     Last edit: 08 August 2016

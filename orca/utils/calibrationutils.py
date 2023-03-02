@@ -5,11 +5,16 @@ from datetime import datetime
 from astropy.time import Time
 from astropy.coordinates import SkyCoord, ICRS
 from orca.utils.coordutils import CYG_A, OVRO_LWA_LOCATION, is_visible, get_altaz_at_ovro
-from orca.utils.beam import beam
 from casacore import tables
 from casacore import measures
 from casatools import componentlist
 
+from orca.configmanager import telescope as tele
+
+if tele.n_ant > 256:
+    from orca.utils.beam import AnalyticBeam as beam
+else:
+    from orca.utils.beam import WoodyBeam as beam
 
 def calibration_time_range(utc_times_txt_path: str, start_time: datetime, 
                            end_time: datetime, duration_min: float = 20):
@@ -78,7 +83,7 @@ def gen_model_ms_stokes(ms: str, zest: bool = False):
     timeT.format = 'datetime'
     utctime = timeT.value
     lsttime = timeT.sidereal_time('apparent', OVRO_LWA_LOCATION.lon).value
-    freq = float(tables.table(ms+'/SPECTRAL_WINDOW', ack=False).getcell('NAME', 0))/1.e6
+    freq = float(tables.table(ms+'/SPECTRAL_WINDOW', ack=False).getcell('REF_FREQUENCY', 0))/1.e6
     #
     outbeam = beam(ms)
 
