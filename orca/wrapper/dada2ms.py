@@ -49,7 +49,7 @@ def dada2ms(dada_file: str, out_ms: str, gaintable: str = None, addspw: bool = F
             [dada2ms_exec, '-c', dada2ms_config, dada_file, out_ms], env=NEW_ENV, stderr=subprocess.PIPE,
             stdout=subprocess.PIPE)
     stdoutdata, stderrdata = proc.communicate()
-    if proc.returncode is not 0:
+    if not (proc.returncode == 0):
         logging.error(f'Error in data2ms: {stderrdata.decode()}')
         raise Exception('Error in dada2ms.')
     return path.abspath(out_ms)
