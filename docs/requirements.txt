@@ -45,7 +45,7 @@ networkx==2.4
 numpy==1.19.0
 packaging==20.4
 pandas==1.0.5
-paramiko==2.7.1
+paramiko==2.10.1
 parso==0.7.0
 pexpect==4.8.0
 pickleshare==0.7.5
