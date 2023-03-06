@@ -7,7 +7,7 @@ backcall==0.2.0
 bcrypt==3.1.7
 billiard==3.6.3.0
 celery==4.4.6
-certifi==2020.6.20
+certifi==2022.12.7
 cffi==1.14.0
 chardet==3.0.4
 codecov==2.1.7
@@ -30,9 +30,9 @@ ipython==8.10.0
 ipython-genutils==0.2.0
 jedi==0.17.1
 Jinja2==2.11.3
-joblib==0.16.0
+joblib==1.2.0
 jupyter-client==6.1.6
-jupyter-core==4.6.3
+jupyter-core==4.11.2
 kiwisolver==1.2.0
 kombu==4.6.11
 MarkupSafe==1.1.1
@@ -49,7 +49,7 @@ paramiko==2.10.1
 parso==0.7.0
 pexpect==4.8.0
 pickleshare==0.7.5
-Pillow==8.3.2
+Pillow==9.3.0
 pluggy==0.13.1
 pockets==0.9.1
 prometheus-client==0.8.0
