@@ -10,7 +10,7 @@ import datetime
 from casacore.tables import table
 from casatasks import ft, bandpass, gaincal, applycal
 from scipy.stats import median_abs_deviation
-from flagging import flag_bad_chans
+from orca.flagging import flag_bad_chans
 from orca.transform import imaging
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s',
@@ -49,15 +49,16 @@ def make_cal_tables(prefix: str, refant: str, image: bool):
         if not clpath:
             raise ValueError(f'No calibrator sources found for {ms}.')
         ft(vis=ms, complist=clpath)
-        bandpass(vis=ms, caltable=fn+'.bcal', refant=refant)
-
+        caltable_path = fn + '.bcal'
+        bandpass(vis=ms, caltable=caltable_path, refant=refant)
+        shutil.copytree(caltable_path, f'/home/pipeline/caltables/staging/{os.path.basename(caltable_path)}')
         # TODO QA, plot, etc
         if image:
             applycal(vis=ms, gaintable=fn + '.bcal')
-            flag_bad_chans.flag_bad_chans(ms, str(i), apply=True)
+            flag_bad_chans.flag_bad_chans(ms, str(i), apply_flag=True)
             imaging.make_dirty_image([ms], workdir, basename ,briggs=0.5)
             
-    logger.info('Working directory was %s.', workdir)
+        logger.info('Working directory was %s.', workdir)
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser(description='Bandpass calibration')

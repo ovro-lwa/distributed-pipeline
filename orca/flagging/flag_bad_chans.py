@@ -130,7 +130,7 @@ def flag_bad_chans(msfile: str, band: str, usedatacol=False, generate_plot=False
             chanlist = chans[flaglist]
             with open(textfile, 'w') as f:
                 for chan in chanlist:
-                    f.write('%02d:%03d\n' % (np.int(band),chan))
+                    f.write('%02d:%03d\n' % (int(band),chan))
 
             # write flags into FLAG column
             if apply_flag:
