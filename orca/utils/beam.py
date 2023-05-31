@@ -3,11 +3,16 @@ from typing import Tuple
 
 import numpy as np
 import matplotlib.pyplot as plt
-import sys,os,inspect
+import sys,os,inspect,glob
 from casacore import tables
 from scipy.interpolate import griddata as gd
 
-BEAM_FILE_PATH = os.path.abspath('/lustre/mmanders/LWA/modules/beam')
+from orca.configmanager import telescope as tele
+
+if tele.n_ant > 256:
+    BEAM_FILE_PATH = os.path.abspath('/opt/beam')
+else:
+    BEAM_FILE_PATH = os.path.abspath('/lustre/mmanders/LWA/modules/beam')
 
 class BaseBeam(ABC):
     @abstractmethod
@@ -37,23 +42,24 @@ class WoodyBeam(BaseBeam):
     Last edit: 08 August 2016
     """
     def __init__(self,msfile):
-        self.CRFREQ = float(tables.table(msfile+'/SPECTRAL_WINDOW', ack=False).getcell('NAME', 0))/1.e6 # center frequency in MHz
+        #self.CRFREQ = float(tables.table(msfile+'/SPECTRAL_WINDOW', ack=False).getcell('NAME', 0))/1.e6 # center frequency in MHz
+        self.CRFREQ = float(tables.table(msfile+'/SPECTRAL_WINDOW', ack=False).getcell('REF_FREQUENCY', 0))/1.e6 # starting frequency in MHz
         self.path   = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe()))) # absolute path to module
         # load 4096x4096 grid of azimuth,elevation values
         self.azelgrid = np.load(BEAM_FILE_PATH+'/azelgrid.npy')
         self.gridsize = self.azelgrid.shape[-1]
         # load 4096x4096 grid of IQUV values, for given msfile CRFREQ
         self.beamIQUVfile = BEAM_FILE_PATH+'/beamIQUV_'+str(self.CRFREQ)+'.npz'
-        if os.path.exists(self.beamIQUVfile):
-            self.beamIQUV = np.load(self.beamIQUVfile)
-            self.Ibeam    = self.beamIQUV['I']
-            self.Qbeam    = self.beamIQUV['Q']
-            self.Ubeam    = self.beamIQUV['U']
-            self.Vbeam    = self.beamIQUV['V']
-        else:
-            print >> sys.stderr, 'Beam .npz file does not exist at %s. Check your frequency. \
-                                  May need to generate new beam file.' % str(self.CRFREQ)
-            sys.exit()
+        if not os.path.exists(self.beamIQUVfile):
+            print(f'Beam .npz file does not exist at {self.CRFREQ}. Using closest existing frequency beam file.')
+            beamfiles = np.sort(glob.glob(f'{BEAM_FILE_PATH}/beamIQUV_*.npz'))
+            freqs_beamfiles = np.char.strip(np.char.strip(beamfiles, chars='/opt/beam/beamIQUV_'), chars='.npz').astype(float)
+            self.beamIQUVfile = beamfiles[np.argmin(np.abs(freqs_beamfiles - self.CRFREQ))]
+        self.beamIQUV = np.load(self.beamIQUVfile)
+        self.Ibeam    = self.beamIQUV['I']
+        self.Qbeam    = self.beamIQUV['Q']
+        self.Ubeam    = self.beamIQUV['U']
+        self.Vbeam    = self.beamIQUV['V']
 
 
     def srcIQUV(self,az,el):
