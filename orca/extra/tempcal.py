@@ -23,8 +23,8 @@ BAD_ANT_FILE = '/home/pipeline/bad_ants_latest.txt'
 def make_cal_tables(prefix: str, refant: str, image: bool):
     # TODO copy the ms to /fast``
     ms_l = sorted(glob.glob(f"/data??/slow/{prefix}*.ms"))
-    assert len(ms_l) > 0, 'No MS files found'
-    assert len(ms_l) <= 2, 'More than two MS files found. Abort.'
+    assert len(ms_l) > 0, 'No MS files found for the specified timestamp. Abort.'
+    assert len(ms_l) <= 2, 'More than two MS files found for the specified timestamp. Abort.'
     bad_ants = np.loadtxt(BAD_ANT_FILE, dtype=np.int32, delimiter=',')
     workdir = f'/fast/pipeline/tempcal/{prefix}/{datetime.datetime.now().isoformat()}'
     os.makedirs(workdir, exist_ok=True)
