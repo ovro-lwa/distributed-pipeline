@@ -3,11 +3,6 @@ url = "https://pypi.org/simple"
 verify_ssl = true
 name = "pypi"
 
-[[source]]
-url = "https://casa-pip.nrao.edu/repository/pypi-casa-release/simple"
-verify_ssl = true
-name = "nrao"
-
 [packages]
 astropy = "*"
 scipy = "*"
