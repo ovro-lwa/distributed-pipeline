@@ -10,18 +10,19 @@ ipykernel = "*"
 python-casacore = "*"
 matplotlib = '*'
 scikit-image = '*'
-celery = '==4.4.6'
+'celery[redis]' = '==5.3.1'
 tornado = '*'
 pyyaml = "*"
 fabric = "*"
 flower = '*'
-casatools = "*"
-casatasks = "*"
+casatools = "==6.5.5.21"
+casatasks = "==6.5.5.21"
 ovro-lwa-orca = {editable = true,path = "."}
 psutil = "*"
 cryptography = ">=3.2"
 gitpython = "*"
 casadata = "*"
+ipython = "*"
 
 [dev-packages]
 pytest = '*'

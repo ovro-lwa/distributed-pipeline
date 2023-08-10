@@ -5,8 +5,8 @@ from orca.configmanager import queue_config
 CELERY_APP_NAME = 'proj'
 
 app = Celery(CELERY_APP_NAME,
-             broker='pyamqp://yuping:yuping@astm13:5672/yuping',
-             backend='rpc://',
+             broker='pyamqp://pipe:pipe@lwacalimhead:5672/pipe',
+             backend='redis://lwacalimhead:6379/0',
              include=['orca.proj.boilerplate',
                       'orca.transform',
                       'orca.proj.onedayaverage',
@@ -21,7 +21,7 @@ app.conf.update(
     task_serializer='json'
 )
 
-task_routes = {'*': queue_config['prefix']}
+task_routes = {'*': queue_config.prefix}
 
 app.conf.task_routes = task_routes
 
