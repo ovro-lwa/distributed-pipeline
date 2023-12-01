@@ -13,7 +13,6 @@ scikit-image = '*'
 'celery[redis]' = '==5.3.1'
 tornado = '*'
 pyyaml = "*"
-fabric = "*"
 flower = '*'
 casatools = "==6.5.5.21"
 casatasks = "==6.5.5.21"
