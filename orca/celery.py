@@ -2,16 +2,16 @@ from __future__ import absolute_import, unicode_literals
 from celery import Celery
 from orca.configmanager import queue_config
 
-CELERY_APP_NAME = 'proj'
+CELERY_APP_NAME = 'orca'
 
 app = Celery(CELERY_APP_NAME,
              broker='pyamqp://pipe:pipe@lwacalimhead:5672/pipe',
-             backend='redis://lwacalimhead:6379/0',
-             include=['orca.proj.boilerplate',
+             backend='redis://10.41.0.85:6379/0',
+             include=['orca.pipeline.boilerplate',
                       'orca.transform',
-                      'orca.proj.onedayaverage',
-                      'orca.proj.gainvariation',
-                      'orca.proj.transientbatchtasks'
+                      'orca.pipeline.onedayaverage',
+                      'orca.pipeline.gainvariation',
+                      'orca.pipeline.transientbatchtasks'
                       ])
 
 # Optional configuration, see the application user guide.
@@ -21,9 +21,7 @@ app.conf.update(
     task_serializer='json'
 )
 
-task_routes = {'*': queue_config.prefix}
-
-app.conf.task_routes = task_routes
+app.conf.task_routes = {'*': queue_config.prefix}
 
 if __name__ == '__main__':
     app.start()

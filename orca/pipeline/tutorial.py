@@ -1,4 +1,4 @@
-from orca.proj.boilerplate import run_dada2ms, flag_chans, apply_ant_flag, flag_ants, \
+from orca.pipeline.boilerplate import run_dada2ms, flag_chans, apply_ant_flag, flag_ants, \
     apply_bl_flag, do_bl_flags, zest, run_chgcentre, run_integrate_with_concat, \
     do_calibration, get_spectrum, do_bandpass_correction, do_applycal, do_split, \
     run_wsclean
@@ -8,7 +8,7 @@ from orca.utils.coordutils import CYG_A
 from orca.flagging.flag_bad_ants import flag_bad_ants, concat_dada2ms, plot_autos, \
     flag_ants_from_postcal_autocorr
 
-from orca.proj.celery import app
+from orca.celery import app
 from celery import group
 
 from ..metadata.pathsmanagers import OfflinePathsManager

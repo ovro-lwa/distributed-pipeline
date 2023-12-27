@@ -4,7 +4,7 @@ from orca.configmanager import queue_config, load_yaml
 
 
 def test_import_config():
-    assert 'prefix' in queue_config
+    assert queue_config.prefix is not None
 
 
 def test_parse_yml():

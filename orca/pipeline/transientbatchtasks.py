@@ -3,7 +3,7 @@
 This might be retired later, but is useful in the meantime for benchmarking purposes. In general, tasks should be as
 small as possible, but if using local scratch speeds things up, then it might be necessary to have bigger tasks.
 """
-from .celery import app
+from orca.celery import app
 from celery.exceptions import WorkerLostError
 from datetime import datetime
 from typing import List, Optional, Tuple

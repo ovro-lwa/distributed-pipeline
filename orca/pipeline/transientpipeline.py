@@ -1,7 +1,7 @@
-from orca.proj.boilerplate import run_dada2ms, peel, apply_a_priori_flags, flag_chans, run_image_sub, run_co_add
+from orca.pipeline.boilerplate import run_dada2ms, peel, apply_a_priori_flags, flag_chans
 from celery import group
 from ..metadata.pathsmanagers import OfflinePathsManager, SIDEREAL_DAY
-from orca.proj.transientbatchtasks import make_image_products
+from orca.pipeline.transientbatchtasks import make_image_products
 
 from datetime import datetime, timedelta
 import itertools

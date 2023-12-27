@@ -1,7 +1,7 @@
 import pytest
 
 from ..common import TEST_MS
-from orca.proj import transientbatchtasks
+from orca.pipeline import transientbatchtasks
 import os
 import shutil
 

@@ -4,40 +4,17 @@ import sys, os, shutil
 from typing import Optional, List
 
 from orca.flagging import flagoperations, flag_bad_chans, flag_bad_ants, flag_bad_bls
-from orca.proj.celery import app
+from orca.celery import app
 from orca.wrapper import dada2ms, change_phase_centre, wsclean
 from orca.transform import peeling, integrate, gainscaling, spectrum, calibration, image_sub
 from orca.utils import fitsutils, calibrationutils
 from orca.extra import source_find
 from numpy import array
 
-try:
-    from preprocessing import flagging
-except ImportError:
-    print("preprocessing not available. Skipping")
-try:
-    from qa import metrics
-except ImportError:
-    print("qa not available. Skipping")
-
 import casatasks
 import billiard
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
-
-
-"""
-Celery adapter on top of transforms.
-"""
-@app.task
-def run_flagfrac_chans(ms_file: str) -> array:
-    return metrics.flagfrac_chans(ms_file)
-
-
-@app.task
-def run_flagfrac(ms_file: str) -> array:
-    return metrics.flagfrac(ms_file)
-
 
 @app.task
 def run_dada2ms(dada_file: str, out_ms: str, gaintable: Optional[str] = None, addspw: bool = False) -> str:

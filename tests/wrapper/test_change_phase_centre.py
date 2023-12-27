@@ -14,5 +14,4 @@ def test_change_phase_center(mocked_Popen):
 
     change_phase_centre.change_phase_center('/test/data/1234567.ms', '09h18m05.8s -12d05m44s')
     mocked_Popen.assert_called_once_with(
-        [change_phase_centre.CHGCENTRE_PATH, '/test/data/1234567.ms', '09h18m05.8s', '-12d05m44s'],
-        env=change_phase_centre.NEW_ENV)
+        [change_phase_centre.CHGCENTRE_PATH, '/test/data/1234567.ms', '09h18m05.8s', '-12d05m44s'])

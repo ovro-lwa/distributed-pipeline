@@ -1,4 +1,4 @@
-from .celery import app
+from orca.celery import app
 from typing import Tuple
 from datetime import datetime
 import casacore.tables as pt
