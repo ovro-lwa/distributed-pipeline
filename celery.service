@@ -1,3 +1,7 @@
+[Unit]
+Description=celery worker
+After=network.target
+
 [Service]
 Type=forking
 User=celery
@@ -18,6 +22,7 @@ ExecStart=/opt/devel/yuping/envs/orca-env/bin/celery -A $CELERY_APP multi start 
 ExecStop=/opt/devel/yuping/envs/orca-env/bin/celery -A $CELERY_APP multi stopwait $CELERYD_NODES \
     --pidfile=${CELERYD_PID_FILE} --logfile=${CELERYD_LOG_FILE} \
     --loglevel=${CELERYD_LOG_LEVEL}
+TimeoutStopSec=30m
 Restart=no
 
 [Install]
