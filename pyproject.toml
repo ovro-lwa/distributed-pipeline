@@ -21,3 +21,6 @@ dependencies = [
 "gitpython",
 "casadata",
 ]
+
+[tool.setuptools]
+packages = ["orca"]
