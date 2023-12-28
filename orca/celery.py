@@ -7,12 +7,7 @@ CELERY_APP_NAME = 'orca'
 app = Celery(CELERY_APP_NAME,
              broker='pyamqp://pipe:pipe@lwacalimhead:5672/pipe',
              backend='redis://10.41.0.85:6379/0',
-             include=['orca.pipeline.tasks',
-                      'orca.transform',
-                      'orca.pipeline.onedayaverage',
-                      'orca.pipeline.gainvariation',
-                      'orca.pipeline.transientbatchtasks'
-                      ])
+             include=['orca.tasks'])
 
 # Optional configuration, see the application user guide.
 app.conf.update(
