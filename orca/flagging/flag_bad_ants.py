@@ -155,7 +155,7 @@ def flag_bad_ants(msfile: str, debug: bool = False) -> str:
     
     # this threshold was manually selected...should be changed to something better at some point
     if tele.n_ant > 256:
-        thresh = 1
+        thresh = 1.0
     else:
         thresh = 0.02
     flags2 = np.where( (stdarrayx > thresh) | (stdarrayy > thresh) )

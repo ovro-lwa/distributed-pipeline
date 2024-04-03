@@ -193,11 +193,6 @@ def pcp_tree(source, target_dir):
 
 
 @app.task
-def read_dada(dada):
-    arr = np.fromfile(dada, dtype=np.int32, offset=4096)
-
-
-@app.task
 def read_ms(ms, lock):
     with table(ms, ack=False, readonly=lock) as t:
         arr = t.getcol('DATA')
