@@ -8,7 +8,7 @@ backcall==0.2.0
 backports.zoneinfo==0.2.1
 bcrypt==4.0.1
 billiard==4.1.0
-casadata==2023.7.3
+casadata==2024.1.15
 casatasks==6.5.5.21
 casatools==6.5.5.21
 celery==5.3.1
@@ -19,6 +19,7 @@ click==8.1.6
 click-didyoumean==0.3.0
 click-plugins==1.1.1
 click-repl==0.3.0
+clickhouse-connect==0.6.23
 codecov==2.1.13
 comm==0.1.4
 contourpy==1.1.0
@@ -57,6 +58,7 @@ jupyterlab-widgets==3.0.8
 kiwisolver==1.4.4
 kombu==5.3.1
 lazy_loader==0.3
+lz4==4.3.2
 MarkupSafe==2.1.3
 matplotlib==3.7.2
 matplotlib-inline==0.1.6
@@ -66,6 +68,7 @@ mypy-extensions==1.0.0
 nest-asyncio==1.5.7
 networkx==3.1
 numpy==1.24.4
+-e git+ssh://git@github.com/ovro-lwa/distributed-pipeline.git@a90cfeed51ce2448aed1462e238a6e57d8b74f6d#egg=ovro_lwa_orca
 packaging==23.1
 pandas==2.0.3
 paramiko==3.3.1
@@ -127,3 +130,4 @@ wcwidth==0.2.6
 widgetsnbextension==4.0.8
 wrapt==1.15.0
 zipp==3.16.2
+zstandard==0.22.0
