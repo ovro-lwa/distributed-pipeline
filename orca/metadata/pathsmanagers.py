@@ -2,6 +2,7 @@ from datetime import datetime, date, timedelta
 from os import path
 from typing import Optional, Union, Dict, List
 from collections import OrderedDict
+from abc import ABC, abstractmethod
 
 from orca.utils.datetimeutils import find_closest
 import copy
@@ -9,7 +10,7 @@ import copy
 SIDEREAL_DAY = timedelta(hours=23, minutes=56, seconds=4)
 
 
-class PathsManager(object):
+class PathsManager(ABC):
     """Base PathsManager class.
     It contains functionality to manipulate datetime objects and find dada files. Maybe in the future it will evolve
     into an interface with abstract methods.
@@ -17,25 +18,9 @@ class PathsManager(object):
     Attributes:
         utc_times_mapping: An ordered dictionary mapping datetime objects to dada files.
     """
-    def __init__(self, utc_times_txt_path: str, dadafile_dir: Optional[str]):
-        self._dadafile_dir = dadafile_dir
-        self.utc_times_txt_path = utc_times_txt_path
-        # do the mapping thing
-        self.utc_times_mapping = OrderedDict()
-        with open(utc_times_txt_path) as f:
-            for line in f:
-                l = line.split()
-                self.utc_times_mapping[datetime.strptime(f'{l[0]}T{l[1]}', "%Y-%m-%dT%H:%M:%S")] = l[2].rstrip('\n')
-
-    @property
-    def dadafile_dir(self) -> str:
-        if self._dadafile_dir:
-            return self._dadafile_dir
-        else:
-            raise ValueError('dadafile_dir not set.')
-
-    def get_dada_path(self, spw: str, timestamp: datetime):
-        return f'{self.dadafile_dir}/{spw}/{self.utc_times_mapping[timestamp]}'
+    @abstractmethod
+    def time_filter(self, start_time: datetime, end_time: datetime) -> 'PathsManager':
+        return NotImplemented
 
 
 class OfflinePathsManager(PathsManager):
@@ -52,7 +37,14 @@ class OfflinePathsManager(PathsManager):
         for d in (dadafile_dir, working_dir, gaintable_dir):
             if d and not path.exists(d):
                 raise FileNotFoundError(f"File not found or path does not exist: {d}.")
-        super().__init__(utc_times_txt_path, dadafile_dir)
+        self._dadafile_dir = dadafile_dir
+        self.utc_times_txt_path = utc_times_txt_path
+        # do the mapping thing
+        self.utc_times_mapping = OrderedDict()
+        with open(utc_times_txt_path) as f:
+            for line in f:
+                l = line.split()
+                self.utc_times_mapping[datetime.strptime(f'{l[0]}T{l[1]}', "%Y-%m-%dT%H:%M:%S")] = l[2].rstrip('\n')
         self._working_dir: Optional[str] = working_dir
         self._gaintable_dir: Optional[str] = gaintable_dir
         self._flag_npy_paths: Optional[Union[str, Dict[datetime, str]]] = flag_npy_paths
