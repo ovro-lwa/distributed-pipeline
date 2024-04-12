@@ -68,7 +68,7 @@ mypy-extensions==1.0.0
 nest-asyncio==1.5.7
 networkx==3.1
 numpy==1.24.4
--e git+ssh://git@github.com/ovro-lwa/distributed-pipeline.git@a90cfeed51ce2448aed1462e238a6e57d8b74f6d#egg=ovro_lwa_orca
+-e git+ssh://git@github.com/ovro-lwa/distributed-pipeline.git@f76d3d7447b34e83a7da3697754bb14fe9688a8d#egg=ovro_lwa_orca
 packaging==23.1
 pandas==2.0.3
 paramiko==3.3.1
@@ -91,6 +91,7 @@ PyNaCl==1.5.0
 pyparsing==3.0.9
 pytest==7.4.0
 pytest-cov==4.1.0
+pytest-mock==3.14.0
 python-casacore==3.5.2
 python-dateutil==2.8.2
 pytz==2023.3
