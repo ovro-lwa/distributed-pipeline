@@ -22,6 +22,9 @@ class PathsManager(ABC):
     def time_filter(self, start_time: datetime, end_time: datetime) -> 'PathsManager':
         return NotImplemented
 
+    @abstractmethod
+    def get_bcal_path(self,  bandpass_date: date, spw: Optional[str]) -> str:
+        return NotImplemented
 
 class OfflinePathsManager(PathsManager):
     """PathsManager for offline transient processing.

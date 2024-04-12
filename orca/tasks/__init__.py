@@ -17,12 +17,6 @@ import billiard
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
 @app.task
-def run_dada2ms(dada_file: str, out_ms: str, gaintable: Optional[str] = None, addspw: bool = False) -> str:
-    dada2ms.dada2ms(dada_file, out_ms, gaintable, addspw)
-    return out_ms
-
-
-@app.task
 def run_chgcentre(ms_file: str, direction: str = None) -> str:
     if direction:
         return change_phase_centre.change_phase_center(ms_file, direction)

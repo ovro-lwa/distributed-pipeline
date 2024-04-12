@@ -12,7 +12,6 @@ from orca.wrapper import change_phase_centre
 
 log = logging.getLogger(__name__)
 
-
 def integrate(ms_list: List[str], out_ms: str, phase_center: Optional[str] = None,
               use_virtualconcat: bool = False) -> str:
     """Integrate a list of ms (assumed to be time sorted)

@@ -1,43 +1,17 @@
+from orca.celery import app
 from os import path
 import logging
 import numpy as np
 
-from casatasks import clearcal, ft, bandpass, polcal, applycal
+from casatasks import ft, bandpass
 from casacore.tables import table
 
 from orca.utils.calibrationutils import gen_model_ms_stokes
 
 logger = logging.getLogger(__name__)
 
-def calibration_steps(ms: str, do_polcal=False) -> str:
-    """ Perform full Stokes DI calibration steps on measurement set.
-    Generates model component list. Takes visibilities from the DATA column, and writes calibrated
-    visibilities to CORRECTED_DATA.
-
-    Args:
-        ms: Measurement set.
-        do_polcal: Polarization calibration. Default is False.
-
-    Returns: Path to the measurement set.
-
-    """
-    # generate component list
-    clfile = gen_model_ms_stokes(ms)
-    # define calibration table names
-    bcalfile = path.splitext(ms)[0]+'.bcal'
-    Xcalfile = path.splitext(ms)[0]+'.X'
-    dcalfile = path.splitext(ms)[0]+'.dcal'
-    # CASA tasks
-    clearcal(ms, addmodel=True)
-    ft(ms, complist = clfile, usescratch=True)
-    bandpass(ms, bcalfile, refant='34', uvrange='>100', combine='scan,field,obs',
-        fillgaps=1)
-    polcal(ms, Xcalfile, gaintable=[bcalfile], refant='', poltype='Xf', combine='scan,field,obs')
-    polcal(ms, dcalfile, gaintable=[bcalfile, Xcalfile], refant='', poltype='Dflls', combine='scan,field,obs')
-    applycal(ms, gaintable=[bcalfile, Xcalfile, dcalfile], flagbackup=False)
-    return ms
- 
-def make_caltable(ms, do_polcal=False, refant='199') -> str:
+@app.task
+def di_cal(ms, do_polcal=False, refant='199') -> str:
     """ Perform DI calibration and solve for cal table.
 
     Args:

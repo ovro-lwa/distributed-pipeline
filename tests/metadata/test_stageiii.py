@@ -2,10 +2,11 @@ from pathlib import Path
 import pytest
 from mock import patch
 
-from datetime import datetime
+from datetime import datetime, date
 from os import path
 
 from orca.metadata.stageiii import _get_ms_list
+from orca.metadata.stageiii import StageIIIPathsManager
 
 DATA_DIR = '/lustre/pipeline/night-time/'
 
@@ -18,6 +19,16 @@ def test_get_ms_list():
     with patch.object(Path, 'glob', return_value = msl) as path_mock:
         prefix = Path('.')
         assert _get_ms_list(prefix, datetime(2024, 4, 2, 12, 15, 0), datetime(2024, 4, 2, 12, 15, 20)) == msl[:2]
+
+def test_get_ms_list_through_method():
+    p = Path('.')
+    msl = [p / '2021-04-02/12/20240402_121501_82MHz.ms',
+                                p / '2024-04-02/12/20240402_121511_82MHz.ms',
+                                p / '2024-04-02/12/20240402_121521_82MHz.ms']
+
+    with patch.object(Path, 'glob', return_value = msl) as path_mock:
+        pm = StageIIIPathsManager('.', '.', '82MHz', datetime(2024, 4, 2, 12, 15, 0), datetime(2024, 4, 2, 12, 15, 20))
+        assert pm.ms_list == msl[:2]
 
 def test_get_ms_list_multi_hour():
     p = Path('.')
@@ -49,3 +60,7 @@ def test_get_ms_list_multi_day_real():
     assert res[-1].name == '20240402_110959_13MHz.ms'
     assert path.isdir(res[-1].resolve())
     assert len(res) == 359*8
+
+def test_get_bcal_path():
+    pm = StageIIIPathsManager('/lustre/some/data', '/lustre/some/workdir', '13MHz', datetime(2024, 4, 2, 12, 15, 0), datetime(2024, 4, 2, 12, 15, 20))
+    assert pm.get_bcal_path(date(2024, 4, 2)) == '/lustre/some/workdir/13MHz/20240402.bcal'
