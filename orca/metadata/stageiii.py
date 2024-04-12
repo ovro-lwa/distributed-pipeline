@@ -2,6 +2,8 @@ from typing import List, Union, Optional
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from dataclasses import dataclass
+
 from orca.metadata.pathsmanagers import PathsManager
 
 spws  = ['13MHz',  '18MHz',  '23MHz',  '27MHz', '32MHz'  '36MHz',  '41MHz',  '46MHz',  '50MHz',  '55MHz',  '59MHz',  
@@ -10,15 +12,20 @@ spws  = ['13MHz',  '18MHz',  '23MHz',  '27MHz', '32MHz'  '36MHz',  '41MHz',  '46
 _DATETIME_FORMAT = '%Y%m%d_%H%M%S'
 _DATE_FORMAT = '%Y%m%d'
 
+# Use dataclass so that it's serializable
+@dataclass
 class StageIIIPathsManager(PathsManager):
-    def __init__(self, root_dir: str, work_dir: str, subband: str, start: datetime, end: datetime, make_dirs: bool = False):
-        self._root_dir = Path(root_dir)
-        self._work_dir = Path(work_dir)
-        self.subband = subband
-        self.start = start
-        self.end = end
-        self._make_dirs = make_dirs
-        self._ms_list : Optional[List[Path]] = None
+    root_dir: str
+    work_dir: str
+    subband: str
+    start: datetime
+    end: datetime
+    make_dirs: bool = False
+    
+    def __post_init__(self):
+        self._root_dir = Path(self.root_dir)
+        self._work_dir = Path(self.work_dir)
+        self._ms_list = None
 
     @property
     def ms_list(self) -> List[Path]:
@@ -32,13 +39,13 @@ class StageIIIPathsManager(PathsManager):
 
     def get_gaintable_path(self, timestamp: Union[date, datetime], spw: str, gaintype: str) -> str:
         dir = self._work_dir / spw
-        if self._make_dirs:
+        if self.make_dirs:
             dir.mkdir(parents=True, exist_ok=True)
         fn = timestamp.strftime(_DATE_FORMAT if isinstance(timestamp, date) else _DATETIME_FORMAT) + '.' + gaintype
         return (dir / fn).absolute().as_posix()
 
     def time_filter(self, start_time: datetime, end_time: datetime) -> 'StageIIIPathsManager':
-        return StageIIIPathsManager(self._root_dir.as_posix(), self._work_dir.as_posix(), self.subband, start_time, end_time)
+        return StageIIIPathsManager(self.root_dir, self.work_dir, self.subband, start_time, end_time, self.make_dirs)
 
 def _get_ms_list(prefix: Path, start_time: datetime, end_time: datetime) -> List[Path]:
     assert start_time <= end_time
