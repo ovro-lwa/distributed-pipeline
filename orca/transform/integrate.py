@@ -10,8 +10,11 @@ from casacore.tables import table
 
 from orca.wrapper import change_phase_centre
 
+from orca.celery import app
+
 log = logging.getLogger(__name__)
 
+@app.task
 def integrate(ms_list: List[str], out_ms: str, phase_center: Optional[str] = None,
               use_virtualconcat: bool = False) -> str:
     """Integrate a list of ms (assumed to be time sorted)
