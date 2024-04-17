@@ -10,13 +10,13 @@ logger = logging.getLogger(__name__)
 
 DEAD_POWER_THRESHOLD = 0.1
 
-def get_bad_ants(ms: str) -> List[int]:
-    """ Get list of dead antennas.
+def find_dead_ants(ms: str) -> List[int]:
+    """ Identify the list of dead antennas.
     """
     with table(ms, ack=False) as t:
         t_auto = t.query('ANTENNA1=ANTENNA2')
         ants = t_auto.getcol('ANTENNA1')
-        autocorr = t_auto.getcol('DATA')[:,:,0,3].real
+        autocorr = t_auto.getcol('DATA')[:,:,(0,3)].real
     
     assert np.all(np.diff(ants) >= 0) and len(ants) == autocorr.shape[0], 'Data not indexed by antenna number.'
     is_outrigger = np.zeros(len(ants), dtype=bool)
@@ -31,11 +31,11 @@ def get_bad_ants(ms: str) -> List[int]:
     bad_outriggers = []
     for i, amp in enumerate(powers):
         if is_outrigger[i]:
-            if amp < DEAD_POWER_THRESHOLD * mean_outrigger_power:
+            if (amp < DEAD_POWER_THRESHOLD * mean_outrigger_power).any():
                 bad_outriggers.append(i)
         else:
-            if amp < DEAD_POWER_THRESHOLD * mean_core_power:
+            if (amp < DEAD_POWER_THRESHOLD * mean_core_power).any():
                 bad_cores.append(i)
 
-    logger.info(f'Found {len(bad_cores)} bad core antennas and {len(bad_outriggers)} bad outriggers.')
-    return bad_cores + bad_outriggers
+    logger.info(f'Found {len(bad_cores)} dead core antennas and {len(bad_outriggers)} dead outriggers.')
+    return sorted(bad_cores + bad_outriggers)
