@@ -20,7 +20,6 @@ class StageIIIPathsManager(PathsManager):
     subband: str
     start: datetime
     end: datetime
-    make_dirs: bool = False
     
     def __post_init__(self):
         self._root_dir = Path(self.root_dir)
@@ -39,13 +38,11 @@ class StageIIIPathsManager(PathsManager):
 
     def get_gaintable_path(self, timestamp: Union[date, datetime], spw: str, gaintype: str) -> str:
         dir = self._work_dir / spw
-        if self.make_dirs:
-            dir.mkdir(parents=True, exist_ok=True)
         fn = timestamp.strftime(_DATE_FORMAT if isinstance(timestamp, date) else _DATETIME_FORMAT) + '.' + gaintype
         return (dir / fn).absolute().as_posix()
 
     def time_filter(self, start_time: datetime, end_time: datetime) -> 'StageIIIPathsManager':
-        return StageIIIPathsManager(self.root_dir, self.work_dir, self.subband, start_time, end_time, self.make_dirs)
+        return StageIIIPathsManager(self.root_dir, self.work_dir, self.subband, start_time, end_time)
 
 def _get_ms_list(prefix: Path, start_time: datetime, end_time: datetime) -> List[Path]:
     assert start_time <= end_time

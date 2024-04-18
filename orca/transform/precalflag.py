@@ -10,6 +10,10 @@ logger = logging.getLogger(__name__)
 
 DEAD_POWER_THRESHOLD = 0.1
 
+def is_fft_overflow(ms: str) -> bool:
+    raise NotImplementedError
+
+
 def find_dead_ants(ms: str) -> List[int]:
     """ Identify the list of dead antennas.
     """
