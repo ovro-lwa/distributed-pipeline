@@ -10,6 +10,14 @@ from typing import Tuple, List
 DATA = 'DATA'
 CORRECTED_DATA = 'CORRECTED_DATA'
 
+def flag_ants(ms: str, ants: List[int]) -> str:
+    """
+    Input: msfile, list of antennas to flag
+    Flags the antennas in the list.
+    """
+    pt.taql('UPDATE %s SET FLAG = True WHERE ANTENNA1 IN %s OR ANTENNA2 IN %s' % (ms, tuple(ants), tuple(ants)))
+    return ms
+    
 
 def merge_flags(ms1: str, ms2: str) -> Tuple[str, str]:
     with pt.table(ms1, readonly=False, ack=False) as t_prev, pt.table(ms2, readonly=False, ack=False) as t:
