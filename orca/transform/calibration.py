@@ -12,6 +12,9 @@ from orca.celery import app
 from orca.utils.calibrationutils import gen_model_ms_stokes
 
 from orca.transform.integrate import integrate
+from orca.transform.precalflag import find_dead_ants
+from orca.transform import change_phase_centre
+from orca.flagging import flagoperations
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +44,7 @@ def di_cal(ms, out=None, do_polcal=False, refant='199') -> str:
 
 
 @app.task
-def di_cal_multi(ms_list, scrach_dir, out, do_polcal=False, refant='199') -> str:
+def di_cal_multi(ms_list, scrach_dir, out, do_polcal=False, refant='199', flag_ant=True) -> str:
     """ Perform DI calibration on multiple integrations. Copy, concat, then solve.
 
     Args:
@@ -55,11 +58,15 @@ def di_cal_multi(ms_list, scrach_dir, out, do_polcal=False, refant='199') -> str
     with tempfile.TemporaryDirectory(dir=scrach_dir) as tmpdir:
         msl = []
         for m in ms_list:
-            target = f'{tmpdir}/{m.name}'
-            shutil.copytree(m.absolute(), target)
+            target = f'{tmpdir}/{path.basename(m)}'
+            shutil.copytree(m, target)
             msl.append(target)
-        concat = integrate(msl, f'{tmpdir}/CONCAT.ms')
-        return di_cal(concat, do_polcal, refant, out)
+            if flag_ant:
+                dead_ants = find_dead_ants(target)
+                flagoperations.flag_ants(target, dead_ants)
+
+        concat = integrate(msl, f'{tmpdir}/CONCAT.ms', phase_center=change_phase_centre.get_phase_center(msl[len(msl)//2]))
+        return di_cal(concat, out, do_polcal=do_polcal, refant=refant)
 
 
 def flag_bad_sol(bcal:str) -> str:

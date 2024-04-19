@@ -40,7 +40,7 @@ def integrate(ms_list: List[str], out_ms: str, phase_center: Optional[str] = Non
         log.warning('If virtualconcat does not work. See https://github.com/ovro-lwa/distributed-pipeline/issues/20')
         virtualconcat(ms_list, out_ms)
     else:
-        concat(ms_list, out_ms, copypointing=False)
+        concat(ms_list, out_ms)
     with table(out_ms, readonly=False, ack=False) as t:
         fid = t.getcol('FIELD_ID')
         fid_new = np.zeros(fid.shape, dtype=int)

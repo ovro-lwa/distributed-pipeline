@@ -4,10 +4,11 @@ from orca.configmanager import queue_config
 
 CELERY_APP_NAME = 'orca'
 
+# TODO: what if I import a module that imports orca.transform.*?
 app = Celery(CELERY_APP_NAME,
              broker='pyamqp://pipe:pipe@lwacalimhead:5672/pipe',
              backend='redis://10.41.0.85:6379/0',
-             include=['orca.tasks', 'orca.transform'])
+             include=['orca.transform.calibration'])
 
 # Optional configuration, see the application user guide.
 app.conf.update(

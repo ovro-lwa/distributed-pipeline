@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from orca.metadata.pathsmanagers import PathsManager
 
-spws  = ['13MHz',  '18MHz',  '23MHz',  '27MHz', '32MHz'  '36MHz',  '41MHz',  '46MHz',  '50MHz',  '55MHz',  '59MHz',  
+spws  = ['13MHz',  '18MHz',  '23MHz',  '27MHz', '32MHz',  '36MHz',  '41MHz',  '46MHz',  '50MHz',  '55MHz',  '59MHz',  
          '64MHz',  '69MHz',  '73MHz',  '78MHz',  '82MHz']
 
 _DATETIME_FORMAT = '%Y%m%d_%H%M%S'
@@ -29,7 +29,7 @@ class StageIIIPathsManager(PathsManager):
     @property
     def ms_list(self) -> List[Path]:
         if self._ms_list is None:
-            self._ms_list = _get_ms_list(self._root_dir / self.subband, self.start, self.end)
+            self._ms_list = [ ms.absolute().as_posix() for ms in _get_ms_list(self._root_dir / self.subband, self.start, self.end) ]
         return self._ms_list
 
     def get_bcal_path(self, bandpass_date: date, spw: Optional[str]=None) -> str:
@@ -37,7 +37,7 @@ class StageIIIPathsManager(PathsManager):
         return self.get_gaintable_path(bandpass_date, spw, 'bcal')
 
     def get_gaintable_path(self, timestamp: Union[date, datetime], spw: str, gaintype: str) -> str:
-        dir = self._work_dir / spw
+        dir = self._work_dir / gaintype / spw
         fn = timestamp.strftime(_DATE_FORMAT if isinstance(timestamp, date) else _DATETIME_FORMAT) + '.' + gaintype
         return (dir / fn).absolute().as_posix()
 
