@@ -13,7 +13,7 @@ from orca.utils.calibrationutils import gen_model_ms_stokes
 
 from orca.transform.integrate import integrate
 from orca.transform.precalflag import find_dead_ants
-from orca.transform import change_phase_centre
+from orca.wrapper import change_phase_centre
 from orca.flagging import flagoperations
 
 logger = logging.getLogger(__name__)

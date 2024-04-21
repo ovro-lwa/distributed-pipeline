@@ -20,7 +20,7 @@ SRC_LIST = [{'label': 'CasA', 'flux': 16530, 'alpha': -0.72, 'ref_freq': 80.0,
                 {'label': 'TauA', 'flux': 1770, 'alpha': -0.27, 'ref_freq': 80.0,
                  'position': 'J2000 05h34m31.94s +22d00m52.2s'}]
 
-def calibration_time_range(utc_times_txt_path: str, start_time: datetime, 
+def calibration_time_range(start_time: datetime, 
                            end_time: datetime, duration_min: float = 20):
     """Get dada file names based on Cygnus A transit for calibration.
     Get list of .dada file names to use for calibration. Selects .dada files that
@@ -38,28 +38,15 @@ def calibration_time_range(utc_times_txt_path: str, start_time: datetime,
         cal_start_time and cal_end_time covering {duration_min} calibration range, 
             in datetime format.
     """
-    # If the utc_times.txt file contains multiple transits of Cygnus A, will select the
-    # first transit.
-    # Get array of UTC vals from {utc_times_txt_path}.
-    utctimes, dadafiles = np.genfromtxt(utc_times_txt_path, delimiter=' \t ', \
-        dtype='str', unpack=True)
-    # Convert {utctimes} to array of LSTs and MJDs
-    lsttimes = Time(utctimes, scale='utc').sidereal_time('apparent',OVRO_LWA_LOCATION.lon)
-    mjdtimes = Time(utctimes, scale='utc').mjd
+    start_lst = Time(start_time).sidereal_time('apparent', longitude=OVRO_LWA_LOCATION.lon)
+    end_lst = Time(end_time).sidereal_time('apparent', longitude=OVRO_LWA_LOCATION.lon)
     # Select {duration_min} range of LSTs where CygA is closest to zenith
     CygA_HA        = CYG_A.ra.hourangle
-    CygA_HA_start  = CygA_HA - duration_min/2./60.
-    CygA_HA_stop   = CygA_HA + duration_min/2./60.
-    centermjd      = Time(datetime.fromtimestamp( 
-                         (start_time.timestamp() + end_time.timestamp()) / 2. )).mjd
-    rel_starttimes = np.abs(lsttimes.value - CygA_HA_start) + np.abs(mjdtimes - centermjd)
-    rel_stoptimes  = np.abs(lsttimes.value - CygA_HA_stop) + np.abs(mjdtimes - centermjd)
-    cyga_start_ind = list(rel_starttimes).index(min(rel_starttimes))
-    cyga_stop_ind  = list(rel_stoptimes).index(min(rel_stoptimes))
-    #
-    cal_start_time = Time(utctimes[cyga_start_ind-1]).to_datetime()
-    cal_end_time   = Time(utctimes[cyga_stop_ind+1]).to_datetime()
-    #
+    CygA_HA_start = (start_lst - CygA.ra).wrap_at(180*u.deg).hour
+    CygA_HA_end = (end_lst - CygA.ra).wrap_at(180*u.deg).hour
+    cal_start_time = start_time + timedelta(hours=(CygA_HA_start - duration_min/2./60.))
+    cal_end_time = start_time + timedelta(hours=(CygA_HA_end + duration_min/2./60.))
+
     return cal_start_time, cal_end_time
 
 
