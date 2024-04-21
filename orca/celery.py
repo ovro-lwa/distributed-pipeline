@@ -14,7 +14,9 @@ app = Celery(CELERY_APP_NAME,
 app.conf.update(
     result_expires=3600,
     worker_prefetch_multiplier=1,
-    task_serializer='json'
+    task_serializer='json',
+    broker_connection_retry=True,
+    broker_connection_retry_on_startup=True,
 )
 
 app.conf.task_routes = {'*': queue_config.prefix}
