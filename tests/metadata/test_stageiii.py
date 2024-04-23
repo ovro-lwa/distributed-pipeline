@@ -28,7 +28,8 @@ def test_get_ms_list_through_method():
 
     with patch.object(Path, 'glob', return_value = msl) as path_mock:
         pm = StageIIIPathsManager('.', '.', '82MHz', datetime(2024, 4, 2, 12, 15, 0), datetime(2024, 4, 2, 12, 15, 20))
-        assert pm.ms_list == msl[:2]
+        ans = pm.ms_list
+        assert ans == [(datetime(2024, 4, 2, 12, 15, 1), msl[0].absolute().as_posix()), (datetime(2024, 4, 2, 12, 15, 11), msl[1].absolute().as_posix())]
 
 def test_get_ms_list_multi_hour():
     p = Path('.')

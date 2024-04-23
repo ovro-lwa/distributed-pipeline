@@ -9,11 +9,11 @@ NIGHTTIME_DIR = '/lustre/pipeline/night-time/'
 WORK_DIR = '/lustre/celery/'
 
 if __name__ == '__main__':
-    s = datetime(2023, 12 ,22, 5, 0, 0)
-    e = datetime(2023, 12 ,22, 5, 25, 0)
-    for spw in ['59MHz', '13MHz', '82MHz', '69MHz', '73MHz', '46MHz', '36MHz']:
+    s = datetime(2024, 1 ,25, 5, 0, 0)
+    e = datetime(2024, 1 ,25, 5, 25, 0)
+    for spw in spws:
         pm = StageIIIPathsManager(NIGHTTIME_DIR, WORK_DIR, spw, s, e)
         bcal_path = pm.get_bcal_path(s.date())
         if not path.exists(path.dirname(bcal_path)):
             os.makedirs(path.dirname(bcal_path))
-        di_cal_multi.delay(pm.ms_list, SCRATCH_DIR, out=bcal_path)
+        di_cal_multi.delay([m for _, m in pm.ms_list], SCRATCH_DIR, out=bcal_path)

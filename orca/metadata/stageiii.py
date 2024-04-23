@@ -1,4 +1,4 @@
-from typing import List, Union, Optional
+from typing import List, Tuple, Union, Optional
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -27,9 +27,10 @@ class StageIIIPathsManager(PathsManager):
         self._ms_list = None
 
     @property
-    def ms_list(self) -> List[Path]:
+    def ms_list(self) -> List[Tuple[datetime, Path]]:
         if self._ms_list is None:
-            self._ms_list = [ ms.absolute().as_posix() for ms in _get_ms_list(self._root_dir / self.subband, self.start, self.end) ]
+            self._ms_list = [(datetime.strptime(ms.name[:-9], _DATETIME_FORMAT), ms.absolute().as_posix()) 
+                             for ms in _get_ms_list(self._root_dir / self.subband, self.start, self.end)]
         return self._ms_list
 
     def get_bcal_path(self, bandpass_date: date, spw: Optional[str]=None) -> str:
@@ -43,6 +44,11 @@ class StageIIIPathsManager(PathsManager):
 
     def time_filter(self, start_time: datetime, end_time: datetime) -> 'StageIIIPathsManager':
         return StageIIIPathsManager(self.root_dir, self.work_dir, self.subband, start_time, end_time)
+
+    def data_product_path(self, timestamp: datetime, suffix: str) -> str:
+        return (self._work_dir / suffix / self.subband /
+                timestamp.date().isoformat() /
+                timestamp.isoformat() + f'.{suffix}').absolute().as_posix()
 
 def _get_ms_list(prefix: Path, start_time: datetime, end_time: datetime) -> List[Path]:
     assert start_time <= end_time
