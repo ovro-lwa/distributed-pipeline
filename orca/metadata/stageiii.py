@@ -47,8 +47,8 @@ class StageIIIPathsManager(PathsManager):
 
     def data_product_path(self, timestamp: datetime, suffix: str) -> str:
         return (self._work_dir / suffix / self.subband /
-                timestamp.date().isoformat() /
-                timestamp.isoformat() + f'.{suffix}').absolute().as_posix()
+                timestamp.date().isoformat() / f'{timestamp.hour:02d}' /
+                (timestamp.isoformat() + f'.{suffix}')).absolute().as_posix()
 
 def _get_ms_list(prefix: Path, start_time: datetime, end_time: datetime) -> List[Path]:
     assert start_time <= end_time

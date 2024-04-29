@@ -4,7 +4,7 @@ import tempfile
 import shutil
 
 import numpy as np
-from casatasks import ft, bandpass
+from casatasks import ft, bandpass, applycal
 from casacore.tables import table
 
 from orca.celery import app
@@ -82,3 +82,22 @@ def flag_bad_sol(bcal:str) -> str:
     if n_bad > 0:
         logger.info(f'Flagged {n_bad} sols that will blow up amplitude in {bcal}.')
     return bcal
+
+@app.task
+def applycal_data_col(ms: str, gaintable: str, out_ms: str) -> str:
+    """ Apply calibration to the measurement set. Write to a new measurement set.
+
+    Args:
+        ms: Measurement set to apply calibration to
+        caltable: Calibration table to apply
+        out: Output path for the calibrated measurement set
+
+    Returns: Path to the calibrated measurement set.
+    """
+    shutil.copytree(ms, out_ms)
+    applycal(out_ms, gaintable=gaintable, flagbackup=False, applymode='calflag')
+    with table(out_ms, ack=False, readonly=False) as t:
+        d = t.getcol('CORRECTED_DATA')
+        t.removecols('CORRECTED_DATA')
+        t.putcol('DATA', d)
+    return out_ms
