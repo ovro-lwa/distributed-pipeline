@@ -15,7 +15,8 @@ def flag_ants(ms: str, ants: List[int]) -> str:
     Input: msfile, list of antennas to flag
     Flags the antennas in the list.
     """
-    pt.taql('UPDATE %s SET FLAG = True WHERE ANTENNA1 IN %s OR ANTENNA2 IN %s' % (ms, tuple(ants), tuple(ants)))
+    if len(ants) > 0 :
+        pt.taql('UPDATE %s SET FLAG = True WHERE ANTENNA1 IN %s OR ANTENNA2 IN %s' % (ms, tuple(ants), tuple(ants)))
     return ms
     
 
