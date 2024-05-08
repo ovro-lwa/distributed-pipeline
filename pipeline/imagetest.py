@@ -13,6 +13,7 @@ WORK_DIR = '/lustre/celery/'
 if __name__ == '__main__':
     s = datetime(2024, 4 ,15, 6, 0, 0)
     e = datetime(2024, 4 ,15, 15, 0, 0)
+    """
     for spw in spws[1:]:
         pm = StageIIIPathsManager(NIGHTTIME_DIR, WORK_DIR, spw, s, e)
         bcal_path = pm.get_bcal_path(s.date())
@@ -22,3 +23,4 @@ if __name__ == '__main__':
             if not path.exists(path.dirname(outpath)):
                 os.makedirs(path.dirname(outpath))
             applycal_data_col.delay(ms, bcal_path, out_ms=outpath)
+    """

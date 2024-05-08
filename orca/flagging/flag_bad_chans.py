@@ -67,38 +67,6 @@ def flag_bad_chans(msfile: str, band: str, usedatacol=False, generate_plot=False
             flaglist = np.unique(flaglist[0][np.where( (flaglist[1] == 0) | (flaglist[1] == 3) )])
         else:
             flaglist = np.unique(flaglist[0])
-        #import pylab
-        #pylab.ion()
-        #pylab.plot(maxamps_norm[:,0], '.', color='Blue')
-        #pylab.plot(maxamps_norm[:,3], '.', color='Green')
-        #pylab.plot(maxamps_norm[:,1], '.', color='Orange')
-        #pylab.plot(maxamps_norm[:,2], '.', color='Magenta')
-        #pylab.hlines(maxamps_lower[0], 0, 108, color='blue')
-        #pylab.hlines(maxamps_upper[0], 0, 108, color='blue')
-        #pylab.hlines(maxamps_lower[3], 0, 108, color='green')
-        #pylab.hlines(maxamps_upper[3], 0, 108, color='green')
-        #pylab.hlines(maxamps_lower[1], 0, 108, color='orange')
-        #pylab.hlines(maxamps_upper[1], 0, 108, color='orange')
-        #pylab.hlines(maxamps_lower[2], 0, 108, color='magenta')
-        #pylab.hlines(maxamps_upper[2], 0, 108, color='magenta')        
-        #pylab.plot(flaglist,maxamps_norm[flaglist,0], '.', color='Red')
-        #pylab.plot(flaglist,maxamps_norm[flaglist,3], '.', color='Red')        
-        #pylab.plot(flaglist,maxamps_norm[flaglist,1], '.', color='Red')
-        #pylab.plot(flaglist,maxamps_norm[flaglist,2], '.', color='Red')
-        #pylab.grid('on')
-        #pylab.figure()
-        #pylab.plot(meanamps[:,0], '.', color='Blue')
-        #pylab.plot(meanamps[:,3], '.', color='Green')        
-        #pylab.plot(meanamps[:,1], '.', color='orange')
-        #pylab.plot(meanamps[:,2], '.', color='magenta')
-        #pylab.hlines(np.median(meanamps[:,0])+100*np.min(meanamps_stdfilt[:,0]), 0, 108, color='Blue')
-        #pylab.hlines(np.median(meanamps[:,3])+100*np.min(meanamps_stdfilt[:,3]), 0, 108, color='Green')
-        #pylab.hlines(np.median(meanamps[:,1])+100*np.min(meanamps_stdfilt[:,1]), 0, 108, color='Orange')
-        #pylab.hlines(np.median(meanamps[:,2])+100*np.min(meanamps_stdfilt[:,2]), 0, 108, color='Magenta')
-        #pylab.grid('on')
-        #import pdb
-        #pdb.set_trace()
-
         #################################################
         #this is for testing purposes only
         #generate plot of visibilities for quick check of how well flagging performed

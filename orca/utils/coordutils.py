@@ -1,14 +1,14 @@
 """ Coordinates utilities having to do with local coordinates.
 For image plane pixel numbers, use the fits header and astropy.WCS.
 """
-from datetime import datetime
+from datetime import datetime, date
 from os import path
-from typing import Union
+from typing import Union, Tuple
 import pkg_resources
 
 import numpy as np
 from astropy.time import Time
-from astropy.coordinates import SkyCoord, EarthLocation, ICRS, get_sun, AltAz, Angle
+from astropy.coordinates import SkyCoord, EarthLocation, ICRS, get_sun, AltAz, Angle, solar_system_ephemeris
 from astropy import units as u
 
 

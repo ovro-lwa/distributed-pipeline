@@ -14,15 +14,10 @@ from astropy import wcs
 from astropy.coordinates import SkyCoord
 import numpy as np
 
-from orca.utils import fitsutils, coordutils
+from orca.utils import fitsutils
 from orca.wrapper import wsclean
 
-NARROW_ONLY = True
-
 log = logging.getLogger(__name__)
-
-CLEAN_THRESHOLD_SUN_JY = 50 if NARROW_ONLY else 5
-CLEAN_THRESHOLD_JY = 50 if NARROW_ONLY else 20
 
 CLEAN_MGAIN = 0.8
 SUN_CHANNELS_OUT = 2
@@ -69,6 +64,9 @@ def get_peak_around_source(im_T: np.ndarray, source_coord: SkyCoord, w: wcs.WCS)
     peakx += x_start
     peaky += y_start
     return peakx, peaky
+
+def integrated_image(msl: List[str]):
+    pass
 
 
 def make_dirty_image(ms_list: List[str], output_dir: str, output_prefix: str, make_psf: bool = False,

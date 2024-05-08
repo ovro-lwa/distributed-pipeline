@@ -1,7 +1,9 @@
 from os import path
 import logging
-import tempfile
 import shutil
+import os
+import uuid
+import subprocess
 
 import numpy as np
 from casatasks import ft, bandpass, applycal
@@ -55,18 +57,23 @@ def di_cal_multi(ms_list, scrach_dir, out, do_polcal=False, refant='199', flag_a
 
     Returns: List of paths to the derived cal tables.
     """
-    with tempfile.TemporaryDirectory(dir=scrach_dir) as tmpdir:
-        msl = []
-        for m in ms_list:
-            target = f'{tmpdir}/{path.basename(m)}'
-            shutil.copytree(m, target)
-            msl.append(target)
-            if flag_ant:
-                dead_ants = find_dead_ants(target)
-                flagoperations.flag_ants(target, dead_ants)
+    tmpdir = f'{scrach_dir}/tmp-{str(uuid.uuid4())}'
+    os.mkdir(tmpdir)
 
-        concat = integrate(msl, f'{tmpdir}/CONCAT.ms', phase_center=change_phase_centre.get_phase_center(msl[len(msl)//2]))
-        return di_cal(concat, out, do_polcal=do_polcal, refant=refant)
+    subprocess.check_call(['/usr/bin/cp', '-r'] + ms_list + [tmpdir])
+    msl = []
+    for m in ms_list:
+        target = f'{tmpdir}/{path.basename(m)}'
+        # shutil.copytree(m, target, copy_function=shutil.copyfile)
+        msl.append(target)
+        if flag_ant:
+            dead_ants = find_dead_ants(target)
+            flagoperations.flag_ants(target, dead_ants)
+
+    concat = integrate(msl, f'{tmpdir}/CONCAT.ms', phase_center=change_phase_centre.get_phase_center(msl[len(msl)//2]))
+    if path.exists(tmpdir):
+        shutil.rmtree(tmpdir, ignore_errors=True)
+    return di_cal(concat, out, do_polcal=do_polcal, refant=refant)
 
 
 def flag_bad_sol(bcal:str) -> str:
@@ -101,3 +108,6 @@ def applycal_data_col(ms: str, gaintable: str, out_ms: str) -> str:
         t.removecols('CORRECTED_DATA')
         t.putcol('DATA', d)
     return out_ms
+
+def apply_bcal_in_mem(ms: str, bcal: str) -> np.ndarray:
+    raise NotImplementedError
