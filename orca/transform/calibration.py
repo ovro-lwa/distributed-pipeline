@@ -71,9 +71,10 @@ def di_cal_multi(ms_list, scrach_dir, out, do_polcal=False, refant='199', flag_a
             flagoperations.flag_ants(target, dead_ants)
 
     concat = integrate(msl, f'{tmpdir}/CONCAT.ms', phase_center=change_phase_centre.get_phase_center(msl[len(msl)//2]))
+    res = di_cal(concat, out, do_polcal=do_polcal, refant=refant)
     if path.exists(tmpdir):
         shutil.rmtree(tmpdir, ignore_errors=True)
-    return di_cal(concat, out, do_polcal=do_polcal, refant=refant)
+    return res
 
 
 def flag_bad_sol(bcal:str) -> str:
