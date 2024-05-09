@@ -8,7 +8,8 @@ CELERY_APP_NAME = 'orca'
 app = Celery(CELERY_APP_NAME,
              broker='pyamqp://pipe:pipe@rabbitmq.calim.mcs.pvt:5672/pipe',
              backend='redis://10.41.0.85:6379/0',
-             include=['orca.transform.calibration'])
+             include=['orca.transform.calibration',
+                      'orca.transform.qa'])
 
 # Optional configuration, see the application user guide.
 app.conf.update(
