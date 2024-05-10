@@ -21,7 +21,6 @@ if __name__ == '__main__':
         # if month in cal_hr_late:
         s = datetime(year, month, d, cal_hr_late[month], 0, 0)
         e = datetime(year, month, d, cal_hr_late[month], 25, 0)
-        print('Doing date', s)
         for spw in spws[1:]:
             pm = StageIIIPathsManager(NIGHTTIME_DIR, WORK_DIR, spw, s, e)
             bcal_path = pm.get_bcal_path(s.date())
@@ -32,8 +31,6 @@ if __name__ == '__main__':
                                           datetime(year, month, d, 12, 0, 0)
                                           , e)
                 to_cal = pm.ms_list[-(25 * 60 // 10):]
-            elif path.exists(bcal_path):
-                continue
 
             os.makedirs(path.dirname(bcal_path), exist_ok=True)
             di_cal_multi.delay(to_cal, SCRATCH_DIR, out=bcal_path)
