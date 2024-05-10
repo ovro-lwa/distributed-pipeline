@@ -14,13 +14,13 @@ if __name__ == '__main__':
     cal_hr_late = {2:14, 3:13, 4: 12, 5: 12}
 
     year = 2024
-    month = 3 
-    for d in range(1, 32):
+    month = 2 
+    for d in range(1, 29):
         if not path.exists(f'{NIGHTTIME_DIR}55MHz/{year}-{month:02d}-{d:02d}'):
             continue
         # if month in cal_hr_late:
-        s = datetime(year, month, d, cal_hr_late[month], 0, 0)
-        e = datetime(year, month, d, cal_hr_late[month], 25, 0)
+        s = datetime(year, month, d, cal_hr_late[month], 30, 0)
+        e = datetime(year, month, d, cal_hr_late[month], 55, 0)
         for spw in spws[1:]:
             pm = StageIIIPathsManager(NIGHTTIME_DIR, WORK_DIR, spw, s, e)
             bcal_path = pm.get_bcal_path(s.date())
@@ -30,7 +30,7 @@ if __name__ == '__main__':
                 pm = StageIIIPathsManager(NIGHTTIME_DIR, WORK_DIR, spw,
                                           datetime(year, month, d, 12, 0, 0)
                                           , e)
-                to_cal = pm.ms_list[-(25 * 60 // 10):]
+                to_cal = [ m for _, m in pm.ms_list[-(25 * 60 // 10):] ]
 
             os.makedirs(path.dirname(bcal_path), exist_ok=True)
             di_cal_multi.delay(to_cal, SCRATCH_DIR, out=bcal_path)
