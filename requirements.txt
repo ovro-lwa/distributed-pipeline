@@ -58,6 +58,7 @@ jupyterlab-widgets==3.0.8
 kiwisolver==1.4.4
 kombu==5.3.1
 lazy_loader==0.3
+llvmlite==0.41.1
 lz4==4.3.2
 MarkupSafe==2.1.3
 matplotlib==3.7.2
@@ -67,8 +68,9 @@ mypy==1.4.1
 mypy-extensions==1.0.0
 nest-asyncio==1.5.7
 networkx==3.1
+numba==0.58.1
 numpy==1.24.4
--e git+ssh://git@github.com/ovro-lwa/distributed-pipeline.git@f76d3d7447b34e83a7da3697754bb14fe9688a8d#egg=ovro_lwa_orca
+-e git+ssh://git@github.com/ovro-lwa/distributed-pipeline.git@69274f91412514008ba461dcce8f74232cf28c8b#egg=ovro_lwa_orca
 packaging==23.1
 pandas==2.0.3
 paramiko==3.3.1
