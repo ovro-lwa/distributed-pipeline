@@ -14,5 +14,6 @@ telescope:
 
 execs:
   wsclean: /opt/bin/wsclean
+  aoflagger: /opt/bin/aoflagger
 
 cluster: calim
