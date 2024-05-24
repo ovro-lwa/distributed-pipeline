@@ -9,11 +9,13 @@ app = Celery(CELERY_APP_NAME,
              broker='pyamqp://pipe:pipe@rabbitmq.calim.mcs.pvt:5672/pipe',
              backend='redis://10.41.0.85:6379/0',
              include=['orca.transform.calibration',
-                      'orca.transform.qa'])
+                      'orca.transform.qa',
+                      'orca.tasks.fortests',
+                      'orca.transform.spectrum'])
 
 # Optional configuration, see the application user guide.
 app.conf.update(
-    result_expires=3600,
+    result_expires=10800,
     worker_prefetch_multiplier=1,
     task_serializer='json',
     broker_connection_retry=True,

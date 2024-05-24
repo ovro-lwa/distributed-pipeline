@@ -51,3 +51,10 @@ def test_multiprocessing():
     for i in range(5):
         p = billiard.Process(target=worker, args=(i,))
         p.start()
+
+@app.task
+def do_sum(args):
+    s = 0
+    for i in args:
+        s += i
+    return s

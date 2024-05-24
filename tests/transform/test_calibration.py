@@ -39,3 +39,19 @@ def test_on_ms():
 
     diff = (np.abs(out - corrected))/np.abs(corrected)
     assert ((diff < 1e-6) | d_flag).all()
+
+@pytest.mark.skipif(not path.isdir(DATA_DIR), reason="need acual data.")
+def test_applycal_in_mem_cross_ms():
+    with table(f'{DATA_DIR}/20231120_104728_69MHz.ms', ack=False) as t:
+        tcross = t.query('ANTENNA1 != ANTENNA2')
+        data = tcross.getcol('DATA')
+        corrected = tcross.getcol('CORRECTED_DATA')
+        d_flag = tcross.getcol('FLAG')
+
+    with table(f'{DATA_DIR}/20231120_69MHz.bcal', ack=False) as t:
+        bcal = t.getcol('CPARAM')
+        flags = t.getcol('FLAG')
+    
+    out = calibration.applycal_in_mem_cross(data, bcal)
+    diff = (np.abs(out - corrected))/np.abs(corrected)
+    assert ((diff < 1e-6) | d_flag).all()
