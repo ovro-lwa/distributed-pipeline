@@ -8,13 +8,10 @@ from orca.configmanager import execs, cluster
 
 log = logging.getLogger(__name__)
 
-if cluster == 'calim':
-    NEW_ENV = dict(os.environ, OPENBLAS_NUM_THREADS='1')
-else:
-    NEW_ENV = dict(os.environ, LD_LIBRARY_PATH='/opt/astro/mwe/usr/lib64:/opt/astro/lib/:/opt/astro/casacore-1.7.0/lib',
-                AIPSPATH='/opt/astro/casa-data dummy dummy')
+NEW_ENV = dict(os.environ, OPENBLAS_NUM_THREADS='1')
 
-def wsclean(ms_list: List[str], out_dir: str, filename_prefix: str, extra_arg_list: List[str]) -> None:
+def wsclean(ms_list: List[str], out_dir: str, filename_prefix: str, extra_arg_list: List[str],
+            num_threads: int=1, mem_gb: int=50) -> None:
     """Run wsclean with arguments and put output fits files in out_dir.
     wsclean will writes the following files (depending on the options):
 
@@ -35,11 +32,14 @@ def wsclean(ms_list: List[str], out_dir: str, filename_prefix: str, extra_arg_li
     Returns: None. But you can reconstruct the fits file names with the wsclean conventions.
 
     """
-    extra_arg_list = [execs.wsclean] + extra_arg_list + ['-name', f'{out_dir}/{filename_prefix}'] + ms_list
-    proc = subprocess.Popen(extra_arg_list, env=NEW_ENV, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    args_list = [execs.wsclean] + ['-j', str(num_threads), '-abs-mem', str(mem_gb)] + extra_arg_list + \
+        ['-name', f'{out_dir}/{filename_prefix}'] + ms_list
+    print(args_list)
+    proc = subprocess.Popen(args_list, env=NEW_ENV)
     try:
         stdoutdata, stderrdata = proc.communicate()
         if proc.returncode != 0:
+            log.error(stdoutdata.decode())
             if stderrdata:
                 log.error(f'Error in wsclean: {stderrdata.decode()}')
             raise Exception('Error in wsclean.')

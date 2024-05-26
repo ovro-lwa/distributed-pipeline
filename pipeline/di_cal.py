@@ -13,9 +13,9 @@ if __name__ == '__main__':
     cal_hr_early = {11: 1, 12: 2, 1: 2}
     cal_hr_late = {2:14, 3:13, 4: 12, 5: 12}
 
-    year = 2023
-    month = 12
-    for d in range(1, 32):
+    year = 2024
+    month = 5
+    for d in range(24, 26):
         if not path.exists(f'{NIGHTTIME_DIR}55MHz/{year}-{month:02d}-{d:02d}'):
             continue
         if month in cal_hr_late:
@@ -27,13 +27,13 @@ if __name__ == '__main__':
         else:
             raise ValueError('Calibration hour not specified.')
 
-        for spw in spws:
+        for spw in spws[1:]:
             pm = StageIIIPathsManager(NIGHTTIME_DIR, WORK_DIR, spw, s, e)
             to_cal = [ m for _, m in pm.ms_list ]
             if len(pm.ms_list) < 100:
                 if month in cal_hr_late:
                     pm = StageIIIPathsManager(NIGHTTIME_DIR, WORK_DIR, spw,
-                                            datetime(year, month, d, 12, 0, 0)
+                                            datetime(year, month, d, 10, 0, 0)
                                             , e)
                     to_cal = [ m for _, m in pm.ms_list[-(25 * 60 // 10):] ]
                 else:

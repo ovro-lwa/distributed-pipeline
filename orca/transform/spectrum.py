@@ -1,10 +1,10 @@
 from os import path
 import os
+import uuid
 from typing import List, Iterable, Tuple
 from dataclasses import dataclass, asdict
 from datetime import datetime
 import logging
-import json
 
 from kombu.utils.json import register_type
 
@@ -15,14 +15,18 @@ import numpy.ma as ma
 import numpy as np
 
 from astropy.io import fits
+import redis
 
-from orca.celery import app
+from orca.celery import app, REDIS_URL
 from orca.transform import dftspectrum, calibration
 from orca.utils.datetimeutils import STAGE_III_INTEGRATION_TIME
 
 logger = logging.getLogger(__name__)
 
 N_CHAN = 192
+
+REDIS_EXPIRE_S = 3600*5
+REDIS_KEY_PREFIX = 'dynspec-'
 
 # row numbers in cross corr
 ROW_NUMS = [('LWA-128&LWA-160', 54282), 
@@ -105,20 +109,19 @@ class _SnapshotSpectrum:
     subband_no : int
     scan_no: int
 
-    xx: List[float]
-    xy: List[float]
-    yx: List[float]
-    yy: List[float]
+    key: str
 
     @classmethod
     def from_json(cls, data):
         return cls(data['type'], data['subband_no'], data['scan_no'],
-                   data['xx'], data['xy'], data['yx'], data['yy'])
+                   data['key'])
 
 
 register_type(_SnapshotSpectrum, '_SnapshotSpectrum',
               asdict,
               _SnapshotSpectrum.from_json)
+
+_TRANSPORT_DTYPE = np.float32
 
 @app.task
 def dynspec_map(subband_no:int, scan_no:int, ms: str, bcal: str) -> List[_SnapshotSpectrum]:
@@ -135,21 +138,18 @@ def dynspec_map(subband_no:int, scan_no:int, ms: str, bcal: str) -> List[_Snapsh
             bcal_dat[bcal_flag] = np.inf
 
     amp = np.abs(calibration.applycal_in_mem_cross(dat, bcal_dat))
-    incoh_sum = np.mean(amp, axis=0)
-    out = [_SnapshotSpectrum('incoherent-sum', subband_no, scan_no,
-                              incoh_sum[:, 0].tolist(),
-                              incoh_sum[:, 1].tolist(),
-                              incoh_sum[:, 2].tolist(),
-                              incoh_sum[:, 3].tolist()),
-                              ]
+    incoh_sum = np.mean(amp, axis=0).astype(_TRANSPORT_DTYPE)
+    r = redis.Redis.from_url(REDIS_URL)
+    key1 = REDIS_KEY_PREFIX + str(uuid.uuid4())
+    r.set(key1, incoh_sum.tobytes(), ex=REDIS_EXPIRE_S)
+    out = [_SnapshotSpectrum('incoherent-sum', subband_no, scan_no, key1)]
     
+    amp = amp.astype(_TRANSPORT_DTYPE)
     for name, i in ROW_NUMS:
+        entry_key = REDIS_KEY_PREFIX + str(uuid.uuid4())
+        r.set(entry_key, amp[i, :, :].tobytes(), ex=REDIS_EXPIRE_S)
         out.append(
-            _SnapshotSpectrum(name, subband_no, scan_no,
-                                amp[i, :, 0].tolist(),
-                                amp[i, :, 1].tolist(),
-                                amp[i, :, 2].tolist(),
-                                amp[i, :, 3].tolist())
+            _SnapshotSpectrum(name, subband_no, scan_no, entry_key)
         )
 
     return out
@@ -158,38 +158,41 @@ def dynspec_map(subband_no:int, scan_no:int, ms: str, bcal: str) -> List[_Snapsh
 def dynspec_reduce(spectra: Iterable[List[_SnapshotSpectrum]], start_ts: datetime, out_dir: str) -> None:
     n_scans = max(spectra, key=lambda x: x[0].scan_no)[0].scan_no + 1
     n_freqs = 192 * 16
-
     types = ['incoherent-sum'] + [name for name, _ in ROW_NUMS]
     # first axis is corr
     all_dat = {t: np.zeros((4, n_scans, n_freqs), dtype = np.float32) for t in types}
+
+    r = redis.Redis.from_url(REDIS_URL)
 
     for all_spec_in_snapshot in spectra:
         for spec in all_spec_in_snapshot:
             if spec.type in all_dat:
                 j = spec.scan_no
                 k = spec.subband_no * N_CHAN
-                all_dat[spec.type][0, j, k:k+N_CHAN] = spec.xx
-                all_dat[spec.type][1, j, k:k+N_CHAN] = spec.xy
-                all_dat[spec.type][2, j, k:k+N_CHAN] = spec.yx
-                all_dat[spec.type][3, j, k:k+N_CHAN] = spec.yy
+                spec_dat = np.frombuffer(r.get(spec.key), dtype=_TRANSPORT_DTYPE).reshape(N_CHAN, 4)
+                r.delete(spec.key)
+                all_dat[spec.type][0, j, k:k+N_CHAN] = spec_dat[:, 0]
+                all_dat[spec.type][1, j, k:k+N_CHAN] = spec_dat[:, 1]
+                all_dat[spec.type][2, j, k:k+N_CHAN] = spec_dat[:, 2]
+                all_dat[spec.type][3, j, k:k+N_CHAN] = spec_dat[:, 3]
 
     for name, dat in all_dat.items():
         for i, corr in enumerate(['XX', 'XY', 'YX', 'YY']):
-            hdu = fits.PrimaryHDU(dat[i])
+            hdu = fits.PrimaryHDU(dat[i].T)
 
             zero_ut = datetime(start_ts.year, start_ts.month, start_ts.day, 0, 0, 0)
             header = hdu.header
-            header['CTYPE1'] = 'FREQ    '
-            header['CUNIT1'] = 'MHz      '
-            header['CRVAL1'] = 17.992 # lowest channel freq
-            header['CDELT1'] = 0.023926 # channel width
-            header['CRPIX1'] = 1
-
-            header['CTYPE2'] = 'TIME    '
-            header['CUNIT2'] = 'HOUR      '
-            header['CRVAL2'] = (start_ts - zero_ut).total_seconds() / 3600
-            header['CDELT2'] = STAGE_III_INTEGRATION_TIME.seconds / 3600
+            header['CTYPE2'] = 'FREQ    '
+            header['CUNIT2'] = 'MHz      '
+            header['CRVAL2'] = 17.992 # lowest channel freq
+            header['CDELT2'] = 0.023926 # channel width
             header['CRPIX2'] = 1
+
+            header['CTYPE1'] = 'TIME    '
+            header['CUNIT1'] = 'HOUR      '
+            header['CRVAL1'] = (start_ts - zero_ut).total_seconds() / 3600
+            header['CDELT1'] = STAGE_III_INTEGRATION_TIME.seconds / 3600
+            header['CRPIX1'] = 1
             header['DATE-OBS'] = start_ts.date().isoformat()
             hdulist = fits.HDUList([hdu])
             out_dir_dir = f'{out_dir}/{name}'

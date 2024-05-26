@@ -128,3 +128,26 @@ def applycal_in_mem(data: np.ndarray, bcal: np.ndarray) -> np.ndarray:
                 ans[i_row, c] = np.diag(bcal[i, c]) @ data[i_row, c] @ np.conj(np.diag(bcal[j, c]))
             i_row += 1
     return ans.reshape(-1, n_chan, 4)
+
+
+@njit
+def applycal_in_mem_cross(data: np.ndarray, bcal: np.ndarray) -> np.ndarray:
+    """
+    For cross correlation.
+    """
+    # data has shape (nbl, nchan, ncorr), (61776, 192, 4), ordering (0, 0) (0, 1)... (1,1), (1,2)...
+    # bcal has shape (nant, nchan, npol), (352, 192, 2)
+    bcal = (1. / bcal).astype(np.complex64)
+    n_ant = bcal.shape[0]
+    n_chan = bcal.shape[1]
+
+    data = data.reshape(-1, n_chan, 2, 2)
+    ans = np.zeros_like(data)
+    i_row = 0
+    for i in range(n_ant):
+        for j in range(i+1, n_ant):
+            # don't need to tranpose on the diagonal matrix
+            for c in range(n_chan):
+                ans[i_row, c] = np.diag(bcal[i, c]) @ data[i_row, c] @ np.conj(np.diag(bcal[j, c]))
+            i_row += 1
+    return ans.reshape(-1, n_chan, 4)

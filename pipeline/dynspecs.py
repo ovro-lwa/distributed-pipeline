@@ -1,7 +1,7 @@
 # dynamic spectra for subet of baselines and incoherent sum
 from datetime import datetime
 
-from celery.canvas import chord
+from celery.canvas import chord, group
 from orca.transform.spectrum import dynspec_map, dynspec_reduce
 from orca.metadata.stageiii import StageIIIPathsManager, spws
 
@@ -14,7 +14,7 @@ if __name__ == '__main__':
     datetime_ms_map = {}
     subband_nos = dict((s, i) for i, s in enumerate(spws))
     s = datetime(2024,5,21,4,0,0)
-    e = datetime(2024,5,21,14,0,0)
+    e = datetime(2024,5,21,15,0,0)
     for spw in spws:
         pm = StageIIIPathsManager(root_dir=NIGHTTIME_DIR, work_dir=WORK_DIR, subband=spw,
                                   start=s, end=e)
@@ -35,4 +35,5 @@ if __name__ == '__main__':
 
     random.shuffle(subtasks)
     print(len(subtasks))
-    chord(subtasks, dynspec_reduce.s(start_ts, '/lustre/celery/baselines/'))()
+    res = chord(subtasks)(dynspec_reduce.s(start_ts=start_ts, out_dir='/lustre/celery/baselines/'))
+    print(res.get())
