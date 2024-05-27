@@ -110,6 +110,14 @@ def applycal_data_col(ms: str, gaintable: str, out_ms: str) -> str:
         t.putcol('DATA', d)
     return out_ms
 
+def applycal_data_col_nocopy(ms: str, gaintable: str) -> str:
+    applycal(ms, gaintable=gaintable, flagbackup=False, applymode='calflag')
+    with table(ms, ack=False, readonly=False) as t:
+        d = t.getcol('CORRECTED_DATA')
+        t.removecols('CORRECTED_DATA')
+        t.putcol('DATA', d)
+    return ms
+
 @njit
 def applycal_in_mem(data: np.ndarray, bcal: np.ndarray) -> np.ndarray:
     # data has shape (nbl, nchan, ncorr), (62128, 192, 4), ordering (0, 0) (0, 1)... (1,1), (1,2)...

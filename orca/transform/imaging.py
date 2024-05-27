@@ -1,12 +1,16 @@
 """Transforms that make images
 """
 from typing import Tuple, Optional, List, Union
+import uuid
 import subprocess
+import shutil
 import os
 import logging
 from os import path
 from datetime import datetime
 from tempfile import TemporaryDirectory
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from matplotlib import colors as mpl_colors
 from matplotlib import pyplot as plt
@@ -16,8 +20,13 @@ import numpy as np
 
 from orca.utils import fitsutils
 from orca.wrapper import wsclean
+from orca.transform.flagging import flag_with_aoflagger, flag_ants
+from orca.metadata.stageiii import StageIIIPathsManager
+from orca.transform.integrate import integrate
+from orca.transform.calibration import applycal_data_col_nocopy
+from orca.celery import app
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 CLEAN_MGAIN = 0.8
 SUN_CHANNELS_OUT = 2
@@ -106,3 +115,57 @@ def make_dirty_image(ms_list: List[str], output_dir: str, output_prefix: str, ma
         return f'{output_dir}/{output_prefix}-image.fits', f'{output_dir}/{output_prefix}-psf.fits'
     else:
         return f'{output_dir}/{output_prefix}-image.fits'
+
+
+@app.task
+def something_something(spw_list:List[str], start_time: datetime, end_time: datetime,
+                        scratch_dir: str, source_dir: str, work_dir: str):
+    s = start_time
+    e = end_time
+    tmpdir = f'{scratch_dir}/tmp-{str(uuid.uuid4())}'
+    os.mkdir(tmpdir)
+    integrated_msl = []
+    for spw in spw_list:
+        logger.info('applycal SPW %s', spw)
+        pm = StageIIIPathsManager(source_dir, work_dir, spw, s, e)
+        msl = []
+        with ThreadPoolExecutor(10) as pool:
+            futures = [ pool.submit(shutil.copytree, ms, f'{tmpdir}/{path.basename(ms)}') for _, ms in pm.ms_list ]
+            """
+            for _, ms in pm.ms_list:
+                # applycal
+                msl.append(applycal_data_col(ms, pm.get_bcal_path(s.date()),
+                                f'{tmpdir}/{path.basename(ms)}'))
+            """
+            for r in as_completed(futures):
+                m = r.result()
+                applycal_data_col_nocopy(m, pm.get_bcal_path(s.date()))
+                msl.append(m)
+
+        msl.sort()
+        logger.info('integrate SPW %s', spw)
+        integrated = integrate(msl, f'{tmpdir}/{spw}.ms')
+        for ms in msl:
+           shutil.rmtree(ms)
+       # flag
+        logger.info('flag SPW %s', spw)
+        flag_ants(integrated, [70,79,80,117,137,193,150,178,201,208,224,261,215,236,246,294,298,301,307,289,33,3,41,42,44,92,12,14,17,21,154,29,28,127,126])
+        flag_with_aoflagger(integrated)
+        integrated_msl.append(integrated)
+
+    logger.info('Done with all spws. Start imaging.')
+    # image
+    wsclean.wsclean(integrated_msl, tmpdir, 'OUT',
+            extra_arg_list=['-weight', 'briggs', '0', '-niter', '0', '-size', '4096', '4096', '-scale', '0.03125', '-pol', 'IV',
+                            '-no-update-model-required', '-taper-inner-tukey', '30'],
+            num_threads=20, mem_gb=100)
+
+    out_path = pm.data_product_path(s, 'V.image.fits')
+    os.makedirs(path.dirname(out_path), exist_ok=True)
+    shutil.copy(f'{tmpdir}/OUT-V-image.fits', out_path)
+
+    out_path = pm.data_product_path(s, 'I.image.fits')
+    os.makedirs(path.dirname(out_path), exist_ok=True)
+    shutil.copy(f'{tmpdir}/OUT-I-image.fits', out_path)
+    logger.info('Done imaging.')
+    shutil.rmtree(tmpdir)

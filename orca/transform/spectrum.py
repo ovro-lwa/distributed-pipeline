@@ -1,7 +1,6 @@
 from os import path
 import os
-import uuid
-from typing import List, Iterable, Tuple
+from typing import List, Iterable
 from dataclasses import dataclass, asdict
 from datetime import datetime
 import logging
@@ -25,14 +24,15 @@ logger = logging.getLogger(__name__)
 
 N_CHAN = 192
 
-REDIS_EXPIRE_S = 3600*5
-REDIS_KEY_PREFIX = 'dynspec-'
+REDIS_EXPIRE_S = 3600*10
+REDIS_KEY_PREFIX = 'spec-'
 
 # row numbers in cross corr
 ROW_NUMS = [('LWA-128&LWA-160', 54282), 
             ('LWA-048&LWA-051', 33335),
             ('LWA-018&LWA-237', 30360),
-            ('LWA-065&LWA-094', 41689)]
+            ('LWA-065&LWA-094', 41689),
+            ('LWA-286&LWA-333', 28524)]
 
 def gen_spectrum(ms: str, sourcename: str, data_column: str = 'CORRECTED_DATA', timeavg: bool = False, outdir: str = None, target_coordinates: str = None, apply_weights: str = None, apply_beam: bool = False):
     """
@@ -130,23 +130,25 @@ def dynspec_map(subband_no:int, scan_no:int, ms: str, bcal: str) -> List[_Snapsh
         dat = tcross.getcol('DATA')
 
     if '13MHz' in bcal:
-        bcal_dat = np.ones((352, 192, 2), dtype=np.complex64) * 0.008
+        bcal_dat = np.ones((352, 192, 2), dtype=np.complex64) * (0.008/20)
     else:
         with table(bcal, ack=False) as t:
             bcal_dat = t.getcol('CPARAM')
             bcal_flag = t.getcol('FLAG')
+            bcal_dat[[70,79,80,117,137,193,150,178,201,208,224,261,215,236,246,294,298,301,307,289,33,3,41,42,44,92,12,14,17,21,154,29,28,127,126],
+                 :, :] = np.inf
             bcal_dat[bcal_flag] = np.inf
 
     amp = np.abs(calibration.applycal_in_mem_cross(dat, bcal_dat))
     incoh_sum = np.mean(amp, axis=0).astype(_TRANSPORT_DTYPE)
     r = redis.Redis.from_url(REDIS_URL)
-    key1 = REDIS_KEY_PREFIX + str(uuid.uuid4())
+    key1 = REDIS_KEY_PREFIX + path.basename(ms) + 'sum'
     r.set(key1, incoh_sum.tobytes(), ex=REDIS_EXPIRE_S)
     out = [_SnapshotSpectrum('incoherent-sum', subband_no, scan_no, key1)]
     
     amp = amp.astype(_TRANSPORT_DTYPE)
     for name, i in ROW_NUMS:
-        entry_key = REDIS_KEY_PREFIX + str(uuid.uuid4())
+        entry_key = REDIS_KEY_PREFIX + path.basename(ms) + str(i)
         r.set(entry_key, amp[i, :, :].tobytes(), ex=REDIS_EXPIRE_S)
         out.append(
             _SnapshotSpectrum(name, subband_no, scan_no, entry_key)
@@ -169,12 +171,16 @@ def dynspec_reduce(spectra: Iterable[List[_SnapshotSpectrum]], start_ts: datetim
             if spec.type in all_dat:
                 j = spec.scan_no
                 k = spec.subband_no * N_CHAN
-                spec_dat = np.frombuffer(r.get(spec.key), dtype=_TRANSPORT_DTYPE).reshape(N_CHAN, 4)
+                buffer = r.get(spec.key)
                 r.delete(spec.key)
-                all_dat[spec.type][0, j, k:k+N_CHAN] = spec_dat[:, 0]
-                all_dat[spec.type][1, j, k:k+N_CHAN] = spec_dat[:, 1]
-                all_dat[spec.type][2, j, k:k+N_CHAN] = spec_dat[:, 2]
-                all_dat[spec.type][3, j, k:k+N_CHAN] = spec_dat[:, 3]
+                if buffer is not None:
+                    spec_dat = np.frombuffer(buffer, dtype=_TRANSPORT_DTYPE).reshape(N_CHAN, 4)
+                    all_dat[spec.type][0, j, k:k+N_CHAN] = spec_dat[:, 0]
+                    all_dat[spec.type][1, j, k:k+N_CHAN] = spec_dat[:, 1]
+                    all_dat[spec.type][2, j, k:k+N_CHAN] = spec_dat[:, 2]
+                    all_dat[spec.type][3, j, k:k+N_CHAN] = spec_dat[:, 3]
+                else:
+                    logger.warning(f'No data for {spec.type}: scan {spec.scan_no} subband {spec.subband_no}.')
 
     for name, dat in all_dat.items():
         for i, corr in enumerate(['XX', 'XY', 'YX', 'YY']):
@@ -184,7 +190,7 @@ def dynspec_reduce(spectra: Iterable[List[_SnapshotSpectrum]], start_ts: datetim
             header = hdu.header
             header['CTYPE2'] = 'FREQ    '
             header['CUNIT2'] = 'MHz      '
-            header['CRVAL2'] = 17.992 # lowest channel freq
+            header['CRVAL2'] = 13.398 # lowest channel freq
             header['CDELT2'] = 0.023926 # channel width
             header['CRPIX2'] = 1
 

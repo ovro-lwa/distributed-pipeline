@@ -13,7 +13,8 @@ app = Celery(CELERY_APP_NAME,
              include=['orca.transform.calibration',
                       'orca.transform.qa',
                       'orca.tasks.fortests',
-                      'orca.transform.spectrum'])
+                      'orca.transform.spectrum',
+                      'orca.transform.imaging'])
 
 # Optional configuration, see the application user guide.
 app.conf.update(
