@@ -20,6 +20,7 @@ app = Celery(CELERY_APP_NAME,
 app.conf.update(
     result_expires=7200,
     worker_prefetch_multiplier=1,
+    worker_max_tasks_per_child=20,
     task_serializer='json',
     broker_connection_retry=True,
     broker_connection_retry_on_startup=True,
