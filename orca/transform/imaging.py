@@ -168,4 +168,4 @@ def something_something(spw_list:List[str], start_time: datetime, end_time: date
     os.makedirs(path.dirname(out_path), exist_ok=True)
     shutil.copy(f'{tmpdir}/OUT-I-image.fits', out_path)
     logger.info('Done imaging.')
-    shutil.rmtree(tmpdir)
+    # shutil.rmtree(tmpdir)

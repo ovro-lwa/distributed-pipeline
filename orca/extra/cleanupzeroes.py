@@ -8,7 +8,7 @@ import shutil
 def main():
     client = clickhouse_connect.get_client(host='10.41.0.85', username=os.getenv('CH_USER'),
                                   password=os.getenv('CH_PWD'))
-    res = client.query('SELECT timestamp, mhz FROM slowviz.zero_percent WHERE zero_percent > 10 AND toMonth(timestamp) = 5')
+    res = client.query('SELECT timestamp, mhz FROM slowviz.zero_percent WHERE zero_percent > 10 AND toMonth(timestamp) = 6')
     counts = 0
     for r in res.result_rows:
         ts = r[0]

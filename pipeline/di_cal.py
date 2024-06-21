@@ -11,23 +11,23 @@ WORK_DIR = '/lustre/celery/'
 
 if __name__ == '__main__':
     cal_hr_early = {11: 1, 12: 2, 1: 2}
-    cal_hr_late = {2:14, 3:13, 4: 12, 5: 12}
+    cal_hr_late = {2:14, 3:13, 4: 12, 5: 11, 6:11}
 
     year = 2024
-    month = 5
-    for d in range(24, 26):
+    month = 2
+    for d in range(1, 29):
         if not path.exists(f'{NIGHTTIME_DIR}55MHz/{year}-{month:02d}-{d:02d}'):
             continue
         if month in cal_hr_late:
-            s = datetime(year, month, d, cal_hr_late[month], 0, 0)
-            e = datetime(year, month, d, cal_hr_late[month], 25, 0)
+            s = datetime(year, month, d, cal_hr_late[month], 20, 0)
+            e = datetime(year, month, d, cal_hr_late[month], 35, 0)
         elif month in cal_hr_early:
             s = datetime(year, month, d, cal_hr_early[month], 0, 0)
             e = datetime(year, month, d, cal_hr_early[month], 25, 0)
         else:
             raise ValueError('Calibration hour not specified.')
 
-        for spw in spws[1:]:
+        for spw in spws:
             pm = StageIIIPathsManager(NIGHTTIME_DIR, WORK_DIR, spw, s, e)
             to_cal = [ m for _, m in pm.ms_list ]
             if len(pm.ms_list) < 100:

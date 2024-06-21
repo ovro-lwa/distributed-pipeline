@@ -47,6 +47,40 @@ def di_cal(ms, out=None, do_polcal=False, refant='199') -> str:
 
 
 @app.task
+def di_cal_multi_v2(ms_list, scrach_dir, out, do_polcal=False, refant='199', flag_ant=True) -> str:
+    """ Perform DI calibration on multiple integrations. Copy, concat, then solve.
+
+    Args:
+        ms_list: List of measurement sets to solve with
+        scrach_dir: Directory to store temporary files
+        out: Output path for the derived cal table.
+        do_polcal: Do polarization calibration. Default is False.
+
+    Returns: List of paths to the derived cal tables.
+    """
+    tmpdir = f'{scrach_dir}/tmp-{str(uuid.uuid4())}'
+    os.mkdir(tmpdir)
+
+    subprocess.check_call(['/usr/bin/cp', '-r'] + ms_list + [tmpdir])
+    msl = []
+    for m in ms_list:
+        target = f'{tmpdir}/{path.basename(m)}'
+        # shutil.copytree(m, target, copy_function=shutil.copyfile)
+        msl.append(target)
+        if flag_ant:
+            dead_ants = find_dead_ants(target)
+            flagoperations.flag_ants(target, dead_ants)
+        clfile = gen_model_ms_stokes(target)
+        ft(target, complist = clfile, usescratch=True)
+        shutil.rmtree(clfile)
+
+    concat = integrate(msl, f'{tmpdir}/CONCAT.ms', phase_center=change_phase_centre.get_phase_center(msl[len(msl)//2]))
+    bcalfile = path.splitext(concat)[0]+'.bcal' if out is None else out
+    bandpass(concat, bcalfile, refant=refant, uvrange='>100m', combine='scan,field,obs',
+        fillgaps=5)
+    return bcalfile
+
+@app.task
 def di_cal_multi(ms_list, scrach_dir, out, do_polcal=False, refant='199', flag_ant=True) -> str:
     """ Perform DI calibration on multiple integrations. Copy, concat, then solve.
 

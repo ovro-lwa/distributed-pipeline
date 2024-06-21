@@ -1,5 +1,5 @@
 # dynamic spectra for subet of baselines and incoherent sum
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from os import path
 
 from celery.canvas import chord, group
@@ -14,19 +14,24 @@ WORK_DIR = '/lustre/celery/'
 
 if __name__ == '__main__':
     subband_nos = dict((s, i) for i, s in enumerate(spws))
-    s = datetime(2024,4,1,1,0,0)
-    e = datetime(2024,4,1,17,0,0)
-    n_days = 7
+    s = datetime(2024,2,1,1,0,0)
+    e = datetime(2024,2,1,17,0,0)
+    n_days = 10
 
-    for i in range(n_days):
-        datetime_ms_map = {}
-        if not path.exists(f'/lustre/pipeline/night-time/18MHz/{s.date()}'):
+    while n_days > 0:
+        if ((not path.exists(f'/lustre/pipeline/night-time/18MHz/{s.date()}'))
+            or (s.day == 22) or
+            path.exists(f'/lustre/celery/baselines/incoherent-sum/{str(s.date())}-XX.fits')):
+            s += timedelta(days=1)
+            e += timedelta(days=1)
             continue
         print(f'Doing {s} to {e}')
+        datetime_ms_map = {}
         for spw in spws:
             pm = StageIIIPathsManager(root_dir=NIGHTTIME_DIR, work_dir=WORK_DIR, subband=spw,
                                     start=s, end=e)
-            bcal_path = pm.get_bcal_path(s.date())
+            # bcal_path = pm.get_bcal_path(s.date())
+            bcal_path = pm.get_bcal_path(date(2024,4,8))
             for dt, ms in pm.ms_list:
                 if dt not in datetime_ms_map:
                     datetime_ms_map[dt] = [(subband_nos[spw], ms, bcal_path)]
@@ -46,4 +51,5 @@ if __name__ == '__main__':
         chord(subtasks)(dynspec_reduce.s(start_ts=start_ts, out_dir='/lustre/celery/baselines/'))
         s += timedelta(days=1)
         e += timedelta(days=1)
-        time.sleep(1800)
+        n_days -= 1
+        time.sleep(4800)
