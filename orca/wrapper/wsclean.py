@@ -2,9 +2,9 @@
 """
 import subprocess
 import os
-from typing import List, Tuple
+from typing import List
 import logging
-from orca.configmanager import execs, cluster
+from orca.configmanager import execs
 
 log = logging.getLogger(__name__)
 
@@ -34,7 +34,6 @@ def wsclean(ms_list: List[str], out_dir: str, filename_prefix: str, extra_arg_li
     """
     args_list = [execs.wsclean] + ['-j', str(num_threads), '-abs-mem', str(mem_gb)] + extra_arg_list + \
         ['-name', f'{out_dir}/{filename_prefix}'] + ms_list
-    print(args_list)
     proc = subprocess.Popen(args_list, env=NEW_ENV)
     try:
         stdoutdata, stderrdata = proc.communicate()

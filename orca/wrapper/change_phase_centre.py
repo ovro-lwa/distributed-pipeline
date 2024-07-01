@@ -1,8 +1,7 @@
 import subprocess
 from casacore.tables import table
 from astropy.coordinates import SkyCoord
-import os
-from typing import Tuple, List, Dict
+from typing import List
 
 CHGCENTRE_PATH = '/opt/bin/chgcentre'
 
@@ -11,7 +10,7 @@ def change_phase_center(ms: str, center_dir: str) -> str:
     args = _get_subprocess_args(ms, center_dir)
     try:
         p = subprocess.Popen(args)
-        p.communicate()
+        stdout, stderr = p.communicate()
     except subprocess.CalledProcessError as e:
         raise e
     finally:
