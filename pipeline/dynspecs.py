@@ -14,9 +14,9 @@ WORK_DIR = '/lustre/celery/'
 
 if __name__ == '__main__':
     subband_nos = dict((s, i) for i, s in enumerate(spws))
-    s = datetime(2024,2,1,1,0,0)
-    e = datetime(2024,2,1,17,0,0)
-    n_days = 10
+    s = datetime(2024,2,22,1,0,0)
+    e = datetime(2024,2,22,17,0,0)
+    n_days = 5
 
     while n_days > 0:
         if ((not path.exists(f'/lustre/pipeline/night-time/18MHz/{s.date()}'))
