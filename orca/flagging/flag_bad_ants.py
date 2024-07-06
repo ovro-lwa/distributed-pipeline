@@ -8,22 +8,9 @@ from scipy.stats import skew
 from matplotlib.backends.backend_pdf import PdfPages
 import casacore.tables as tables
 from orca.wrapper import dada2ms
-import pdb
 
 from orca.configmanager import telescope as tele
 
-def concat_dada2ms(dadafile_dir: str, BCALdadafile: str, outputdir: str):
-    """
-    Concatenate spws using dada2ms into single ms file. For passing to flag_bad_ants.
-    """
-    for spwind, dadapathwithspw in enumerate(np.sort(glob.glob(f'{dadafile_dir}/??/{BCALdadafile}'))):
-        msfileconcat = os.path.splitext(os.path.basename(dadapathwithspw))[0]+'.ms'
-        if spwind == 0:
-            dada2ms.dada2ms(dadapathwithspw, f'{outputdir}/{msfileconcat}')
-        else:
-            dada2ms.dada2ms(dadapathwithspw, f'{outputdir}/{msfileconcat}', addspw=True)
-    return f'{outputdir}/{msfileconcat}'
-                    
 
 def flag_ants_from_postcal_autocorr(msfile: str, tavg: bool = False, thresh: float = 4) -> Optional[str]:
     """Generates a text file containing the bad antennas.

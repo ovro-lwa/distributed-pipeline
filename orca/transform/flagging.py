@@ -1,13 +1,16 @@
-from typing import List
+from typing import List, Optional
 
 import subprocess
 import logging
+from matplotlib.pyplot import flag
 import numpy as np
+import datetime
 
 from casacore import tables
 
 from orca.configmanager import execs, telescope as tele
 from orca.utils.maths import core_outrigger_slices
+from orca.utils import flagutils
 
 log = logging.getLogger(__name__)
 
@@ -45,7 +48,16 @@ def flag_ant_chan_from_autocorr(ms: str, threshold: float=5.0) -> str:
     return ms
 
 
-def identify_bad_ants(t: tables.table, thresh: float=0.8, column='DATA') -> List[int]:
+def flag_on_autocorr(ms, date: Optional[datetime.date] = None, thresh: float=7.0, column='DATA') -> str:
+    if date:
+        a_priori_bad_ants = flagutils.get_bad_ants(date)
+        flag_ants(ms, a_priori_bad_ants)
+    with tables.table(ms, readonly=False) as t:
+        bad_ants = identify_bad_ants(t, thresh, column)
+        return flag_ants(ms, bad_ants)
+
+
+def identify_bad_ants(t: tables.table, thresh: float=7, column='DATA') -> List[int]:
     tautos = t.query('ANTENNA1=ANTENNA2')
     autos_corrected : np.ndarray = np.abs(tautos.getcol(column))[...,(0,3)]
     autos_flags : np.ndarray = tautos.getcol('FLAG')[...,(0,3)]
@@ -53,7 +65,6 @@ def identify_bad_ants(t: tables.table, thresh: float=0.8, column='DATA') -> List
 
     n_ants = tele.n_ant
     assert autos_corrected.shape[0] == n_ants, 'Doing multiple timestamp or multiple spws is too complicated for now.'
-    n_chans = tele.n_chan
 
     """
     One day I may get back to this...
@@ -72,8 +83,13 @@ def identify_bad_ants(t: tables.table, thresh: float=0.8, column='DATA') -> List
     diff[is_core] = np.abs(bandpasses[is_core] - core_template) / core_template
     diff[is_exp] = np.abs(bandpasses[is_exp] - exp_template) / exp_template
     diff = diff * (1 - autos_flags)
-    scores = np.mean(diff, axis=1)
+    sum_diff = np.mean(diff, axis=1)
+    mad_core = np.median(sum_diff[is_core], axis=0)
+    mad_exp = np.median(sum_diff[is_exp], axis=0)
+    scores = sum_diff / mad_core
+    scores[is_exp] = sum_diff[is_exp] / mad_exp
     return autos_antnums[np.any(scores > thresh, axis=1)]
+
 
 def _mask_bad_rows(autos_corrected, autos_flags, n_chans):
     bad_row_mask = np.zeros(autos_corrected.shape[0], dtype=bool)
