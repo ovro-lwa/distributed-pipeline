@@ -12,7 +12,7 @@ if __name__ == '__main__':
     start_time = datetime(2023, 12, 22, 13, 0, 0)
     end_time = datetime(2023, 12, 22, 13, 30, 0)
     
-    #stokes_IV_imaging.delay(spws[1:5], start_time, end_time,
-    #                        NIGHTTIME_DIR, WORK_DIR + 'dr1/18-36MHz/', SCRATCH, taper_inner_tukey=8)
+    stokes_IV_imaging.delay(spws[1:5], start_time, end_time,
+                            NIGHTTIME_DIR, WORK_DIR, SCRATCH, taper_inner_tukey=20)
     stokes_IV_imaging.delay(spws[5:], start_time, end_time,
-                            NIGHTTIME_DIR, WORK_DIR + 'dr1/36-86MHz/', SCRATCH)
+                            NIGHTTIME_DIR, WORK_DIR, SCRATCH)

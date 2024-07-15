@@ -119,17 +119,19 @@ def make_dirty_image(ms_list: List[str], output_dir: str, output_prefix: str, ma
 
 @app.task
 def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: datetime,
-                        source_dir: str, work_dir: str, scratch_dir: str, taper_inner_tukey: int = 30):
+                        source_dir: str, work_dir: str, scratch_dir: str, taper_inner_tukey: int = 30,
+                        keep_sratch_dir: bool = False):
     s = start_time
     e = end_time
     tmpdir = f'{scratch_dir}/tmp-{str(uuid.uuid4())}'
     os.mkdir(tmpdir)
     integrated_msl = []
+    n_timesteps = 0
     for spw in spw_list:
         logger.info('Applycal SPW %s', spw)
         pm = StageIIIPathsManager(source_dir, work_dir, spw, s, e)
         msl = []
-        with ThreadPoolExecutor(10) as pool:
+        with ThreadPoolExecutor(20) as pool:
             futures = [ pool.submit(shutil.copytree, ms, f'{tmpdir}/{path.basename(ms)}', copy_function=shutil.copy) for _, ms in pm.ms_list ]
             """
             for _, ms in pm.ms_list:
@@ -143,6 +145,7 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
                 flag_on_autocorr(m, s.date())
                 msl.append(m)
 
+        n_timesteps = max(n_timesteps, len(msl))
         msl.sort()
         logger.info('Integrating SPW %s', spw)
         integrated = integrate(msl, f'{tmpdir}/{spw}.ms')
@@ -161,12 +164,14 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
                             '-no-update-model-required', '-taper-inner-tukey', str(taper_inner_tukey)],
             num_threads=20, mem_gb=100)
 
-    out_path = pm.data_product_path(s, 'V.image.fits')
+    spw_suffix = spw
+    out_path = pm.data_product_path(s, f'{spw_suffix}.V.image.fits')
     os.makedirs(path.dirname(out_path), exist_ok=True)
     shutil.copy(f'{tmpdir}/OUT-V-image.fits', out_path)
 
-    out_path = pm.data_product_path(s, 'I.image.fits')
+    out_path = pm.data_product_path(s, f'{spw_suffix}.I.image.fits')
     os.makedirs(path.dirname(out_path), exist_ok=True)
     shutil.copy(f'{tmpdir}/OUT-I-image.fits', out_path)
     logger.info('Done imaging.')
-    shutil.rmtree(tmpdir)
+    if not keep_sratch_dir:
+        shutil.rmtree(tmpdir)

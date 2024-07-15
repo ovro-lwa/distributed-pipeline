@@ -63,6 +63,19 @@ def get_altaz_at_ovro(coordinates: SkyCoord, utc_time: datetime) -> SkyCoord:
     # TODO Cache the AltAz object
     return coordinates.transform_to(AltAz(location=OVRO_LWA_LOCATION, obstime=Time(utc_time, scale='utc')))
 
+def zenith_coord_at_ovro(utc_time: datetime) -> SkyCoord:
+    """ Get the zenith coordinates at OVRO.
+
+    Args:
+        utc_time: time of observation.
+
+    Returns: SkyCoord in ICRS.
+
+    """
+    return SkyCoord(alt=90 * u.deg, az=0 * u.deg,
+                    frame=AltAz(location=OVRO_LWA_LOCATION, obstime=Time(utc_time, scale='utc'))
+                    ).transform_to(ICRS)
+
 
 def _get_interpolated_mountain_alt(az: Union[u.Quantity, Angle]) -> u.Quantity:
     assert 0 * u.deg <= az <= 360 * u.deg, f'Azimuth angle must be between 0 and 360 degrees, got {az}'
