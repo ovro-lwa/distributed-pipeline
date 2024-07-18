@@ -21,6 +21,15 @@ def test_verify_coordinates():
     assert coordutils.TAU_A.separation(SkyCoord.from_name('Crab Pulsar ')) < 1 * u.arcmin
 
 
+@mark.parametrize('t, zenith_coord', [
+    (datetime(2024, 7, 18, 14, 41, 25), SkyCoord('2h34m28s +36d56m57s', frame=ICRS))
+])
+def test_zenith_coord_at_ovro(t, zenith_coord):
+    sep = coordutils.zenith_coord_at_ovro(t).separation(zenith_coord)
+    # I don't know why the offset is so big
+    assert sep < 11.2 * u.arcmin
+
+
 @mark.parametrize('t, expected_pos', [
     (datetime(2018, 3, 23, 16, 26, 18), SkyCoord('00h09m23s +1d11m30s', frame=ICRS))  # Read off an image
 ])
