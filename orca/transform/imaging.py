@@ -18,7 +18,7 @@ from astropy import wcs
 from astropy.coordinates import SkyCoord
 import numpy as np
 
-from orca.utils import fitsutils
+from orca.utils import fitsutils, coordutils
 from orca.wrapper import wsclean
 from orca.transform.flagging import flag_with_aoflagger, flag_ants, flag_on_autocorr
 from orca.metadata.stageiii import StageIIIPathsManager
@@ -125,53 +125,64 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
     e = end_time
     tmpdir = f'{scratch_dir}/tmp-{str(uuid.uuid4())}'
     os.mkdir(tmpdir)
-    integrated_msl = []
-    n_timesteps = 0
-    for spw in spw_list:
-        logger.info('Applycal SPW %s', spw)
-        pm = StageIIIPathsManager(source_dir, work_dir, spw, s, e)
-        msl = []
-        with ThreadPoolExecutor(20) as pool:
-            futures = [ pool.submit(shutil.copytree, ms, f'{tmpdir}/{path.basename(ms)}', copy_function=shutil.copy) for _, ms in pm.ms_list ]
-            """
-            for _, ms in pm.ms_list:
-                # applycal
-                msl.append(applycal_data_col(ms, pm.get_bcal_path(s.date()),
-                                f'{tmpdir}/{path.basename(ms)}'))
-            """
-            for r in as_completed(futures):
-                m = r.result()
-                applycal_data_col_nocopy(m, pm.get_bcal_path(s.date()))
-                flag_on_autocorr(m, s.date())
-                msl.append(m)
+    try:
+        integrated_msl = []
+        n_timesteps = 0
+        phase_center = coordutils.zenith_coord_at_ovro(start_time + (end_time - start_time) / 2)
+        for spw in spw_list:
+            logger.info('Applycal SPW %s', spw)
+            pm = StageIIIPathsManager(source_dir, work_dir, spw, s, e)
+            if not pm.ms_list:
+                logger.warning('No measurement sets found for SPW %s', spw)
+                continue
+            if not path.exists(pm.get_bcal_path(s.date())):
+                logger.warning('No bandpass solutions found for SPW %s', spw)
+                continue
+            msl = []
+            with ThreadPoolExecutor(20) as pool:
+                # copy2 appears better than copy, copy gives lots of errors.
+                futures = [ pool.submit(shutil.copytree, ms, f'{tmpdir}/{path.basename(ms)}') for _, ms in pm.ms_list ]
+                """
+                for _, ms in pm.ms_list:
+                    # applycal
+                    msl.append(applycal_data_col(ms, pm.get_bcal_path(s.date()),
+                                    f'{tmpdir}/{path.basename(ms)}'))
+                """
+                for r in as_completed(futures):
+                    m = r.result()
+                    applycal_data_col_nocopy(m, pm.get_bcal_path(s.date()))
+                    flag_on_autocorr(m, s.date())
+                    msl.append(m)
 
-        n_timesteps = max(n_timesteps, len(msl))
-        msl.sort()
-        logger.info('Integrating SPW %s', spw)
-        integrated = integrate(msl, f'{tmpdir}/{spw}.ms')
-        for ms in msl:
-           shutil.rmtree(ms)
-       # flag
-        logger.info('Flagging SPW %s', spw)
-        # flag_ants(integrated, [70,79,80,117,137,193,150,178,201,208,224,261,215,236,246,294,298,301,307,289,33,3,41,42,44,92,12,14,17,21,154,29,28,127,126])
-        flag_with_aoflagger(integrated)
-        integrated_msl.append(integrated)
+            n_timesteps = max(n_timesteps, len(msl))
+            msl.sort()
+            logger.info('Integrating SPW %s', spw)
+            integrated = integrate(msl, f'{tmpdir}/{spw}.ms', phase_center=phase_center)
+            for ms in msl:
+                shutil.rmtree(ms)
+        # flag
+            logger.info('Flagging SPW %s', spw)
+            # flag_ants(integrated, [70,79,80,117,137,193,150,178,201,208,224,261,215,236,246,294,298,301,307,289,33,3,41,42,44,92,12,14,17,21,154,29,28,127,126])
+            flag_with_aoflagger(integrated)
+            integrated_msl.append(integrated)
 
-    logger.info('Done with all spws. Start imaging.')
-    # image
-    wsclean.wsclean(integrated_msl, tmpdir, 'OUT',
-            extra_arg_list=['-weight', 'briggs', '0', '-niter', '0', '-size', '4096', '4096', '-scale', '0.03125', '-pol', 'IV',
-                            '-no-update-model-required', '-taper-inner-tukey', str(taper_inner_tukey)],
-            num_threads=20, mem_gb=100)
+        logger.info('Done with all spws. Start imaging.')
+        if integrated_msl:
+            # image
+            wsclean.wsclean(integrated_msl, tmpdir, 'OUT',
+                    extra_arg_list=['-weight', 'briggs', '0', '-niter', '0', '-size', '4096', '4096', '-scale', '0.03125', '-pol', 'IV',
+                                    '-no-update-model-required', '-taper-inner-tukey', str(taper_inner_tukey)],
+                    num_threads=20, mem_gb=100)
 
-    spw_suffix = spw
-    out_path = pm.data_product_path(s, f'{spw_suffix}.V.image.fits')
-    os.makedirs(path.dirname(out_path), exist_ok=True)
-    shutil.copy(f'{tmpdir}/OUT-V-image.fits', out_path)
+            spw_suffix = spw
+            out_path = pm.data_product_path(s, f'{spw_suffix}.V.image.fits')
+            os.makedirs(path.dirname(out_path), exist_ok=True)
+            shutil.copy(f'{tmpdir}/OUT-V-image.fits', out_path)
 
-    out_path = pm.data_product_path(s, f'{spw_suffix}.I.image.fits')
-    os.makedirs(path.dirname(out_path), exist_ok=True)
-    shutil.copy(f'{tmpdir}/OUT-I-image.fits', out_path)
-    logger.info('Done imaging.')
-    if not keep_sratch_dir:
-        shutil.rmtree(tmpdir)
+            out_path = pm.data_product_path(s, f'{spw_suffix}.I.image.fits')
+            os.makedirs(path.dirname(out_path), exist_ok=True)
+            shutil.copy(f'{tmpdir}/OUT-I-image.fits', out_path)
+            logger.info('Done imaging.')
+    finally:
+        if not keep_sratch_dir:
+            shutil.rmtree(tmpdir)

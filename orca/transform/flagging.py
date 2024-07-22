@@ -37,7 +37,8 @@ def flag_ants(ms: str, ants: List[int]) -> str:
     Flags the antennas in the list.
     """
     if len(ants) > 0 :
-        tables.taql('UPDATE %s SET FLAG = True WHERE ANTENNA1 IN %s OR ANTENNA2 IN %s' % (ms, tuple(ants), tuple(ants)))
+        ants_str = '(' + ', '.join([str(ant) for ant in ants]) + ')'
+        tables.taql('UPDATE %s SET FLAG = True WHERE ANTENNA1 IN %s OR ANTENNA2 IN %s' % (ms, ants_str, ants_str))
     return ms
 
 
