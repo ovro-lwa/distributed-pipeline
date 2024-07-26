@@ -1,6 +1,6 @@
 import os
 import stat
-from shutil import _samefile, _stat, SpecialFileError, _WINDOWS, SameFileError, _fastcopy_sendfile, _islink, copymode
+from shutil import _samefile, _stat, SpecialFileError, SameFileError, _fastcopy_sendfile, _islink, copymode, copyfileobj
 
 def copy(src, dst, *, follow_symlinks=True):
     if os.path.isdir(dst):
@@ -41,10 +41,11 @@ def copyfile(src, dst, *, follow_symlinks=True):
         with open(src, 'rb') as fsrc:
             try:
                 with open(dst, 'wb') as fdst:
-                    # Linux
-                    _fastcopy_sendfile(fsrc, fdst)
-                    # Add an fsync
-                    os.fsync(fdst)
+                    # _fastcopy_sendfile(fsrc, fdst)
+                    copyfileobj(fsrc, fdst)
+                    # flush internal buffer then fsync
+                    fdst.flush()
+                    os.fsync(fdst.fileno())
                     return dst
             except IsADirectoryError as e:
                 if not os.path.exists(dst):

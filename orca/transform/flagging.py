@@ -25,6 +25,8 @@ def flag_with_aoflagger(ms: str, strategy: str='/opt/share/aoflagger/strategies/
         if proc.returncode != 0:
             if stderrdata:
                 log.error(f'Error in aoflagger: {stderrdata.decode()}')
+            if stdoutdata:
+                log.error(stdoutdata.decode())
             raise RuntimeError(f'Error in aoflagger for {ms}.')
     finally:
         proc.terminate()
@@ -53,9 +55,9 @@ def flag_on_autocorr(ms, date: Optional[datetime.date] = None, thresh: float=7.0
     if date:
         a_priori_bad_ants = flagutils.get_bad_ants(date)
         flag_ants(ms, a_priori_bad_ants)
-    with tables.table(ms, readonly=False) as t:
+    with tables.table(ms, readonly=False, ack=False) as t:
         bad_ants = identify_bad_ants(t, thresh, column)
-        return flag_ants(ms, bad_ants)
+    return flag_ants(ms, bad_ants)
 
 
 def identify_bad_ants(t: tables.table, thresh: float=7, column='DATA') -> List[int]:

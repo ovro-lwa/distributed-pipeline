@@ -22,3 +22,4 @@ def check_output(cmd: List[str]) -> str:
     except subprocess.CalledProcessError as e:
         log.error(f'Error while executing {str(cmd)}: stderr is {e.stderr}.')
         raise e
+

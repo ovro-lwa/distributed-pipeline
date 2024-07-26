@@ -145,11 +145,14 @@ def applycal_data_col(ms: str, gaintable: str, out_ms: str) -> str:
     return out_ms
 
 def applycal_data_col_nocopy(ms: str, gaintable: str) -> str:
-    applycal(ms, gaintable=gaintable, flagbackup=False, applymode='calflag')
+    with table(gaintable, ack=False) as bt:
+        bcal = bt.getcol('CPARAM')
+        flags = bt.getcol('FLAG')
+    bcal[flags] = np.inf 
     with table(ms, ack=False, readonly=False) as t:
-        d = t.getcol('CORRECTED_DATA')
-        t.removecols('CORRECTED_DATA')
-        t.putcol('DATA', d)
+        data = t.getcol('DATA')
+        data = applycal_in_mem(data, bcal)
+        t.putcol('DATA', data)
     return ms
 
 @njit

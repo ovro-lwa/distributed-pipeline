@@ -9,6 +9,7 @@ import logging
 from os import path
 from datetime import datetime
 from tempfile import TemporaryDirectory
+from glob import glob
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -18,7 +19,7 @@ from astropy import wcs
 from astropy.coordinates import SkyCoord
 import numpy as np
 
-from orca.utils import fitsutils, coordutils
+from orca.utils import fitsutils, coordutils, copyutils
 from orca.wrapper import wsclean
 from orca.transform.flagging import flag_with_aoflagger, flag_ants, flag_on_autocorr
 from orca.metadata.stageiii import StageIIIPathsManager
@@ -119,7 +120,9 @@ def make_dirty_image(ms_list: List[str], output_dir: str, output_prefix: str, ma
 
 @app.task
 def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: datetime,
-                        source_dir: str, work_dir: str, scratch_dir: str, taper_inner_tukey: int = 30,
+                        source_dir: str, work_dir: str, scratch_dir: str,
+                        phase_center: Optional[SkyCoord] = None, taper_inner_tukey: int = 30,
+                        make_snapshots: bool = False,
                         keep_sratch_dir: bool = False):
     s = start_time
     e = end_time
@@ -128,7 +131,8 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
     try:
         integrated_msl = []
         n_timesteps = 0
-        phase_center = coordutils.zenith_coord_at_ovro(start_time + (end_time - start_time) / 2)
+        if not phase_center:
+            phase_center = coordutils.zenith_coord_at_ovro(start_time + (end_time - start_time) / 2)
         for spw in spw_list:
             logger.info('Applycal SPW %s', spw)
             pm = StageIIIPathsManager(source_dir, work_dir, spw, s, e)
@@ -140,8 +144,8 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
                 continue
             msl = []
             with ThreadPoolExecutor(20) as pool:
-                # copy2 appears better than copy, copy gives lots of errors.
-                futures = [ pool.submit(shutil.copytree, ms, f'{tmpdir}/{path.basename(ms)}') for _, ms in pm.ms_list ]
+                futures = [ pool.submit(shutil.copytree, ms, f'{tmpdir}/{path.basename(ms)}'
+                                        , copy_function=copyutils.copy) for _, ms in pm.ms_list ]
                 """
                 for _, ms in pm.ms_list:
                     # applycal
@@ -151,6 +155,7 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
                 for r in as_completed(futures):
                     m = r.result()
                     applycal_data_col_nocopy(m, pm.get_bcal_path(s.date()))
+
                     flag_on_autocorr(m, s.date())
                     msl.append(m)
 
@@ -169,9 +174,12 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
         logger.info('Done with all spws. Start imaging.')
         if integrated_msl:
             # image
+            arg_list=['-weight', 'briggs', '0', '-niter', '0', '-size', '4096', '4096', '-scale', '0.03125', '-pol', 'IV',
+                            '-no-update-model-required', '-taper-inner-tukey', str(taper_inner_tukey)]
+            if make_snapshots:
+                arg_list += ['-intervals-out', str(n_timesteps)]
             wsclean.wsclean(integrated_msl, tmpdir, 'OUT',
-                    extra_arg_list=['-weight', 'briggs', '0', '-niter', '0', '-size', '4096', '4096', '-scale', '0.03125', '-pol', 'IV',
-                                    '-no-update-model-required', '-taper-inner-tukey', str(taper_inner_tukey)],
+                    extra_arg_list=arg_list,
                     num_threads=20, mem_gb=100)
 
             spw_suffix = spw
@@ -182,7 +190,18 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
             out_path = pm.data_product_path(s, f'{spw_suffix}.I.image.fits')
             os.makedirs(path.dirname(out_path), exist_ok=True)
             shutil.copy(f'{tmpdir}/OUT-I-image.fits', out_path)
+
+            if make_snapshots:
+                out_dir = pm.data_product_path(s, f'snap.I.image.fits')
+                os.makedirs(path.dirname(out_path), exist_ok=True)
+                for fn in glob(f'{tmpdir}/OUT-I-image-t*.fits'):
+                    shutil.copy(fn, out_path)
+                shutil.copy(f'{tmpdir}/OUT-I-image.fits', out_path)
+
             logger.info('Done imaging.')
-    finally:
         if not keep_sratch_dir:
             shutil.rmtree(tmpdir)
+    finally:
+        pass
+        # if not keep_sratch_dir:
+        #    shutil.rmtree(tmpdir)

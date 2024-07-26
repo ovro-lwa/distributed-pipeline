@@ -38,7 +38,8 @@ def wsclean(ms_list: List[str], out_dir: str, filename_prefix: str, extra_arg_li
     try:
         stdoutdata, stderrdata = proc.communicate()
         if proc.returncode != 0:
-            log.error(stdoutdata.decode())
+            if stdoutdata:
+                log.error(stdoutdata.decode())
             if stderrdata:
                 log.error(f'Error in wsclean: {stderrdata.decode()}')
             raise Exception('Error in wsclean.')
