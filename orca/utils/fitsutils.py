@@ -1,6 +1,8 @@
 """fits related utilities.
 """
 from astropy.io import fits
+from astropy import wcs
+from astropy.coordinates import SkyCoord
 import numpy as np
 from typing import Tuple, List, Optional
 
@@ -59,6 +61,18 @@ def co_add_arr(fits_list, dims):
         im, _ = read_image_fits(fn)
         averaged_im += (im / n)
     return averaged_im
+
+
+def get_peak_around_source(im_T: np.ndarray, source_coord: SkyCoord, w: wcs.WCS) -> Tuple[int, int]:
+    x, y = wcs.utils.skycoord_to_pixel(source_coord, w)
+    x_start = int(x) - 100
+    y_start = int(y) - 100
+    im_box = im_T[x_start:x_start + 200, y_start:y_start + 200]
+    peakx, peaky = np.unravel_index(np.argmax(im_box),
+                                    im_box.shape)
+    peakx += x_start
+    peaky += y_start
+    return peakx, peaky
 
 
 def get_sample_header() -> fits.Header:

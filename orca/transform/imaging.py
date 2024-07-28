@@ -70,17 +70,6 @@ def make_movie_from_fits(fits_tuple: Tuple[str], output_dir: str, scale: float,
     return output_path
 
 
-def get_peak_around_source(im_T: np.ndarray, source_coord: SkyCoord, w: wcs.WCS) -> Tuple[int, int]:
-    x, y = wcs.utils.skycoord_to_pixel(source_coord, w)
-    x_start = int(x) - 100
-    y_start = int(y) - 100
-    im_box = im_T[x_start:x_start + 200, y_start:y_start + 200]
-    peakx, peaky = np.unravel_index(np.argmax(im_box),
-                                    im_box.shape)
-    peakx += x_start
-    peaky += y_start
-    return peakx, peaky
-
 def integrated_image(msl: List[str]):
     pass
 
@@ -152,7 +141,7 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
             msl = []
             with ThreadPoolExecutor(20) as pool:
                 futures = [ pool.submit(shutil.copytree, ms, f'{tmpdir}/{path.basename(ms)}'
-                                        , copy_function=copyutils.copy) for datetimes, ms in pm.ms_list ]
+                                        , copy_function=copyutils.copy) for _, ms in pm.ms_list ]
                 """
                 for _, ms in pm.ms_list:
                     # applycal
@@ -192,17 +181,17 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
                     extra_arg_list=arg_list,
                     num_threads=20, mem_gb=100)
 
-            spw_suffix = spw
-            out_path = pm.data_product_path(s, f'{spw_suffix}.V.image.fits')
-            os.makedirs(path.dirname(out_path), exist_ok=True)
-            shutil.copy(f'{tmpdir}/OUT-V-image.fits', out_path)
+            if not make_snapshots:
+                spw_suffix = spw
+                out_path = pm.data_product_path(s, f'{spw_suffix}.V.image.fits')
+                os.makedirs(path.dirname(out_path), exist_ok=True)
+                shutil.copy(f'{tmpdir}/OUT-V-image.fits', out_path)
 
-            out_path = pm.data_product_path(s, f'{spw_suffix}.I.image.fits')
-            os.makedirs(path.dirname(out_path), exist_ok=True)
-            shutil.copy(f'{tmpdir}/OUT-I-image.fits', out_path)
-
-            if make_snapshots:
-                out_images = sorted(glob(f'{tmpdir}/OUT-V-image-t*.fits'))
+                out_path = pm.data_product_path(s, f'{spw_suffix}.I.image.fits')
+                os.makedirs(path.dirname(out_path), exist_ok=True)
+                shutil.copy(f'{tmpdir}/OUT-I-image.fits', out_path)
+            else:
+                out_images = sorted(glob(f'{tmpdir}/OUT-t*-I-image.fits'))
                 for dt, fitsname in zip(datetime_list, out_images):
                     out_path = pm.data_product_path(dt, f'snap.I.image.fits')
                     os.makedirs(path.dirname(out_path), exist_ok=True)
