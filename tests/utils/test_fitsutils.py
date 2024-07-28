@@ -2,6 +2,7 @@ import pytest
 import tempfile
 
 import numpy as np
+from astropy import wcs
 
 from orca.utils import fitsutils
 from ..common import TEST_FITS
@@ -38,3 +39,14 @@ def test_coadd():
         av_im, _ = fitsutils.read_image_fits(f.name)
         im, _ = fitsutils.read_image_fits(TEST_FITS)
         np.array_equal(av_im, im)
+
+def test_get_peak_around_source():
+    x_ans = 1157
+    y_ans = 2568
+    im = np.zeros(shape=(4096, 4096))
+    im[x_ans, y_ans] = 6
+    xp, yp = fitsutils.get_peak_around_src(im, wcs.utils.pixel_to_skycoord(x_ans, y_ans,
+                                                                            wcs.WCS(fitsutils.get_sample_header())),
+                                            wcs.WCS(fitsutils.get_sample_header()))
+    assert xp == x_ans
+    assert yp == y_ans

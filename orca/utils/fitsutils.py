@@ -63,7 +63,7 @@ def co_add_arr(fits_list, dims):
     return averaged_im
 
 
-def get_peak_around_source(im_T: np.ndarray, source_coord: SkyCoord, w: wcs.WCS) -> Tuple[int, int]:
+def get_peak_around_src(im_T: np.ndarray, source_coord: SkyCoord, w: wcs.WCS) -> Tuple[int, int]:
     x, y = wcs.utils.skycoord_to_pixel(source_coord, w)
     x_start = int(x) - 100
     y_start = int(y) - 100
@@ -73,6 +73,10 @@ def get_peak_around_source(im_T: np.ndarray, source_coord: SkyCoord, w: wcs.WCS)
     peakx += x_start
     peaky += y_start
     return peakx, peaky
+
+
+def std_and_max_around_src(im_T):
+    pass
 
 
 def get_sample_header() -> fits.Header:
