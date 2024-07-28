@@ -36,6 +36,12 @@ IMSIZE = 4096
 IM_SCALE_DEGREE = 0.03125
 
 
+from kombu.utils.json import register_type
+
+register_type(SkyCoord, 'SkyCoord',
+              SkyCoord.to_string,
+              lambda s: SkyCoord(s, unit='degree'))
+
 def make_movie_from_fits(fits_tuple: Tuple[str], output_dir: str, scale: float,
                          output_filename: Optional[str] = None) -> str:
     # Check this out https://github.com/will-henney/fits2image
@@ -128,10 +134,11 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
     e = end_time
     tmpdir = f'{scratch_dir}/tmp-{str(uuid.uuid4())}'
     os.mkdir(tmpdir)
+    datetime_list = []
     try:
         integrated_msl = []
         n_timesteps = 0
-        if not phase_center:
+        if phase_center is not None:
             phase_center = coordutils.zenith_coord_at_ovro(start_time + (end_time - start_time) / 2)
         for spw in spw_list:
             logger.info('Applycal SPW %s', spw)
@@ -145,7 +152,7 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
             msl = []
             with ThreadPoolExecutor(20) as pool:
                 futures = [ pool.submit(shutil.copytree, ms, f'{tmpdir}/{path.basename(ms)}'
-                                        , copy_function=copyutils.copy) for _, ms in pm.ms_list ]
+                                        , copy_function=copyutils.copy) for datetimes, ms in pm.ms_list ]
                 """
                 for _, ms in pm.ms_list:
                     # applycal
@@ -159,8 +166,11 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
                     flag_on_autocorr(m, s.date())
                     msl.append(m)
 
-            n_timesteps = max(n_timesteps, len(msl))
             msl.sort()
+            if n_timesteps > len(msl):
+                n_timesteps = len(msl)
+                datetime_list = [dt for dt, _ in pm.ms_list]
+
             logger.info('Integrating SPW %s', spw)
             integrated = integrate(msl, f'{tmpdir}/{spw}.ms', phase_center=phase_center)
             for ms in msl:
@@ -192,11 +202,11 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
             shutil.copy(f'{tmpdir}/OUT-I-image.fits', out_path)
 
             if make_snapshots:
-                out_dir = pm.data_product_path(s, f'snap.I.image.fits')
-                os.makedirs(path.dirname(out_path), exist_ok=True)
-                for fn in glob(f'{tmpdir}/OUT-I-image-t*.fits'):
-                    shutil.copy(fn, out_path)
-                shutil.copy(f'{tmpdir}/OUT-I-image.fits', out_path)
+                out_images = sorted(glob(f'{tmpdir}/OUT-V-image-t*.fits'))
+                for dt, fitsname in zip(datetime_list, out_images):
+                    out_path = pm.data_product_path(dt, f'snap.I.image.fits')
+                    os.makedirs(path.dirname(out_path), exist_ok=True)
+                    shutil.copy(fitsname, out_path)
 
             logger.info('Done imaging.')
         if not keep_sratch_dir:

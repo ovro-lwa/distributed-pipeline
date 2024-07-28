@@ -16,15 +16,15 @@ if __name__ == '__main__':
     cal_hr_late = {2:14, 3:13, 4: 12, 5: 11, 6:11}
 
     year = 2024
-    month = 3
-    for d in range(30, 31):
+    month = 5
+    for d in range(24, 25):
         if not path.exists(f'{NIGHTTIME_DIR}55MHz/{year}-{month:02d}-{d:02d}'):
             continue
         if month in cal_hr_late:
             s = datetime(year, month, d, cal_hr_late[month], 20, 0)
             e = datetime(year, month, d, cal_hr_late[month], 35, 0)
         elif month in cal_hr_early:
-            s = datetime(year, month, d, cal_hr_early[month], 0, 0)
+            s = datetime(year, month, d, cal_hr_early[month], 10, 0)
             e = datetime(year, month, d, cal_hr_early[month], 25, 0)
         else:
             raise ValueError('Calibration hour not specified.')
