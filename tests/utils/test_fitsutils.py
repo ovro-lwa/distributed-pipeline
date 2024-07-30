@@ -1,11 +1,15 @@
 import pytest
 import tempfile
+from os import path
 
 import numpy as np
 from astropy import wcs
+from astropy.coordinates import SkyCoord
 
 from orca.utils import fitsutils
 from ..common import TEST_FITS
+
+DATA_DIR = '/lustre/yuping/orca-test-resource/'
 
 def test_get_sample_header():
     assert fitsutils.get_sample_header()['SIMPLE']
@@ -50,3 +54,13 @@ def test_get_peak_around_source():
                                             wcs.WCS(fitsutils.get_sample_header()))
     assert xp == x_ans
     assert yp == y_ans
+
+from orca.transform import photometry
+
+@pytest.mark.skipif(not path.isdir(DATA_DIR), reason="need acual data.")
+def test_std_and_max_around_src():
+    a, b = photometry.std_and_max_around_coord(
+        '/lustre/yuping/orca-test-resource/2024-04-16T09:30:00.73MHz.V.image.fits',
+        SkyCoord.from_name('Tau Bootis b'),
+        60
+    )

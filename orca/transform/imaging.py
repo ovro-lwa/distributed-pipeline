@@ -126,7 +126,7 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
     datetime_list = []
     try:
         integrated_msl = []
-        n_timesteps = 0
+        n_timesteps = None
         if phase_center is not None:
             phase_center = coordutils.zenith_coord_at_ovro(start_time + (end_time - start_time) / 2)
         for spw in spw_list:
@@ -156,7 +156,7 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
                     msl.append(m)
 
             msl.sort()
-            if n_timesteps > len(msl):
+            if n_timesteps is None:
                 n_timesteps = len(msl)
                 datetime_list = [dt for dt, _ in pm.ms_list]
 
@@ -177,6 +177,9 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
                             '-no-update-model-required', '-taper-inner-tukey', str(taper_inner_tukey)]
             if make_snapshots:
                 arg_list += ['-intervals-out', str(n_timesteps)]
+
+            print(integrated_msl)
+            print(arg_list)
             wsclean.wsclean(integrated_msl, tmpdir, 'OUT',
                     extra_arg_list=arg_list,
                     num_threads=20, mem_gb=100)

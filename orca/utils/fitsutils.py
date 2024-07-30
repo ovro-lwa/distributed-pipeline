@@ -75,8 +75,12 @@ def get_peak_around_src(im_T: np.ndarray, source_coord: SkyCoord, w: wcs.WCS) ->
     return peakx, peaky
 
 
-def std_and_max_around_src(im_T):
-    pass
+def std_and_max_around_src(im_T: np.ndarray, radius:int, source_coord: SkyCoord, w: wcs.WCS) -> Tuple[float, float]:
+    x, y = wcs.utils.skycoord_to_pixel(source_coord, w)
+    x = int(x)
+    y = int(y)
+    im_box = im_T[x - radius :x + radius, y - radius : y + radius]
+    return np.std(im_box), np.max(im_box)
 
 
 def get_sample_header() -> fits.Header:
