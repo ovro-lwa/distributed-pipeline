@@ -16,9 +16,12 @@ log = logging.getLogger(__name__)
 
 FLAG_COUNT_FACTOR = 10
 
-def flag_with_aoflagger(ms: str, strategy: str='/opt/share/aoflagger/strategies/nenufar-lite.lua') -> str:
+def flag_with_aoflagger(ms: str, strategy: str='/opt/share/aoflagger/strategies/nenufar-lite.lua', in_memory : bool =False) -> str:
     # TODO use the API
-    arg_list = [execs.aoflagger, '-strategy', strategy, ms]
+    arg_list = [execs.aoflagger, '-strategy', strategy]
+    if not in_memory:
+        arg_list.append('-direct-read')
+    arg_list.append(ms)
     proc = subprocess.Popen(arg_list, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         stdoutdata, stderrdata = proc.communicate()
