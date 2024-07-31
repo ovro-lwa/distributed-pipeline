@@ -61,23 +61,27 @@ def di_cal_multi_v2(ms_list, scrach_dir, out, do_polcal=False, refant='199', fla
     tmpdir = f'{scrach_dir}/tmp-{str(uuid.uuid4())}'
     os.mkdir(tmpdir)
 
-    subprocess.check_call(['/usr/bin/cp', '-r'] + ms_list + [tmpdir])
-    msl = []
-    for m in ms_list:
-        target = f'{tmpdir}/{path.basename(m)}'
-        # shutil.copytree(m, target, copy_function=shutil.copyfile)
-        msl.append(target)
-        if flag_ant:
-            dead_ants = find_dead_ants(target)
-            flagoperations.flag_ants(target, dead_ants)
-        clfile = gen_model_ms_stokes(target)
-        ft(target, complist = clfile, usescratch=True)
-        shutil.rmtree(clfile)
+    try:
+        subprocess.check_call(['/usr/bin/cp', '-r'] + ms_list + [tmpdir])
+        msl = []
+        for m in ms_list:
+            target = f'{tmpdir}/{path.basename(m)}'
+            # shutil.copytree(m, target, copy_function=shutil.copyfile)
+            msl.append(target)
+            if flag_ant:
+                dead_ants = find_dead_ants(target)
+                flagoperations.flag_ants(target, dead_ants)
+            clfile = gen_model_ms_stokes(target)
+            ft(target, complist = clfile, usescratch=True)
+            shutil.rmtree(clfile)
 
-    concat = integrate(msl, f'{tmpdir}/CONCAT.ms', phase_center=change_phase_centre.get_phase_center(msl[len(msl)//2]))
-    bcalfile = path.splitext(concat)[0]+'.bcal' if out is None else out
-    bandpass(concat, bcalfile, refant=refant, uvrange='>100m', combine='scan,field,obs',
-        fillgaps=5)
+        concat = integrate(msl, f'{tmpdir}/CONCAT.ms', phase_center=change_phase_centre.get_phase_center(msl[len(msl)//2]))
+        bcalfile = path.splitext(concat)[0]+'.bcal' if out is None else out
+        bandpass(concat, bcalfile, refant=refant, uvrange='>100m', combine='scan,field,obs',
+            fillgaps=5)
+    finally:
+        if path.exists(tmpdir):
+            shutil.rmtree(tmpdir, ignore_errors=True)
     return bcalfile
 
 @app.task
@@ -95,20 +99,22 @@ def di_cal_multi(ms_list, scrach_dir, out, do_polcal=False, refant='199', flag_a
     tmpdir = f'{scrach_dir}/tmp-{str(uuid.uuid4())}'
     os.mkdir(tmpdir)
 
-    subprocess.check_call(['/usr/bin/cp', '-r'] + ms_list + [tmpdir])
-    msl = []
-    for m in ms_list:
-        target = f'{tmpdir}/{path.basename(m)}'
-        # shutil.copytree(m, target, copy_function=shutil.copyfile)
-        msl.append(target)
-        if flag_ant:
-            dead_ants = find_dead_ants(target)
-            flagoperations.flag_ants(target, dead_ants)
+    try:
+        subprocess.check_call(['/usr/bin/cp', '-r'] + ms_list + [tmpdir])
+        msl = []
+        for m in ms_list:
+            target = f'{tmpdir}/{path.basename(m)}'
+            # shutil.copytree(m, target, copy_function=shutil.copyfile)
+            msl.append(target)
+            if flag_ant:
+                dead_ants = find_dead_ants(target)
+                flagoperations.flag_ants(target, dead_ants)
 
-    concat = integrate(msl, f'{tmpdir}/CONCAT.ms', phase_center=change_phase_centre.get_phase_center(msl[len(msl)//2]))
-    res = di_cal(concat, out, do_polcal=do_polcal, refant=refant)
-    if path.exists(tmpdir):
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        concat = integrate(msl, f'{tmpdir}/CONCAT.ms', phase_center=change_phase_centre.get_phase_center(msl[len(msl)//2]))
+        res = di_cal(concat, out, do_polcal=do_polcal, refant=refant)
+    finally:
+        if path.exists(tmpdir):
+            shutil.rmtree(tmpdir, ignore_errors=True)
     return res
 
 
