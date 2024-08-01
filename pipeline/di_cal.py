@@ -16,8 +16,8 @@ if __name__ == '__main__':
     cal_hr_late = {2:14, 3:13, 4: 12, 5: 11, 6:11}
 
     year = 2024
-    month = 4
-    for d in range(15, 30):
+    month = 2
+    for d in range(1, 28):
         if not path.exists(f'{NIGHTTIME_DIR}55MHz/{year}-{month:02d}-{d:02d}'):
             continue
         if month in cal_hr_late:

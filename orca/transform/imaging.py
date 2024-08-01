@@ -185,12 +185,11 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
                     num_threads=20, mem_gb=100)
 
             if not make_snapshots:
-                spw_suffix = spw
-                out_path = pm.data_product_path(s, f'{spw_suffix}.V.image.fits')
+                out_path = pm.data_product_path(s, f'V.image.fits')
                 os.makedirs(path.dirname(out_path), exist_ok=True)
                 shutil.copy(f'{tmpdir}/OUT-V-image.fits', out_path)
 
-                out_path = pm.data_product_path(s, f'{spw_suffix}.I.image.fits')
+                out_path = pm.data_product_path(s, f'I.image.fits')
                 os.makedirs(path.dirname(out_path), exist_ok=True)
                 shutil.copy(f'{tmpdir}/OUT-I-image.fits', out_path)
             else:

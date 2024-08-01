@@ -10,9 +10,9 @@ NIGHTTIME_DIR = '/lustre/pipeline/night-time/'
 WORK_DIR = '/lustre/celery/'
 
 if __name__ == '__main__':
-    start_time = datetime(2024, 4, 16, 4, 0, 0)
+    start_time = datetime(2024, 4, 17, 11, 0, 0)
     dt = timedelta(minutes=15)
-    n_hours = 8
+    n_hours = 2
     n_chunks = n_hours * 4
 
     for i in range(n_chunks):
@@ -21,9 +21,6 @@ if __name__ == '__main__':
         phase_center = coordutils.zenith_coord_at_ovro(hour_and_half_mark)
         end_time = start_time + dt
         for spw in spws:
-            stokes_IV_imaging.delay([spw], start_time, end_time,
-                                    NIGHTTIME_DIR, WORK_DIR, SCRATCH,
-                                    phase_center=phase_center)
             stokes_IV_imaging.delay([spw], start_time, end_time,
                                     NIGHTTIME_DIR, WORK_DIR, SCRATCH,
                                     phase_center=phase_center)
