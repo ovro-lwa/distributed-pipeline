@@ -70,7 +70,8 @@ nest-asyncio==1.5.7
 networkx==3.1
 numba==0.58.1
 numpy==1.24.4
--e git+ssh://git@github.com/ovro-lwa/distributed-pipeline.git@69274f91412514008ba461dcce8f74232cf28c8b#egg=ovro_lwa_orca
+opencv-python==4.10.0.84
+-e git+ssh://git@github.com/ovro-lwa/distributed-pipeline.git@4ab4c281fe7ae47a18c6424993b75dee6496a47e#egg=ovro_lwa_orca
 packaging==23.1
 pandas==2.0.3
 paramiko==3.3.1
