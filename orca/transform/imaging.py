@@ -127,7 +127,7 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
     try:
         integrated_msl = []
         n_timesteps = None
-        if phase_center is not None:
+        if phase_center is None:
             phase_center = coordutils.zenith_coord_at_ovro(start_time + (end_time - start_time) / 2)
         for spw in spw_list:
             logger.info('Applycal SPW %s', spw)
@@ -200,9 +200,20 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
                     shutil.copy(fitsname, out_path)
 
             logger.info('Done imaging.')
+    finally:
         if not keep_sratch_dir:
             shutil.rmtree(tmpdir)
-    finally:
-        pass
-        # if not keep_sratch_dir:
-        #    shutil.rmtree(tmpdir)
+
+
+def coadd_fits(fits_list: List[str], output_path: str) -> Optional[str]:
+    n = len(fits_list)
+    if n < 2:
+        logger.warning('Cannot coadd less than 2 images.')
+        return None
+    avg, header = fitsutils.read_image_fits(fits_list[0])
+    avg /= n
+    for f in fits_list[1:]:
+        dat, _ = fitsutils.read_image_fits(f)
+        avg += dat / n
+    fitsutils.write_image_fits(output_path, header, avg, overwrite=True)
+    return output_path

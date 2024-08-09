@@ -16,9 +16,10 @@ log = logging.getLogger(__name__)
 
 FLAG_COUNT_FACTOR = 10
 
-def flag_with_aoflagger(ms: str, strategy: str='/opt/share/aoflagger/strategies/nenufar-lite.lua', in_memory : bool =False) -> str:
+def flag_with_aoflagger(ms: str, strategy: str='/opt/share/aoflagger/strategies/nenufar-lite.lua',
+                        in_memory : bool =False, n_threads : int = 5) -> str:
     # TODO use the API
-    arg_list = [execs.aoflagger, '-strategy', strategy]
+    arg_list = [execs.aoflagger, '-strategy', strategy, '-j', str(n_threads)]
     if not in_memory:
         arg_list.append('-direct-read')
     arg_list.append(ms)
