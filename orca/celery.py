@@ -2,13 +2,13 @@ from __future__ import absolute_import, unicode_literals
 from celery import Celery
 from orca.configmanager import queue_config
 
-CELERY_APP_NAME = 'orca'
+CELERY_APP_NAME = 'claw'
 REDIS_URL = 'redis://10.41.0.85:6379/0'
 
 # TODO: what if I import a module that imports orca.transform.*?
 
 app = Celery(CELERY_APP_NAME,
-             broker='pyamqp://pipe:pipe@rabbitmq.calim.mcs.pvt:5672/pipe',
+             broker='pyamqp://claw:claw@rabbitmq.calim.mcs.pvt:5672/claw',
              backend=REDIS_URL,
              include=['orca.transform.calibration',
                       'orca.transform.qa',
