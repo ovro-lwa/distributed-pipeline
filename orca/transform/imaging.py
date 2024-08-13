@@ -27,6 +27,8 @@ from orca.transform.integrate import integrate
 from orca.transform.calibration import applycal_data_col_nocopy
 from orca.celery import app
 
+from reproject import reproject_interp
+
 logger = logging.getLogger(__name__)
 
 CLEAN_MGAIN = 0.8
@@ -111,6 +113,48 @@ def make_dirty_image(ms_list: List[str], output_dir: str, output_prefix: str, ma
         return f'{output_dir}/{output_prefix}-image.fits', f'{output_dir}/{output_prefix}-psf.fits'
     else:
         return f'{output_dir}/{output_prefix}-image.fits'
+
+
+def reproject_fits(fits_path1: str, fits_path2: str, output_path: Union[str, None] = None) -> Union[str, np.ndarray]:
+    """Reproject one fits image to wcs of another.
+
+    Args:
+        fits_path1: fits file of reference image
+        fits_path2: fits file to be reprojected
+        output_path: output for reprojected fits image (optional)
+
+    Returns:
+        path to reprojected fits image if output_path is not None, else the numpy array of the reprojected image.
+
+    """
+    hdu1 = fits.open(fits_path1)
+    hdu2 = fits.open(fits_path2)
+    new_im, footprint = reproject_interp(hdu2, hdu1.header)
+    if output_path is not None:
+        fitsutils.write_image_fits(new_im, hdu1.header, output_path)
+        return output_path
+    else:
+        return new_im
+    
+
+@app.task
+def stack_images(fits_list: List[str], output_name: str):
+    """Stacks images in fits_list and writes to output_path.
+
+    Args:
+        fits_list: list of fits files to be stacked
+        output_name: output name (including path)
+    """
+
+    assert len(fits_list) > 1, 'Need at least two images to stack.'
+    hdr = fits.open(fits_list[0]).header
+    stacked_image = np.fits_list[0]
+    for fits_file in fits_list[1:]:
+        reprojected_image = reproject_fits(fits_list[0], fits_file)
+        stacked_image += reprojected_image
+
+    stacked_image /= len(fits_list)
+    fitsutils.write_image_fits(stacked_image, hdr, f'{output_name}.fits')
 
 
 @app.task
