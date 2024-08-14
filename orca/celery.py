@@ -10,7 +10,7 @@ REDIS_URL = 'redis://10.41.0.85:6379/0'
 app = Celery(CELERY_APP_NAME,
              broker='pyamqp://claw:claw@rabbitmq.calim.mcs.pvt:5672/claw',
              backend=REDIS_URL)
-#             include=['orca.transform', 'orca.utils'])
+             include=['orca.transform', 'orca.utils'])
 
 # Optional configuration, see the application user guide.
 app.conf.update(
