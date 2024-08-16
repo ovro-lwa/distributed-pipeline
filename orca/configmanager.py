@@ -26,8 +26,9 @@ def load_yaml(p: str):
 if path.isfile(ORCA_CONF_PATH):
     config = load_yaml(ORCA_CONF_PATH)
 else:
-    log.info(f'{ORCA_CONF_PATH} not found. Using default configuration.')
-    config = load_yaml(pkg_resources.resource_filename('orca', 'default-orca-conf.yml'))
+    msg = f'{ORCA_CONF_PATH} not found. Please put the config file there.'
+    log.error(msg)
+    raise FileNotFoundError(msg)
 
 queue_config = SimpleNamespace(**config['queue'])
 telescope = SimpleNamespace(**config['telescope'])
