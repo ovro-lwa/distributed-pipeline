@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from matplotlib import colors as mpl_colors
 from matplotlib import pyplot as plt
 from astropy import wcs
+from astropy.io import fits
 from astropy.coordinates import SkyCoord
 import numpy as np
 
@@ -127,35 +128,47 @@ def reproject_fits(fits_path1: str, fits_path2: str, output_path: Union[str, Non
         path to reprojected fits image if output_path is not None, else the numpy array of the reprojected image.
 
     """
-    hdu1 = fits.open(fits_path1)
-    hdu2 = fits.open(fits_path2)
-    new_im, footprint = reproject_interp(hdu2, hdu1.header)
+    hdu1 = fits.open(fits_path1)[0]
+    wcs1 = wcs.WCS(header=hdu1.header)
+    wcs1s = wcs1[0,0,:,:]  # slice out spatial dimensions. TODO: select axis based on names RA/DEC
+
+    hdu2 = fits.open(fits_path2)[0]
+    wcs2 = wcs.WCS(header=hdu2.header)
+    wcs2s = wcs2[0,0,:,:]  # slice out spatial dimensions. TODO: select axis based on names RA/DEC
+
+    new_im = reproject_interp((hdu2.data.squeeze(), wcs2s), wcs1s, shape_out=wcs1s.array_shape, return_footprint=False)
+    # alternatively use reproject_and_coadd on list of images
+
     if output_path is not None:
-        fitsutils.write_image_fits(new_im, hdu1.header, output_path)
+#        fitsutils.write_image_fits(output_path, hdu1.header, new_im)  # using Yuping's function
+        fits.PrimaryHDU(np.reshape(new_im, newshape=(1, 1, *new_im.shape)), header=hdu1.header).writeto(output_path)  # rewrote it to get axes right
         return output_path
     else:
         return new_im
     
 
 @app.task
-def stack_images(fits_list: List[str], output_name: str):
+def stack_images(fits_list: List[str], output_path: str):
     """Stacks images in fits_list and writes to output_path.
 
     Args:
         fits_list: list of fits files to be stacked
-        output_name: output name (including path)
+        output_path: output path (including name)
     """
 
     assert len(fits_list) > 1, 'Need at least two images to stack.'
-    hdr = fits.open(fits_list[0]).header
-    stacked_image = np.fits_list[0]
+
+    hdu = fits.open(fits_list[0])[0]
+    stacked_image = hdu.data
+    hdr = hdu.header
+
     for fits_file in fits_list[1:]:
         reprojected_image = reproject_fits(fits_list[0], fits_file)
         stacked_image += reprojected_image
 
     stacked_image /= len(fits_list)
-    fitsutils.write_image_fits(stacked_image, hdr, f'{output_name}.fits')
-
+#    fitsutils.write_image_fits(output_path, hdr, stacked_image)
+    fits.PrimaryHDU(np.reshape(stacked_image, newshape=(1, 1, *stacked_image.shape)), header=hdr).writeto(output_path)  # rewrote it to get axes right
 
 @app.task
 def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: datetime,

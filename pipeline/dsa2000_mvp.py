@@ -1,4 +1,5 @@
-from orca.transform import deconvolve, imaging
+import orca.transform.deconvolve
+import orca.transform.imaging
 import glob
 
 # inputs
@@ -13,7 +14,7 @@ wait = True
 if __name__ == '__main__':
     results = []
     for (dirty, psf, name) in zip(dirtyfiles, psffiles, names):
-        res = deconvolve.convert_and_deconvolve.delay(dirty, psf, name, niter=niter)
+        res = orca.transform.deconvolve.convert_and_deconvolve.delay(dirty, psf, name, niter=niter)
         results.append(res)
 
     print(f'{len(results)} tasks submitted')
@@ -33,7 +34,7 @@ if __name__ == '__main__':
 
     print('deconvolution complete. stacking images...')
     fits_list = [res.get() for res in results]
-    res = imaging.stack_images.delay(fits_list, 'stacked')
+    res = orca.transform.imaging.stack_images.delay(fits_list, 'stacked.fits')
 
     print('stacking task submitted')
     print('waiting for stacking task to finish...')
