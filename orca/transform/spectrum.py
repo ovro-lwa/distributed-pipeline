@@ -16,14 +16,17 @@ import numpy as np
 from astropy.io import fits
 import redis
 
-from orca.celery import app, REDIS_URL
+from orca.celery import app
 from orca.transform import dftspectrum, calibration
 from orca.utils.datetimeutils import STAGE_III_INTEGRATION_TIME
+
+from orca.configmanager import queue_config
 
 logger = logging.getLogger(__name__)
 
 N_CHAN = 192
 
+REDIS_URL = queue_config.result_backend_uri
 REDIS_EXPIRE_S = 3600*10
 REDIS_KEY_PREFIX = 'spec-'
 

@@ -1,7 +1,7 @@
 queue:
   prefix: default # queue name
   broker_uri: pyamqp://username:password@rabbitmq.calim.mcs.pvt:5672/vhost # change this to your own rabbitmq uri
-  backend_uri: redis://10.41.0.85:6379/0 # this can be shared.
+  result_backend_uri: redis://10.41.0.85:6379/0 # result backend. this can be shared.
 
 telescope:
   n_ant: 352

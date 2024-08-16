@@ -33,7 +33,7 @@ This is for integration testing only. Make sure you read https://docs.celeryq.de
 
 You can start a celery worker with
 ```
-celery -A orca.celery worker -Q default
+celery -A orca.celery worker -Q default --name=<give-it-a-name> --loglevel=INFO
 ```
 
 The queue and backend are configured in `celery.py` under `orca`. Make sure you use a different rabbitMQ vhost for testing.
