@@ -33,5 +33,5 @@ def test_make_dirty_image_and_psf(wsclean):
 
 
 def test_coadd_fits():
-    fns = glob.glob('/lustre/yuping/orca-test-resource/2024-04-11T07*I.image.fits')
+    fns = glob.glob('/lustre/yuping/orca-test-resource/??MHz_2024-04-16T*I.image.fits')
     imaging.coadd_fits(fns, '/lustre/yuping/orca-test-resource/coadded.fits')

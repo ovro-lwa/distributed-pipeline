@@ -113,7 +113,7 @@ def make_dirty_image(ms_list: List[str], output_dir: str, output_prefix: str, ma
         return f'{output_dir}/{output_prefix}-image.fits'
 
 
-@app.task
+@app.task(autoretry_for=(Exception,), max_retries=1)
 def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: datetime,
                         source_dir: str, work_dir: str, scratch_dir: str,
                         phase_center: Optional[SkyCoord] = None, taper_inner_tukey: int = 30,
