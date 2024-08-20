@@ -20,6 +20,7 @@ class StageIIIPathsManager(PathsManager):
     subband: str
     start: datetime
     end: datetime
+    partitioned_py_hour: bool = True
     
     def __post_init__(self):
         self._root_dir = Path(self.root_dir)
@@ -30,7 +31,7 @@ class StageIIIPathsManager(PathsManager):
     def ms_list(self) -> List[Tuple[datetime, Path]]:
         if self._ms_list is None:
             self._ms_list = [(datetime.strptime(ms.name[:-9], _DATETIME_FORMAT), ms.absolute().as_posix()) 
-                             for ms in _get_ms_list(self._root_dir / self.subband, self.start, self.end)]
+                             for ms in _get_ms_list(self._root_dir / self.subband, self.start, self.end, self.partitioned_py_hour)]
         return self._ms_list
 
     def get_bcal_path(self, bandpass_date: date, spw: Optional[str]=None) -> str:
@@ -50,12 +51,15 @@ class StageIIIPathsManager(PathsManager):
                 timestamp.date().isoformat() / f'{timestamp.hour:02d}' /
                 (timestamp.isoformat() + f'.{suffix}')).absolute().as_posix()
 
-def _get_ms_list(prefix: Path, start_time: datetime, end_time: datetime) -> List[Path]:
+def _get_ms_list(prefix: Path, start_time: datetime, end_time: datetime, partitioned_by_hour: bool) -> List[Path]:
     assert start_time <= end_time
     cur_time = start_time.replace(minute=0, second=0, microsecond=0)
     msl = []
     while cur_time <= end_time:
-        msl += sorted([ p for p in prefix.glob(f'{cur_time.date().isoformat()}/{cur_time.hour:02d}/*ms') ], key=lambda x: x.name)
+        if not partitioned_by_hour:
+            msl += sorted([ p for p in prefix.glob(f'{cur_time.date()}/{cur_time.date().strftime(_DATE_FORMAT)}_{cur_time.hour:02d}*ms') ], key=lambda x: x.name)
+        else:
+            msl += sorted([ p for p in prefix.glob(f'{cur_time.date().isoformat()}/{cur_time.hour:02d}/*ms') ], key=lambda x: x.name)
         cur_time += timedelta(hours=1)
 
     if not msl:
