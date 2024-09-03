@@ -20,7 +20,7 @@ class StageIIIPathsManager(PathsManager):
     subband: str
     start: datetime
     end: datetime
-    partitioned_py_hour: bool = True
+    partitioned_by_hour: bool = True
     
     def __post_init__(self):
         self._root_dir = Path(self.root_dir)
@@ -31,7 +31,7 @@ class StageIIIPathsManager(PathsManager):
     def ms_list(self) -> List[Tuple[datetime, Path]]:
         if self._ms_list is None:
             self._ms_list = [(datetime.strptime(ms.name[:-9], _DATETIME_FORMAT), ms.absolute().as_posix()) 
-                             for ms in _get_ms_list(self._root_dir / self.subband, self.start, self.end, self.partitioned_py_hour)]
+                             for ms in _get_ms_list(self._root_dir / self.subband, self.start, self.end, self.partitioned_by_hour)]
         return self._ms_list
 
     def get_bcal_path(self, bandpass_date: date, spw: Optional[str]=None) -> str:
