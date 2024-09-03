@@ -118,7 +118,8 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
                         source_dir: str, work_dir: str, scratch_dir: str,
                         phase_center: Optional[SkyCoord] = None, taper_inner_tukey: int = 30,
                         make_snapshots: bool = False,
-                        keep_sratch_dir: bool = False):
+                        keep_scratch_dir: bool = False,
+                        partitioned_by_hour: bool = True):
     s = start_time
     e = end_time
     tmpdir = f'{scratch_dir}/tmp-{str(uuid.uuid4())}'
@@ -131,7 +132,7 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
             phase_center = coordutils.zenith_coord_at_ovro(start_time + (end_time - start_time) / 2)
         for spw in spw_list:
             logger.info('Applycal SPW %s', spw)
-            pm = StageIIIPathsManager(source_dir, work_dir, spw, s, e)
+            pm = StageIIIPathsManager(source_dir, work_dir, spw, s, e, partitioned_by_hour)
             if not pm.ms_list:
                 logger.warning('No measurement sets found for SPW %s', spw)
                 continue
@@ -201,7 +202,7 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
 
             logger.info('Done imaging.')
     finally:
-        if not keep_sratch_dir:
+        if not keep_scratch_dir:
             shutil.rmtree(tmpdir)
 
 
