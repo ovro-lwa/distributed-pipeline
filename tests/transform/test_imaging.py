@@ -1,7 +1,9 @@
 import pytest
+
 from mock import patch
 
 from os import path
+import glob
 
 import numpy as np
 from datetime import datetime
@@ -28,3 +30,8 @@ def test_make_dirty_image_and_psf(wsclean):
            ('/tmp//beep-image.fits', '/tmp//beep-psf.fits')
     assert wsclean.call_args.kwargs['extra_arg_list'][:5] == ['-size', str(2 * imaging.IMSIZE), str(2 * imaging.IMSIZE),
                                                               '-scale', str(imaging.IM_SCALE_DEGREE)]
+
+
+def test_coadd_fits():
+    fns = glob.glob('/lustre/yuping/orca-test-resource/2024-04-11T07*I.image.fits')
+    imaging.coadd_fits(fns, '/lustre/yuping/orca-test-resource/coadded.fits')

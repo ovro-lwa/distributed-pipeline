@@ -77,6 +77,8 @@ def get_peak_around_src(im_T: np.ndarray, source_coord: SkyCoord, w: wcs.WCS) ->
 
 def std_and_max_around_src(im_T: np.ndarray, radius:int, source_coord: SkyCoord, w: wcs.WCS) -> Tuple[float, float]:
     x, y = wcs.utils.skycoord_to_pixel(source_coord, w)
+    if np.isnan(x) or np.isnan(y):
+        return np.nan, np.nan
     x = int(x)
     y = int(y)
     im_box = im_T[x - radius :x + radius, y - radius : y + radius]
