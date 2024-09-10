@@ -1,5 +1,6 @@
 import orca.transform.deconvolve
 import orca.transform.imaging
+import orca.transform.image_warp
 import glob
 
 # inputs
@@ -15,7 +16,8 @@ if __name__ == '__main__':
     results = []
     for (dirty, psf, name) in zip(dirtyfiles, psffiles, names):
         res = orca.transform.deconvolve.convert_and_deconvolve.delay(dirty, psf, name, niter=niter)
-        results.append(res)
+        res2 = orca.transform.image_warp.image_plane_correction.delay(res, plot=False)
+        results.append(res2)
 
     print(f'{len(results)} tasks submitted')
 

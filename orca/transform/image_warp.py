@@ -7,10 +7,10 @@ from scipy.interpolate import RBFInterpolator, CloughTocher2DInterpolator
 import matplotlib.pyplot as plt
 
 import numpy as np
+from orca.celery import app
 
 from multiprocess import Pool
 
-import argparse
 import logging
 import os
 import sys
@@ -116,7 +116,7 @@ def plot_image(image_data, title="", output_file=None):
     else:
         plt.show()
     
-
+@app.task
 def image_plane_correction(img,
                            smoothing=350,
                            neighbors=20,
@@ -183,7 +183,8 @@ def image_plane_correction(img,
 
     # write dewarped image to a fits file
     output_img = np.expand_dims(np.expand_dims(dewarped, 0), 0)
-    fits.writeto(f"{WORKING_DIR}/temp.fits", output_img, header=image[0].header, overwrite=True)
+    img_dewarp = img.replace('.fits', '.dewarp.fits')
+    fits.writeto(f"{WORKING_DIR}/{img_dewarp}", output_img, header=image[0].header, overwrite=True)
 
     # re-compute sources in interpolated image
     start = time()
@@ -207,4 +208,6 @@ def image_plane_correction(img,
     del interp
 
     # the "score", higher is better
-    return np.median(seps_before).arcmin - np.median(seps_after).arcmin
+    print(np.median(seps_before).arcmin - np.median(seps_after).arcmin)
+
+    return f"{WORKING_DIR}/{img_dewarp}"
