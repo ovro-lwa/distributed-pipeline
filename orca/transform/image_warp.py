@@ -183,12 +183,12 @@ def image_plane_correction(img,
 
     # write dewarped image to a fits file
     output_img = np.expand_dims(np.expand_dims(dewarped, 0), 0)
-    img_dewarp = img.replace('.fits', '.dewarp.fits')
-    fits.writeto(f"{WORKING_DIR}/{img_dewarp}", output_img, header=image[0].header, overwrite=True)
+    img_dewarp = os.path.basename(img).replace('.fits', '.dewarp.fits')
+    fits.writeto(os.path.join(WORKING_DIR, img_dewarp), output_img, header=image[0].header, overwrite=True)
 
     # re-compute sources in interpolated image
     start = time()
-    new_sources = identify_sources_bdsf(f"{WORKING_DIR}/temp.fits", imwcs, WORKING_DIR)
+    new_sources = identify_sources_bdsf(os.path.join(WORKING_DIR, img_dewarp), imwcs, WORKING_DIR)
     logger.info(f"Done identifying new sources in {time() - start} seconds")
 
     # compute source/reference separations in dewarped image
@@ -210,4 +210,4 @@ def image_plane_correction(img,
     # the "score", higher is better
     print(np.median(seps_before).arcmin - np.median(seps_after).arcmin)
 
-    return f"{WORKING_DIR}/{img_dewarp}"
+    return os.path.join(WORKING_DIR, img_dewarp)

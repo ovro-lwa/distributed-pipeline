@@ -19,6 +19,9 @@ if __name__ == '__main__':
         res2 = orca.transform.image_warp.image_plane_correction.delay(res, plot=False)
         results.append(res2)
 
+# TODO: test this. is it better to use pipe or chain syntax?
+
+
     print(f'{len(results)} tasks submitted')
 
     if wait:
