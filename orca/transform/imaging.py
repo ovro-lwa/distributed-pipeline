@@ -179,8 +179,6 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
             if make_snapshots:
                 arg_list += ['-intervals-out', str(n_timesteps)]
 
-            print(integrated_msl)
-            print(arg_list)
             wsclean.wsclean(integrated_msl, tmpdir, 'OUT',
                     extra_arg_list=arg_list,
                     num_threads=20, mem_gb=100)
@@ -197,6 +195,12 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
                 out_images = sorted(glob(f'{tmpdir}/OUT-t*-I-image.fits'))
                 for dt, fitsname in zip(datetime_list, out_images):
                     out_path = pm.data_product_path(dt, f'snap.I.image.fits')
+                    os.makedirs(path.dirname(out_path), exist_ok=True)
+                    shutil.copy(fitsname, out_path)
+
+                out_images = sorted(glob(f'{tmpdir}/OUT-t*-V-image.fits'))
+                for dt, fitsname in zip(datetime_list, out_images):
+                    out_path = pm.data_product_path(dt, f'snap.V.image.fits')
                     os.makedirs(path.dirname(out_path), exist_ok=True)
                     shutil.copy(fitsname, out_path)
 

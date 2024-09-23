@@ -7,7 +7,7 @@ from orca.transform.calibration import di_cal_multi, di_cal_multi_v2
 
 SCRATCH_DIR = '/fast/celery/'
 NIGHTTIME_DIR = '/lustre/pipeline/night-time/'
-WORK_DIR = '/lustre/celery/v2'
+WORK_DIR = '/lustre/celery/'
 
 MINUTES_TO_CAL = 15
 
@@ -16,8 +16,8 @@ if __name__ == '__main__':
     cal_hr_late = {2:14, 3:13, 4: 12, 5: 11, 6:11}
 
     year = 2024
-    month = 5
-    for d in range(5, 9):
+    month = 3
+    for d in range(1, 32):
         if not path.exists(f'{NIGHTTIME_DIR}55MHz/{year}-{month:02d}-{d:02d}'):
             continue
         if month in cal_hr_late:
@@ -32,11 +32,11 @@ if __name__ == '__main__':
         for spw in spws:
             pm = StageIIIPathsManager(NIGHTTIME_DIR, WORK_DIR, spw, s, e)
             to_cal = [ m for _, m in pm.ms_list ]
-            if len(pm.ms_list) < 100:
+            if len(pm.ms_list) < 80:
                 if month in cal_hr_late:
                     pm = StageIIIPathsManager(NIGHTTIME_DIR, WORK_DIR, spw,
                                             datetime(year, month, d, 10, 3, 0)
-                                            , e)
+                                            , e, partitioned_by_hour=False)
                     to_cal = [ m for _, m in pm.ms_list[-(MINUTES_TO_CAL * 60 // 10):] ]
                 else:
                     pm = StageIIIPathsManager(NIGHTTIME_DIR, WORK_DIR, spw,
@@ -47,7 +47,8 @@ if __name__ == '__main__':
 
             bcal_path = pm.get_bcal_path(s.date())
             os.makedirs(path.dirname(bcal_path), exist_ok=True)
-            di_cal_multi_v2.delay(to_cal, SCRATCH_DIR, out=bcal_path)
+            # di_cal_multi_v2.delay(to_cal, SCRATCH_DIR, out=bcal_path)
+            di_cal_multi_v2.apply_async((to_cal, SCRATCH_DIR), {'out': bcal_path, 'refant': '226'}, queue='qa')
     """
 
     s = datetime(2024, 4 ,29, 12, 00, 0)

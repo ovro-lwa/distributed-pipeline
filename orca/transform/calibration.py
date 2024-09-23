@@ -4,6 +4,7 @@ import shutil
 import os
 import uuid
 import subprocess
+from typing import Optional
 
 import numpy as np
 from numba import njit
@@ -21,7 +22,7 @@ from orca.flagging import flagoperations
 
 logger = logging.getLogger(__name__)
 
-@app.task
+@app.task(autoretry_for=(Exception,), max_retries=1)
 def di_cal(ms, out=None, do_polcal=False, refant='199') -> str:
     """ Perform DI calibration and solve for cal table.
 
@@ -46,8 +47,8 @@ def di_cal(ms, out=None, do_polcal=False, refant='199') -> str:
     return bcalfile
 
 
-@app.task
-def di_cal_multi_v2(ms_list, scrach_dir, out, do_polcal=False, refant='199', flag_ant=True) -> str:
+@app.task(autoretry_for=(Exception,), max_retries=1)
+def di_cal_multi_v2(ms_list, scrach_dir, out, do_polcal=False, refant='199', flag_ant=True) -> Optional[str]:
     """ Perform DI calibration on multiple integrations. Copy, concat, then solve.
 
     Args:
@@ -58,6 +59,8 @@ def di_cal_multi_v2(ms_list, scrach_dir, out, do_polcal=False, refant='199', fla
 
     Returns: List of paths to the derived cal tables.
     """
+    if not ms_list:
+        return None
     tmpdir = f'{scrach_dir}/tmp-{str(uuid.uuid4())}'
     os.mkdir(tmpdir)
 
@@ -85,7 +88,7 @@ def di_cal_multi_v2(ms_list, scrach_dir, out, do_polcal=False, refant='199', fla
     return bcalfile
 
 @app.task
-def di_cal_multi(ms_list, scrach_dir, out, do_polcal=False, refant='199', flag_ant=True) -> str:
+def di_cal_multi(ms_list, scrach_dir, out, do_polcal=False, refant='199', flag_ant=True) -> Optional[str]:
     """ Perform DI calibration on multiple integrations. Copy, concat, then solve.
 
     Args:
@@ -96,6 +99,8 @@ def di_cal_multi(ms_list, scrach_dir, out, do_polcal=False, refant='199', flag_a
 
     Returns: List of paths to the derived cal tables.
     """
+    if not ms_list:
+        return None
     tmpdir = f'{scrach_dir}/tmp-{str(uuid.uuid4())}'
     os.mkdir(tmpdir)
 
