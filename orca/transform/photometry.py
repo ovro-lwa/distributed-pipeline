@@ -3,6 +3,7 @@ import logging
 import warnings
 
 from astropy import wcs
+from astropy.io import fits
 
 from orca.utils import fitsutils
 import numpy as np
@@ -42,16 +43,22 @@ def average_with_rms_threshold(fits_list, out_fn, source_coord, radius_px, thres
             y = int(y)
             im_box = data.T[x - radius_px :x + radius_px, y - radius_px : y + radius_px]
             rms_arr[i] = np.std(im_box)
-        print(rms_arr)        
         rms_threshold = np.median(rms_arr[rms_arr > 0]) * threshold_multiple
 
         n = np.sum(rms_arr <= rms_threshold)
-        out_header = contents[0][1]
         out_data = np.zeros_like(contents[0][0])
         logger.info(f'{len(contents)-n} images were skipped.')
+        actual_fns = []
         for i, (data, header) in enumerate(contents):
             if rms_arr[i] > rms_threshold:
                 continue
             out_data += data / n
+            actual_fns.append(fits_list[i])
+        out_header = fits.Header()
+        out_header['SRCFILES'] = ' '.join(fn.strip('/lustre/celery/') for fn in actual_fns)
+        for k in contents[0][1]:
+            if ('COMMENT' in k) or ('HISTORY' in k):
+                continue
+            out_header[k] = contents[0][1][k]
         fitsutils.write_image_fits(out_fn, out_header, out_data, overwrite=True)
     return out_fn
