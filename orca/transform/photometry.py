@@ -5,6 +5,8 @@ import warnings
 from astropy import wcs
 from astropy.io import fits
 
+from orca.celery import app
+
 from orca.utils import fitsutils
 import numpy as np
 
@@ -29,21 +31,24 @@ def std_and_max_around_coord(fits_file, coord, radius=5):
     w = wcs.WCS(header)
     return fitsutils.std_and_max_around_src(data.T, radius, coord, w)
 
+@app.task
 def average_with_rms_threshold(fits_list, out_fn, source_coord, radius_px, threshold_multiple) -> Optional[str]:
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
         contents = [fitsutils.read_image_fits(fn) for fn in fits_list]
         rms_arr = np.zeros(len(contents))
-        for i, (data, header) in enumerate(contents):
-            w = wcs.WCS(header)
-            x, y = wcs.utils.skycoord_to_pixel(source_coord, w)
-            if np.isnan(x) or np.isnan(y):
-                raise ValueError(f'Coordinate {source_coord} is not in the image.')
-            x = int(x)
-            y = int(y)
-            im_box = data.T[x - radius_px :x + radius_px, y - radius_px : y + radius_px]
-            rms_arr[i] = np.std(im_box)
-        rms_threshold = np.median(rms_arr[rms_arr > 0]) * threshold_multiple
+        rms_threshold = np.inf
+        if source_coord is not None:
+            for i, (data, header) in enumerate(contents):
+                w = wcs.WCS(header)
+                x, y = wcs.utils.skycoord_to_pixel(source_coord, w)
+                if np.isnan(x) or np.isnan(y):
+                    raise ValueError(f'Coordinate {source_coord} is not in the image.')
+                x = int(x)
+                y = int(y)
+                im_box = data.T[x - radius_px :x + radius_px, y - radius_px : y + radius_px]
+                rms_arr[i] = np.std(im_box)
+            rms_threshold = np.median(rms_arr[rms_arr > 0]) * threshold_multiple
 
         n = np.sum(rms_arr <= rms_threshold)
         out_data = np.zeros_like(contents[0][0])

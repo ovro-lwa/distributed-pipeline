@@ -19,6 +19,8 @@ CAS_A = SkyCoord('23h23m24s', '+58deg48m54s', frame=ICRS)
 CYG_A = SkyCoord('19h59m28.36s', '+40deg44m02.09s', frame=ICRS)
 TAU_A = SkyCoord('05h34m31s +22deg00m52s', frame=ICRS)
 
+TAU_BOO = SkyCoord('13h47m15.74s', '+17deg27m24.9s', frame=ICRS)
+
 MOUNTAIN_AZ_DEG, MOUNTAIN_ALT_DEG = np.loadtxt(pkg_resources.resource_filename('orca', 'resources/mountain_azel.csv'),
                                                unpack=True)
 MOUNTAIN_AZ_INC = MOUNTAIN_AZ_DEG[1] - MOUNTAIN_AZ_DEG[0]
