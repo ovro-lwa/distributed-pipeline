@@ -162,9 +162,12 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
                 datetime_list = [dt for dt, _ in pm.ms_list]
 
             logger.info('Integrating SPW %s', spw)
-            integrated = integrate(msl, f'{tmpdir}/{spw}.ms', phase_center=phase_center)
-            for ms in msl:
-                shutil.rmtree(ms)
+            if len(msl) > 1:
+                integrated = integrate(msl, f'{tmpdir}/{spw}.ms', phase_center=phase_center)
+                for ms in msl:
+                    shutil.rmtree(ms)
+            else:
+                integrated = msl[0]
         # flag
             logger.info('Flagging SPW %s', spw)
             # flag_ants(integrated, [70,79,80,117,137,193,150,178,201,208,224,261,215,236,246,294,298,301,307,289,33,3,41,42,44,92,12,14,17,21,154,29,28,127,126])
