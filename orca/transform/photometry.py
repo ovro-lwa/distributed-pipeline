@@ -10,6 +10,8 @@ from orca.celery import app
 from orca.utils import fitsutils
 import numpy as np
 
+PATCH_SIDE_SIZE = 12
+
 logger = logging.getLogger(__name__)
 
 def std_and_max_around_coord(fits_file, coord, radius=5):
@@ -67,3 +69,19 @@ def average_with_rms_threshold(fits_list, out_fn, source_coord, radius_px, thres
             out_header[k] = contents[0][1][k]
         fitsutils.write_image_fits(out_fn, out_header, out_data, overwrite=True)
     return out_fn
+
+def estimate_image_noise(arr: np.ndarray) -> float:
+    """
+    Estimate the noise in an image using the median absolute deviation (MAD).
+
+    Parameters
+    ----------
+    arr : np.ndarray
+        The image data.
+
+    Returns
+    -------
+    float
+        The estimated noise.
+    """
+    return 1.4826 * np.median(np.abs(arr - np.median(arr)))

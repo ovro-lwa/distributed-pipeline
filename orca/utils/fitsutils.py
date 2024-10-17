@@ -1,5 +1,7 @@
 """fits related utilities.
 """
+import warnings
+
 from astropy.io import fits
 from astropy import wcs
 from astropy.coordinates import SkyCoord
@@ -84,6 +86,13 @@ def std_and_max_around_src(im_T: np.ndarray, radius:int, source_coord: SkyCoord,
     im_box = im_T[x - radius :x + radius, y - radius : y + radius]
     return np.std(im_box), np.max(im_box)
 
+def get_cutout(im: np.ndarray, coord: SkyCoord, w: wcs.WCS, radius_px: int) -> np.ndarray:
+    x, y = wcs.utils.skycoord_to_pixel(coord, w)
+    if np.isnan(x) or np.isnan(y):
+        raise ValueError(f'Coordinate {coord} is not in the image.')
+    x = int(x)
+    y = int(y)
+    return im.T[x - radius_px : x + radius_px, y - radius_px : y + radius_px].T
 
 def get_sample_header() -> fits.Header:
     return fits.Header(
