@@ -10,9 +10,9 @@ NIGHTTIME_DIR = '/lustre/pipeline/night-time/'
 WORK_DIR = '/lustre/celery/'
 
 if __name__ == '__main__':
-    start_time = datetime(2024, 1, 26, 2, 0, 0)
+    start_time = datetime(2023, 12, 27, 1, 0, 0)
     dt = timedelta(minutes=15)
-    n_hours = 13
+    n_hours = 15
     n_chunks = n_hours * 4
 
     for i in range(n_chunks):
