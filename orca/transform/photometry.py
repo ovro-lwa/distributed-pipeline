@@ -1,9 +1,10 @@
-from typing import Optional
+from typing import Optional, Tuple
 import logging
 import warnings
 
 from astropy import wcs
 from astropy.io import fits
+from astropy.coordinates import SkyCoord
 
 from orca.celery import app
 
@@ -85,3 +86,12 @@ def estimate_image_noise(arr: np.ndarray) -> float:
         The estimated noise.
     """
     return 1.4826 * np.median(np.abs(arr - np.median(arr)))
+
+def search_src(fns: str, src: SkyCoord, stats_box_size: int, peak_search_box_size: int) -> Tuple[float, float]:
+    data, header = fitsutils.read_image_fits(fns)
+    w = wcs.WCS(header)
+    noise_cutout = fitsutils.get_cutout(data, src, w, stats_box_size // 2)
+    rms = estimate_image_noise(noise_cutout)
+    peak_cutout = fitsutils.get_cutout(data, src, w, peak_search_box_size // 2)
+    peak = peak_cutout.max()
+    return peak, rms
