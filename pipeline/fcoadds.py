@@ -12,6 +12,15 @@ WORK_DIR = Path('/lustre/celery')
 17.992 - 31.773
 31.773 - 54.742
 54.742 - 86.899
+
+In [2]: spws[3]
+Out[2]: '27MHz'
+In [3]: spws[4]
+Out[3]: '32MHz'
+In [4]: spws[9]
+Out[4]: '55MHz'
+In [5]: spws[-1]
+Out[5]: '82MHz'
 """
 BAND1 = spws[1:4]
 BAND2 = spws[4:9]
@@ -28,7 +37,7 @@ def fits_for_band(band: List[str], parts:str, parent: Path) -> List[str]:
 if __name__ == '__main__':
     for pol in ('I', 'V'):
         parent = WORK_DIR / f'{pol}.image.fits/'
-        fits_paths = parent.glob('50MHz/2024-05-??/??/*fits')
+        fits_paths = parent.glob('50MHz/2024-04-??/??/*fits')
         for p in fits_paths:
             for band in (BAND1, BAND2, BAND3):
                 to_coadd = fits_for_band(band, '/'.join(p.parts[5:]), parent)
