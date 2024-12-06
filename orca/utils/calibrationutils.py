@@ -11,6 +11,10 @@ from casatools import componentlist
 
 from orca.utils.beam import WoodyBeam as beam
 
+import re
+import os
+import astropy.units as u
+
 SRC_LIST = [{'label': 'CasA', 'flux': 16530, 'alpha': -0.72, 'ref_freq': 80.0,
              'position': 'J2000 23h23m24s +58d48m54s'},
             {'label': 'CygA', 'flux': 16300, 'alpha': -0.58, 'ref_freq': 80.0,
@@ -177,3 +181,67 @@ def _flux80_47(flux_hi, sp, output_freq, ref_freq):
     # given a flux at 80 MHz and a sp_index,
     # return the flux at MS center-frequency.
     return flux_hi * 10 ** (sp * math.log(output_freq/ref_freq, 10))
+
+
+
+def parse_filename(filename):
+    pattern = r'(\d{8})_(\d{6})_.*\.ms'
+    #match = re.match(pattern, filename)
+    base_fname = os.path.basename(filename)
+    match = re.match(pattern, base_fname)
+    if not match:
+        raise ValueError("Filename does not match the expected format 'YYYYMMDD_HHMMSS_*.ms'")
+    date_str, time_str = match.groups()
+    iso_time = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{time_str[:2]}:{time_str[2:4]}:{time_str[4:6]}"
+    return iso_time
+
+def get_lst_from_filename(filename):
+    utc_time_iso = parse_filename(filename)
+    time = Time(utc_time_iso, format='isot', scale='utc')
+    lst = time.sidereal_time('apparent', longitude=OVRO_LWA_LOCATION.lon)
+    return lst
+
+def source_ra_in_hours(position_str):
+    parts = position_str.split()
+    if len(parts) != 3:
+        raise ValueError("Position string not in expected 'J2000 RA DEC' format.")
+    ra_str, dec_str = parts[1], parts[2]
+    coord = SkyCoord(ra_str, dec_str, frame=ICRS)
+    return coord.ra.hour
+
+def is_within_transit_window(filename, window_minutes=4):
+    lst = get_lst_from_filename(filename).hour
+    half_window_hours = (window_minutes / 2.) / 60.0
+    in_window_sources = []
+    for src in SRC_LIST:
+        ra_h = source_ra_in_hours(src['position'])
+        diff = abs((lst - ra_h + 12) % 24 - 12)
+        if diff <= half_window_hours:
+            in_window_sources.append(src)
+    return in_window_sources
+
+def get_relative_path(ms_path):
+    # Extract the sub-path starting after '/slow/' or '/slow-averaged/'
+    # For example, from '/lustre/pipeline/slow/73MHz/2024-11-29/00/20241129_000005_73MHz.ms'
+    # we get '73MHz/2024-11-29/00/20241129_000005_73MHz.ms'
+    if '/slow-averaged/' in ms_path:
+        parts = ms_path.split('/slow-averaged/', 1)
+        relative_path = parts[1].strip('/')
+        return relative_path
+    # If not found, fallback to '/slow/'
+    elif '/slow/' in ms_path:
+        parts = ms_path.split('/slow/', 1)
+        relative_path = parts[1].strip('/')
+        return relative_path
+    else:
+        raise ValueError("Input MS path does not contain '/slow/' or '/slow-averaged/'")
+
+
+def build_output_paths(ms_path, base_output_dir='/lustre/pipeline/slow-averaged/'):
+    relative_path = get_relative_path(ms_path)
+    rel_dir = os.path.dirname(relative_path)  # e.g. '73MHz/2024-11-29/00'
+    ms_base = os.path.splitext(os.path.basename(relative_path))[0]  # e.g. '20241129_000005_73MHz'
+    output_dir = os.path.join(base_output_dir, rel_dir)
+    os.makedirs(output_dir, exist_ok=True)
+    return output_dir, ms_base
+
