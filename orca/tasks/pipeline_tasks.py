@@ -27,6 +27,32 @@ def copy_ms_task(original_ms: str, base_output_dir: str = '/lustre/pipeline/slow
     return copied_ms
 
 @app.task
+def copy_ms_nighttime_task(original_ms: str) -> str:
+    """
+    Copy the MS file to the same directory with a new name.
+    The copied file will have '_copy' appended to the base name.
+
+    Example:
+        original_ms = '/lustre/pipeline/night-time/73MHz/2023-11-21/03/20231121_031000_73MHz.ms'
+        copied_ms = '/lustre/pipeline/night-time/73MHz/2023-11-21/03/20231121_031000_73MHz_copy.ms'
+
+    Returns:
+        str: The path to the copied MS.
+    """
+    # Extract directory and filename
+    dir_name = os.path.dirname(original_ms)  # e.g., /lustre/pipeline/night-time/73MHz/2023-11-21/03
+    base_name = os.path.basename(original_ms)  # e.g., 20231121_031000_73MHz.ms
+    name, ext = os.path.splitext(base_name)  # ('20231121_031000_73MHz', '.ms')
+
+    # Create the new filename with _copy appended
+    copied_ms = os.path.join(dir_name, f"{name}_copy{ext}")  # /lustre/pipeline/night-time/73MHz/2023-11-21/03/20231121_031000_73MHz_copy.ms
+
+    # Copy the directory (measurement set) from the original to the new location
+    shutil.copytree(original_ms, copied_ms)
+
+    return copied_ms
+
+@app.task
 def remove_ms_task(ms_tuple: tuple) -> str:
     # ms_tuple = (original_ms, averaged_ms)
     import shutil
@@ -49,6 +75,12 @@ def flag_with_aoflagger_task(ms: str, strategy: str='/opt/share/aoflagger/strate
 def save_flag_metadata_task(ms: str) -> str:
     output_dir, ms_base = build_output_paths(ms)
     # Pass output_dir to the save_flag_metadata function
+    return save_flag_metadata(ms, output_dir=output_dir)
+
+@app.task
+def save_flag_metadata_nighttime_task(ms: str) -> str:
+    # Use a different base output directory for night-time
+    output_dir, ms_base = build_output_paths(ms, base_output_dir='/lustre/pipeline/night-time/averaged/')
     return save_flag_metadata(ms, output_dir=output_dir)
 
 
@@ -83,7 +115,13 @@ def average_frequency_task(ms: str, chanbin: int = 4) -> str:
     # Return a tuple: (original_ms, averaged_ms)
     return (ms, averaged_ms)    
 
-
+@app.task
+def average_frequency_nighttime_task(ms: str, chanbin: int = 4) -> str:
+    output_dir, ms_base = build_output_paths(ms, base_output_dir='/lustre/pipeline/night-time/averaged/')
+    output_vis = os.path.join(output_dir, f"{ms_base}_averaged.ms")
+    averaged_ms = average_frequency(vis=ms, output_vis=output_vis, chanbin=chanbin)
+    # Return (original_ms, averaged_ms) to be consistent with remove_ms_task input
+    return (ms, averaged_ms)
 
 @app.task
 def change_phase_center_task(ms: str, new_phase_center: str) -> str:

@@ -221,21 +221,23 @@ def is_within_transit_window(filename, window_minutes=4):
     return in_window_sources
 
 def get_relative_path(ms_path):
-    # Extract the sub-path starting after '/slow/' or '/slow-averaged/'
-    # For example, from '/lustre/pipeline/slow/73MHz/2024-11-29/00/20241129_000005_73MHz.ms'
-    # we get '73MHz/2024-11-29/00/20241129_000005_73MHz.ms'
+    # Extract the sub-path starting after '/slow/', '/slow-averaged/', or '/night-time/'
+    # For example, from '/lustre/pipeline/night-time/73MHz/2023-11-21/03/20231121_000005_73MHz.ms'
+    # we get '73MHz/2023-11-21/03/20231121_000005_73MHz.ms'
     if '/slow-averaged/' in ms_path:
         parts = ms_path.split('/slow-averaged/', 1)
         relative_path = parts[1].strip('/')
         return relative_path
-    # If not found, fallback to '/slow/'
     elif '/slow/' in ms_path:
         parts = ms_path.split('/slow/', 1)
         relative_path = parts[1].strip('/')
         return relative_path
+    elif '/night-time/' in ms_path:
+        parts = ms_path.split('/night-time/', 1)
+        relative_path = parts[1].strip('/')
+        return relative_path
     else:
-        raise ValueError("Input MS path does not contain '/slow/' or '/slow-averaged/'")
-
+        raise ValueError("Input MS path does not contain '/slow/', '/slow-averaged/', or '/night-time/'")
 
 def build_output_paths(ms_path, base_output_dir='/lustre/pipeline/slow-averaged/'):
     relative_path = get_relative_path(ms_path)
