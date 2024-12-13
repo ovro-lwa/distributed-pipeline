@@ -135,4 +135,17 @@ def change_phase_center_task(ms: str, new_phase_center: str) -> str:
     except Exception as e:
         raise RuntimeError(f"Failed to change phase center for {ms}: {e}")
 
-
+@app.task
+def extract_original_ms_task(ms_tuple: tuple) -> str:
+    """
+    Extract the original MS path from the tuple (original_ms, averaged_ms) 
+    returned by `average_frequency_task`.
+    
+    Args:
+        ms_tuple (tuple): A tuple where the first element is the original MS 
+                          and the second is the path to the averaged MS.
+    
+    Returns:
+        str: Path to the original MS.
+    """
+    return ms_tuple[0]
