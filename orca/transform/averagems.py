@@ -4,6 +4,9 @@ from casacore import tables
 from typing import List
 from os import path
 import logging
+import time
+import os
+from casatasks import mstransform
 log = logging.getLogger(__name__)
 
 
@@ -38,3 +41,35 @@ def average_ms(ms_list: List[str], ref_ms_index: int, out_ms: str, column: str, 
                         raise e
         out_table.putcol(column, averaged_data)
     return path.abspath(out_ms)
+
+
+def average_frequency(vis: str, output_vis: str, chanbin: int = 4) -> str:
+    """
+    Perform frequency averaging on the given measurement set (MS).
+
+    Parameters:
+        vis (str): Path to the input MS file.
+        output_vis (str): Path to the output averaged MS file.
+        chanbin (int): Number of channels to average.
+
+    Returns:
+        str: Path to the averaged MS file.
+    """
+    log.info(f"[Averaging] Starting frequency averaging for: {vis}")
+    start_time = time.time()
+
+    # Perform frequency averaging
+    mstransform(
+        vis=vis,
+        outputvis=output_vis,
+        chanaverage=True,     # Enable channel averaging
+        chanbin=chanbin,      # Average chanbin input channels into one
+        datacolumn='all'      # Process all available data columns
+    )
+
+    elapsed_time = time.time() - start_time
+    log.info(f"[Averaging] Completed frequency averaging for: {vis}")
+    log.info(f"[Averaging] Averaged MS created at: {output_vis}")
+    log.info(f"[Averaging] Time taken: {elapsed_time:.2f} seconds.")
+
+    return output_vis

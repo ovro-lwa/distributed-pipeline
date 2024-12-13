@@ -4,7 +4,6 @@ from orca.configmanager import queue_config
 
 CELERY_APP_NAME = 'orca'
 
-# TODO: what if I import a module that imports orca.transform.*?
 
 app = Celery(CELERY_APP_NAME,
              broker=queue_config.broker_uri,
@@ -14,7 +13,8 @@ app = Celery(CELERY_APP_NAME,
                       'orca.tasks.fortests',
                       'orca.transform.spectrum',
                       'orca.transform.imaging',
-                      'orca.transform.photometry'])
+                      'orca.transform.photometry',
+                      'orca.tasks.pipeline_tasks'])
 
 # Optional configuration, see the application user guide.
 app.conf.update(
