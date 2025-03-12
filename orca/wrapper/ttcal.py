@@ -4,32 +4,36 @@ import subprocess
 import logging
 import os
 
-log = logging.getLogger(__name__)
-
-TTCAL_EXEC = '/opt/astro/mwe/bin/ttcal-0.3.0'
-
+TTCAL_EXEC = '/opt/devel/pipeline/envs/julia060/bin/ttcal.jl'
 
 def peel_with_ttcal(ms: str, sources: str):
     """Use TTCal to peel sources.
-
+    
     Args:
         ms: Path to the measurement set.
         sources: Path to the sources.json file.
-
+    
     Returns: The path to the measurement set because TTCal reads from and writes to it.
-
     """
     new_env = dict(os.environ, LD_LIBRARY_PATH='/opt/astro/mwe/usr/lib64:/opt/astro/lib/',
                    AIPSPATH='/opt/astro/casa-data dummy dummy')
-    proc = subprocess.Popen([TTCAL_EXEC, 'peel', ms, sources, '--beam', 'sine', '--maxiter', '50',
-                             '--tolerance', '1e-4', '--minuvw', '10'], env=new_env,
-                            stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+
+    julia_path = '/opt/devel/pipeline/envs/julia060/bin/julia'
+
+    proc = subprocess.Popen(
+        [julia_path, TTCAL_EXEC, 'peel', ms, sources, '--beam', 'sine', '--maxiter', '50',
+         '--tolerance', '1e-4', '--minuvw', '10'],
+        env=new_env,
+        stderr=subprocess.PIPE,
+        stdout=subprocess.PIPE
+    )
     try:
         stdoutdata, stderrdata = proc.communicate()
-        if proc.returncode is not 0:
+        if proc.returncode != 0:
             logging.error(f'Error in TTCal: {stderrdata.decode()}')
             logging.info(f'stdout is {stdoutdata.decode()}')
             raise Exception('Error in TTCal.')
     finally:
         proc.terminate()
     return ms
+
