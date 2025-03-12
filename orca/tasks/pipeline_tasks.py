@@ -13,6 +13,8 @@ from orca.wrapper import change_phase_centre
 from orca.utils.calibrationutils import build_output_paths
 from typing import List
 import shutil
+from orca.utils.calibrationutils import is_within_transit_window, get_lst_from_filename, get_relative_path
+
 
 @app.task
 def copy_ms_task(original_ms: str, base_output_dir: str = '/lustre/pipeline/slow-averaged/') -> str:
@@ -52,33 +54,37 @@ def copy_ms_nighttime_task(original_ms: str) -> str:
 
     return copied_ms
 
-@app.task
-def remove_ms_task(ms_tuple: tuple) -> str:
-    # ms_tuple = (original_ms, averaged_ms)
-    import shutil
-    original_ms, averaged_ms = ms_tuple
-    shutil.rmtree(original_ms, ignore_errors=True)
-    # Return the averaged_ms path to keep track of it
-    return averaged_ms
+#@app.task
+#def remove_ms_task(ms_tuple: tuple) -> str:
+#    # ms_tuple = (original_ms, averaged_ms)
+#    import shutil
+#    original_ms, averaged_ms = ms_tuple
+#    shutil.rmtree(original_ms, ignore_errors=True)
+#    # Return the averaged_ms path to keep track of it
+#    return averaged_ms
 
 
 @app.task
 def flag_ants_task(ms: str, ants: List[int]) -> str:
+    """Flag antennas in the measurement set using the provided antenna indices"""
     return original_flag_ants(ms, ants)
 
 
 @app.task
-def flag_with_aoflagger_task(ms: str, strategy: str='/opt/share/aoflagger/strategies/nenufar-lite.lua', in_memory: bool=False, n_threads:int=5) -> str:
+def flag_with_aoflagger_task(ms: str, strategy: str='/opt/share/aoflagger/strategies/nenufar-lite.lua', in_memory: bool=False, n_threads:int=1) -> str:
+    """Apply AOFlagger on the measurement set with specified strategy and options"""
     return flag_with_aoflagger(ms, strategy=strategy, in_memory=in_memory, n_threads=n_threads)
 
 @app.task
 def save_flag_metadata_task(ms: str) -> str:
+    """Save flag metadata for the measurement set and return the updated path"""
     output_dir, ms_base = build_output_paths(ms)
     # Pass output_dir to the save_flag_metadata function
     return save_flag_metadata(ms, output_dir=output_dir)
 
 @app.task
 def save_flag_metadata_nighttime_task(ms: str) -> str:
+    """Save flag metadata for a nighttime measurement set using the nighttime output directory"""
     # Use a different base output directory for night-time
     output_dir, ms_base = build_output_paths(ms, base_output_dir='/lustre/pipeline/night-time/averaged/')
     return save_flag_metadata(ms, output_dir=output_dir)
@@ -96,6 +102,7 @@ def applycal_data_col_task(ms: str, gaintable: str) -> str:
 @app.task
 def wsclean_task(ms: str, out_dir: str, filename_prefix: str, extra_args: List[str],
                  num_threads: int, mem_gb: int) -> None:
+    """Run wsclean imaging on the measurement set and return the original MS path"""
     original_wsclean([ms], out_dir, filename_prefix, extra_args, num_threads, mem_gb)
     return ms
     #return original_wsclean([ms], out_dir, filename_prefix, extra_args, num_threads, mem_gb)
@@ -109,6 +116,7 @@ def peel_with_ttcal_task(ms: str, sources: str) -> str:
 
 @app.task
 def average_frequency_task(ms: str, chanbin: int = 4) -> str:
+    """Perform frequency averaging on the measurement set; returns a tuple (original_ms, averaged_ms)"""
     output_dir, ms_base = build_output_paths(ms)
     output_vis = os.path.join(output_dir, f"{ms_base}_averaged.ms")
     averaged_ms = average_frequency(vis=ms, output_vis=output_vis, chanbin=chanbin)
@@ -117,6 +125,7 @@ def average_frequency_task(ms: str, chanbin: int = 4) -> str:
 
 @app.task
 def average_frequency_nighttime_task(ms: str, chanbin: int = 4) -> str:
+    """Perform frequency averaging on a nighttime measurement set; returns (original_ms, averaged_ms)"""
     output_dir, ms_base = build_output_paths(ms, base_output_dir='/lustre/pipeline/night-time/averaged/')
     output_vis = os.path.join(output_dir, f"{ms_base}_averaged.ms")
     averaged_ms = average_frequency(vis=ms, output_vis=output_vis, chanbin=chanbin)
@@ -149,3 +158,217 @@ def extract_original_ms_task(ms_tuple: tuple) -> str:
         str: Path to the original MS.
     """
     return ms_tuple[0]
+
+
+@app.task
+def run_entire_pipeline_on_one_cpu(vis: str, window_minutes: int=4, start_hour: int=11, end_hour: int=14, chanbin: int=4) -> str:
+    """
+    A single-task pipeline runner that combines all steps into one execution on the same node (one CPU).
+    It uses the existing tasks but calls them directly in a single function.
+    """
+    def is_within_lst_range(ms: str, start_hour=11, end_hour=14) -> bool:
+        lst = get_lst_from_filename(ms).hour
+        return (start_hour <= lst <= end_hour)
+
+    sources_in_window = is_within_transit_window(vis, window_minutes=window_minutes)
+    in_lst_range = is_within_lst_range(vis, start_hour, end_hour)
+
+    if sources_in_window or in_lst_range:
+        # Scenario i)
+        # Copy -> Flag -> Save flag meta -> Average freq -> Remove
+        copied_ms = copy_ms_nighttime_task(vis)
+        flagged_ms = flag_with_aoflagger_task(copied_ms)
+        flagged_ms = save_flag_metadata_nighttime_task(flagged_ms)
+        ms_tuple = average_frequency_nighttime_task(flagged_ms, chanbin=chanbin)
+        averaged_ms = remove_ms_task(ms_tuple)  # returns averaged_ms
+        return averaged_ms
+    else:
+        # Scenario ii)
+        # Flag original -> Save flag meta -> Average freq -> Remove original
+        flagged_ms = flag_with_aoflagger_task(vis)
+        flagged_ms = save_flag_metadata_nighttime_task(flagged_ms)
+        ms_tuple = average_frequency_nighttime_task(flagged_ms, chanbin=chanbin)
+        averaged_ms = remove_ms_task(ms_tuple)
+        return averaged_ms
+
+@app.task
+def copy_ms_to_nvme_task(original_ms: str, nvme_base_dir: str = '/fast/pipeline/') -> str:
+    """
+    Copy the MS from Lustre to NVMe (fast) storage, placing it directly in /fast/pipeline/.
+    """
+    ms_name = os.path.basename(original_ms)  # just get the filename
+    nvme_ms = os.path.join(nvme_base_dir, ms_name)
+    shutil.copytree(original_ms, nvme_ms)
+    return nvme_ms
+
+@app.task
+def save_flag_metadata_nvme_task(ms: str) -> str:
+    """
+    Save flag metadata on NVMe directly in /fast/pipeline/.
+    """
+    ms_base = os.path.splitext(os.path.basename(ms))[0]
+    output_file = os.path.join('/fast/pipeline', f"{ms_base}_flagmeta.bin")
+    # reuse the save_flag_metadata function but specify the output_dir as '/fast/pipeline'
+    save_flag_metadata(ms, output_dir='/fast/pipeline')
+    return ms
+
+@app.task
+def average_frequency_nvme_task(ms: str, chanbin: int = 4) -> tuple:
+    """
+    Average frequency on NVMe, storing output in /fast/pipeline/.
+    """
+    ms_base = os.path.splitext(os.path.basename(ms))[0]
+    output_vis = os.path.join('/fast/pipeline', f"{ms_base}_averaged.ms")
+    averaged_ms = average_frequency(vis=ms, output_vis=output_vis, chanbin=chanbin)
+    return (ms, averaged_ms)
+
+@app.task
+def remove_ms_task(ms_tuple: tuple) -> str:
+    """Remove the original measurement set directory and return the averaged MS path"""
+    original_ms, averaged_ms = ms_tuple
+    shutil.rmtree(original_ms, ignore_errors=True)
+    return averaged_ms
+
+@app.task
+def run_entire_pipeline_on_one_cpu_nvme(vis: str, window_minutes: int=4, start_hour: int=11, end_hour: int=14, chanbin: int=4) -> str:
+    """
+    NVMe-based pipeline run with simplified NVMe storage logic:
+    - Copy from Lustre to /fast/pipeline/ with no subdirectories.
+    - Flag, save metadata, average on NVMe (all in /fast/pipeline/).
+    - Move the final averaged MS and flag metadata back to /lustre/pipeline/night-time/averaged/ 
+      using the original vis path to determine final directory structure.
+    - If scenario ii) (not in window or LST range), remove original MS from Lustre.
+    """
+
+    def is_within_lst_range(ms: str, start_hour=11, end_hour=14) -> bool:
+        lst = get_lst_from_filename(ms).hour
+        return (start_hour <= lst <= end_hour)
+
+    sources_in_window = is_within_transit_window(vis, window_minutes=window_minutes)
+    in_lst_range = is_within_lst_range(vis, start_hour, end_hour)
+
+    # Determine final output paths on Lustre based on original vis
+    final_output_dir, ms_base = build_output_paths(vis, base_output_dir='/lustre/pipeline/night-time/averaged/')
+    final_averaged_ms = os.path.join(final_output_dir, f"{ms_base}_averaged.ms")
+
+    # Copy from Lustre to NVMe
+    nvme_ms = copy_ms_to_nvme_task(vis)
+
+    # Flag on NVMe
+    flagged_ms = flag_with_aoflagger(ms=nvme_ms, strategy='/opt/share/aoflagger/strategies/nenufar-lite.lua', in_memory=False, n_threads=1)
+
+    # Save flag metadata on NVMe
+    flagged_ms = save_flag_metadata_nvme_task(flagged_ms)
+
+    # Average frequency on NVMe
+    ms_tuple = average_frequency_nvme_task(flagged_ms, chanbin=chanbin)
+
+    # Remove the original NVMe MS (the first in the tuple)
+    averaged_ms_on_nvme = remove_ms_task(ms_tuple)
+
+    # Move the final averaged MS from NVMe back to Lustre
+    os.makedirs(os.path.dirname(final_averaged_ms), exist_ok=True)
+    shutil.move(averaged_ms_on_nvme, final_averaged_ms)
+
+    # Move the flag metadata file from NVMe to the exact same directory where the averaged MS was moved
+    from os.path import basename, dirname, join, splitext
+
+    # Use final_output_dir instead of recalculating it
+    ms_base_no_averaged = os.path.splitext(os.path.basename(vis))[0]  # Base name of the original MS
+    nvme_meta_file = os.path.join('/fast/pipeline', f"{ms_base_no_averaged}_flagmeta.bin")
+
+    # Use final_output_dir to place the flag metadata
+    final_flag_meta = os.path.join(final_output_dir, f"{ms_base_no_averaged}_flagmeta.bin")
+
+    if os.path.exists(nvme_meta_file):
+        os.makedirs(final_output_dir, exist_ok=True)  # Use final_output_dir directly
+        shutil.move(nvme_meta_file, final_flag_meta)  # Move to the final directory
+
+    # If not in transit window and not in LST range (scenario ii), remove the original MS from Lustre
+    if not (sources_in_window or in_lst_range):
+        shutil.rmtree(vis, ignore_errors=True)
+
+    return final_averaged_ms
+
+
+
+@app.task
+def copy_ms_to_calibration_task(original_ms: str, calibration_base_dir: str = '/lustre/pipeline/calibration/') -> str:
+    """
+    Copy the MS from its original slow directory to the calibration directory
+    preserving frequency/date/hour structure.
+    """
+    # Extract relative path from the original_ms
+    relative_path = get_relative_path(original_ms)  # e.g. "13MHz/2024-12-17/00/20241217_001153_13MHz.ms"
+    calibration_ms = os.path.join(calibration_base_dir, relative_path)
+    os.makedirs(os.path.dirname(calibration_ms), exist_ok=True)
+    shutil.copytree(original_ms, calibration_ms)
+    return calibration_ms
+
+
+
+def get_utc_hour_from_path(ms_path: str) -> int:
+    """Extract the UTC hour from the measurement set path (assumes the hour is the second-to-last path component)"""
+    parts = ms_path.split('/')
+    hour_str = parts[-2]
+    return int(hour_str)
+
+
+@app.task
+def run_pipeline_slow_on_one_cpu_nvme(vis: str, start: int = 1, end: int = 14, chanbin: int = 4) -> str:
+    """
+    A pipeline that:
+    - Checks if MS is a calibrator; if yes, copy to calibration directory without removing original.
+    - If MS UTC hour is in [start..end], process it on NVMe: copy to NVMe, flag, save metadata, average.
+      After averaging, move results to /lustre/pipeline/slow-averaged/.
+    - Do not remove the original MS from /lustre/pipeline/slow/.
+    - Remove the NVMe copy after processing.
+    """
+
+    # Check if calibrator
+    sources_in_window = is_within_transit_window(vis, window_minutes=4)
+    if sources_in_window:
+        # Copy to calibration directory
+        copy_ms_to_calibration_task(vis)
+
+    # Check the UTC hour
+    utc_hour = get_utc_hour_from_path(vis)
+
+    # Process if hour in [start..end]
+    if start <= utc_hour <= end:
+        # Copy to NVMe
+        nvme_ms = copy_ms_to_nvme_task(vis)
+
+        # Flag on NVMe
+        flagged_ms = flag_with_aoflagger_task.run(nvme_ms, strategy='/opt/share/aoflagger/strategies/nenufar-lite.lua', in_memory=False, n_threads=1)
+
+        # Save flag metadata on NVMe
+        flagged_ms = save_flag_metadata_nvme_task.run(flagged_ms)
+
+        # Average frequency on NVMe
+        ms_tuple = average_frequency_nvme_task(flagged_ms, chanbin=chanbin)
+        # ms_tuple = (original_nvme_ms, averaged_ms_on_nvme)
+
+        # Remove the original NVMe MS
+        averaged_ms_on_nvme = remove_ms_task(ms_tuple)
+        # Now we have the averaged MS on NVMe and the original NVMe MS is removed
+
+        # Move the final averaged MS and flag metadata from NVMe back to Lustre (slow-averaged)
+        final_output_dir, ms_base = build_output_paths(vis, base_output_dir='/lustre/pipeline/slow-averaged/')
+        final_averaged_ms = os.path.join(final_output_dir, f"{ms_base}_averaged.ms")
+
+        os.makedirs(os.path.dirname(final_averaged_ms), exist_ok=True)
+        shutil.move(averaged_ms_on_nvme, final_averaged_ms)
+
+        # Move the flag metadata file from NVMe to slow-averaged
+        ms_base_no_averaged = os.path.splitext(os.path.basename(vis))[0]
+        nvme_meta_file = os.path.join('/fast/pipeline', f"{ms_base_no_averaged}_flagmeta.bin")
+        final_flag_meta = os.path.join(final_output_dir, f"{ms_base_no_averaged}_flagmeta.bin")
+
+        if os.path.exists(nvme_meta_file):
+            shutil.move(nvme_meta_file, final_flag_meta)
+
+        return final_averaged_ms
+    else:
+        # Hour not in [start..end], do nothing special, just return the original vis path
+        return vis

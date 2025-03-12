@@ -59,31 +59,32 @@ for vis in ms_files:
 
     all_chains.append(pipeline_chain)
 
-if all_chains:
-    print("Submitting tasks for all MS files...")
-    group_result = group(all_chains)()
+if __name__ == "__main__":
+    if all_chains:
+        print("Submitting tasks for all MS files...")
+        group_result = group(all_chains)()
 
-    # Wait for all tasks to complete
-    print("Waiting for tasks to finish...")
-    try:
-        group_result.join()
-        print("All tasks have been processed successfully!")
-    except Exception as e:
-        logging.error(f"Error processing tasks: {e}")
-        print(f"Error processing tasks: {e}")
+        # Wait for all tasks to complete
+        print("Waiting for tasks to finish...")
+        try:
+            group_result.join()
+            print("All tasks have been processed successfully!")
+        except Exception as e:
+            logging.error(f"Error processing tasks: {e}")
+            print(f"Error processing tasks: {e}")
 
-        # Check individual task results
-        for result in group_result.results:
-            if not result.successful():
-                try:
-                    exc = result.result
-                    task_name = result.task_id
-                    logging.error(f"Task {task_name} failed with error: {exc}")
-                    print(f"Task {task_name} failed with error: {exc}")
-                except Exception as sub_e:
-                    logging.error(f"Unable to retrieve task result: {sub_e}")
-                    print(f"Unable to retrieve task result: {sub_e}")
+            # Check individual task results
+            for result in group_result.results:
+                if not result.successful():
+                    try:
+                        exc = result.result
+                        task_name = result.task_id
+                        logging.error(f"Task {task_name} failed with error: {exc}")
+                        print(f"Task {task_name} failed with error: {exc}")
+                    except Exception as sub_e:
+                        logging.error(f"Unable to retrieve task result: {sub_e}")
+                        print(f"Unable to retrieve task result: {sub_e}")
 
-else:
-    print("No tasks to process.")
+    else:
+        print("No tasks to process.")
 

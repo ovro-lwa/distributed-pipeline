@@ -7,7 +7,14 @@ import os
 TTCAL_EXEC = '/opt/devel/pipeline/envs/julia060/bin/ttcal.jl'
 
 def peel_with_ttcal(ms: str, sources: str):
-    """Use TTCal to peel sources."""
+    """Use TTCal to peel sources.
+    
+    Args:
+        ms: Path to the measurement set.
+        sources: Path to the sources.json file.
+    
+    Returns: The path to the measurement set because TTCal reads from and writes to it.
+    """
     new_env = dict(os.environ, LD_LIBRARY_PATH='/opt/astro/mwe/usr/lib64:/opt/astro/lib/',
                    AIPSPATH='/opt/astro/casa-data dummy dummy')
 

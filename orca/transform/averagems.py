@@ -55,8 +55,6 @@ def average_frequency(vis: str, output_vis: str, chanbin: int = 4) -> str:
     Returns:
         str: Path to the averaged MS file.
     """
-    log.info(f"[Averaging] Starting frequency averaging for: {vis}")
-    start_time = time.time()
 
     # Perform frequency averaging
     mstransform(
@@ -67,9 +65,6 @@ def average_frequency(vis: str, output_vis: str, chanbin: int = 4) -> str:
         datacolumn='all'      # Process all available data columns
     )
 
-    elapsed_time = time.time() - start_time
-    log.info(f"[Averaging] Completed frequency averaging for: {vis}")
     log.info(f"[Averaging] Averaged MS created at: {output_vis}")
-    log.info(f"[Averaging] Time taken: {elapsed_time:.2f} seconds.")
 
     return output_vis

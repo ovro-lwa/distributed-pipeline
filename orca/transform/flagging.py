@@ -126,19 +126,17 @@ def save_flag_metadata(ms: str, output_dir: str = '/lustre/pipeline/slow-average
     base_name = os.path.splitext(os.path.basename(ms))[0]  # e.g., "20241127_220727_73MHz"
     output_file = os.path.join(output_dir, f"{base_name}_flagmeta.bin")
 
-    tb = table()
-    tb.open(ms)
-    flags = tb.getcol('FLAG')  # (pol, chan, row)
-    tb.close()
+    with tables.table(ms, ack=False, readonly=True) as tb:
+        flags = tb.getcol('FLAG')  # Shape: (pol, chan, row)
+                
+    #total_points = flags.size
+    #flagged_points = np.sum(flags)
+    #percentage_flagged = (flagged_points / total_points) * 100.0
 
-    total_points = flags.size
-    flagged_points = np.sum(flags)
-    percentage_flagged = (flagged_points / total_points) * 100.0
-
-    log.info(f"MS: {ms}")
-    log.info(f"Total data points: {total_points}")
-    log.info(f"Flagged points: {flagged_points}")
-    log.info(f"Percentage of flagged data: {percentage_flagged:.2f}%")
+    #log.info(f"MS: {ms}")
+    #log.info(f"Total data points: {total_points}")
+    #log.info(f"Flagged points: {flagged_points}")
+    #log.info(f"Percentage of flagged data: {percentage_flagged:.2f}%")
 
     # Pack the flags into a binary format
     bit_packed = np.packbits(flags.flatten().astype(np.uint8))

@@ -54,18 +54,18 @@ def generate_filename_prefix(ms: str) -> str:
     filename_prefix = base_name.replace('.ms', '')
     return filename_prefix
 
+if __name__ == "__main__":
+    for vis in ms_files:
+        filename_prefix = generate_filename_prefix(vis)
 
-for vis in ms_files:
-    filename_prefix = generate_filename_prefix(vis)
-
-    pipeline_chain = chain(
-        flag_ants_task.s(vis, bad_antennas_list),
-        flag_with_aoflagger_task.s(strategy=strategy, in_memory=in_memory, n_threads=n_threads),
-        average_frequency_task.s(chanbin=chanbin), # averaging in freq step 
-        applycal_data_col_task.s(gaintable=bcal_file), 
-        peel_with_ttcal_task.s(sources='/home/pipeline/sources.json'),  # peeling step
-                wsclean_task.s(out_dir=out_dir, filename_prefix=filename_prefix, extra_args=extra_args,
-                       num_threads=num_threads, mem_gb=mem_gb),
-        change_phase_center_task.s(new_phase_center=common_phase_center)
-    )
-    pipeline_chain.apply_async()
+        pipeline_chain = chain(
+            flag_ants_task.s(vis, bad_antennas_list),
+            flag_with_aoflagger_task.s(strategy=strategy, in_memory=in_memory, n_threads=n_threads),
+            average_frequency_task.s(chanbin=chanbin), # averaging in freq step 
+            applycal_data_col_task.s(gaintable=bcal_file), 
+            peel_with_ttcal_task.s(sources='/home/pipeline/sources.json'),  # peeling step
+                    wsclean_task.s(out_dir=out_dir, filename_prefix=filename_prefix, extra_args=extra_args,
+                        num_threads=num_threads, mem_gb=mem_gb),
+            change_phase_center_task.s(new_phase_center=common_phase_center)
+        )
+        pipeline_chain.apply_async()

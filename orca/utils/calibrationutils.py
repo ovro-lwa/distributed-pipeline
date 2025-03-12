@@ -184,7 +184,7 @@ def _flux80_47(flux_hi, sp, output_freq, ref_freq):
 
 
 
-def parse_filename(filename):
+'''def parse_filename(filename):
     pattern = r'(\d{8})_(\d{6})_.*\.ms'
     #match = re.match(pattern, filename)
     base_fname = os.path.basename(filename)
@@ -194,6 +194,21 @@ def parse_filename(filename):
     date_str, time_str = match.groups()
     iso_time = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{time_str[:2]}:{time_str[2:4]}:{time_str[4:6]}"
     return iso_time
+'''
+
+def parse_filename(filename):
+    """
+    Parse a filename of the form YYYYMMDD_HHMMSS_anything.ms and extract the UTC time.
+    """
+    pattern = r'(\d{8})_(\d{6})_([^_]+)\.ms'  # Updated pattern to avoid greediness
+    base_fname = os.path.basename(filename)  # Extracts just the filename
+    match = re.match(pattern, base_fname)
+    if not match:
+        raise ValueError(f"Filename does not match the expected format 'YYYYMMDD_HHMMSS_*.ms'. Got: {base_fname}")
+    date_str, time_str, extra = match.groups()
+    iso_time = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{time_str[:2]}:{time_str[2:4]}:{time_str[4:6]}"
+    return iso_time
+
 
 def get_lst_from_filename(filename):
     utc_time_iso = parse_filename(filename)
@@ -234,6 +249,10 @@ def get_relative_path(ms_path):
         return relative_path
     elif '/night-time/' in ms_path:
         parts = ms_path.split('/night-time/', 1)
+        relative_path = parts[1].strip('/')
+        return relative_path
+    elif '/fast/pipeline/' in ms_path:
+        parts = ms_path.split('/fast/pipeline/', 1)
         relative_path = parts[1].strip('/')
         return relative_path
     else:
