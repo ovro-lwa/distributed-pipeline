@@ -1,28 +1,42 @@
-# orca
-[![Build Status](https://travis-ci.com/ovro-lwa/distributed-pipeline.svg?branch=main)](https://travis-ci.com/ovro-lwa/distributed-pipeline)
-[![codecov](https://codecov.io/gh/ovro-lwa/distributed-pipeline/branch/main/graph/badge.svg)](https://codecov.io/gh/ovro-lwa/distributed-pipeline)
-[![Documentation Status](https://readthedocs.org/projects/distributed-pipeline/badge/?version=latest)](https://distributed-pipeline.readthedocs.io/en/latest/?badge=latest)
+# ORCA — Tools for distributed OVRO-LWA data processing
 
-## Set up development environment on calim
+## Table of Contents
+- [Installation and Environment Setup](#installation-and-environment-setup)
+- [Run with celery](#run-with-celery)
+- [Code Structure](#code-structure)
+- [Developer & Testing Guide](#developer--testing-guide)
+
+## Installation and Environment Setup
+
+This repository serves as the central place for running and developing the OVRO-LWA data reduction and calibration pipelines.  
+A pre-configured environment is already available on Calim — see the [Developer & Testing Guide](#developer--testing-guide) for instructions and usage examples.  
+The following are instructions for setting up a new environment from scratch.
+
+
 If you have not done so, create a barebone python3.8 environment with conda.
 ```
 conda create --name py38_orca python=3.8 pipenv
 ```
 
 Activate with
+
 ```
 conda activate py38_orca
 ```
-Then checkout this repo and install
+
+Then checkout this repo:
+
 ```
-pip install -r requirements.txt
+git clone https://github.com/ovro-lwa/distributed-pipeline.git
+cd distributed-pipeline
 ```
 
-To run the tests, do
+Then install dependencies:
+
 ```
-pytest
+pip install -r requirements.txt
+pip install .
 ```
-which should run the tests and output a report.
 
 Copy `orca/default-orca-conf.yml` to your home directory and modify it with the correct rabbitMQ URI if you plan to run with celery. Otherwise you can run things as plain ole functions.
 
@@ -46,3 +60,12 @@ Celery admin notes are in `celery.md`. The submission session will show some log
 `orca` is where the wrappers and functions that do single units of work sit.
 
 `pipeline` is where the pipelines live and serve as useful examples for how to use celery.
+
+## Developer & Testing Guide
+
+For usage examples and how to test the pipeline without Celery, please refer to the [Usage Guide](usage_guide.md)
+
+
+
+
+

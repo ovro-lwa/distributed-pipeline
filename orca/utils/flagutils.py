@@ -3,7 +3,9 @@ import pandas as pd
 import numpy as np
 import os
 import matplotlib.pyplot as plt
-
+import subprocess
+import ast
+import textwrap
 
 FLAG_TABLE = '/opt/devel/yuping/ant_flags.csv'
 df = pd.read_csv(FLAG_TABLE, parse_dates=['date'])
@@ -110,4 +112,41 @@ def plot_flag_metadata_all_polarizations_subplot(flags: np.ndarray, output_dir: 
 # unpacked_flags = unpack_flag_metadata(input_file, original_shape)
 # plot_flag_metadata_all_polarizations_subplot(unpacked_flags, output_dir=None)  # Set output_dir to save the plot instead of displaying it
 
+def get_bad_antenna_numbers(date_time_str: str):
+    """
+    Run anthealth.get_badants from the 'development' conda environment and return numeric antenna IDs.
 
+    Args:
+        date_time_str (str): Date and time string in ISO format, e.g. '2025-01-28 19:20:04'
+
+    Returns:
+        List[int]: List of antenna numbers as integers
+    """
+    code = textwrap.dedent(f"""
+    from mnc import anthealth
+    from astropy.time import Time
+    dt = '{date_time_str}'
+    b = anthealth.get_badants('selfcorr', time=Time(dt, format='iso').mjd)
+    print(b[1])
+    """)
+
+    result = subprocess.run(
+        ["conda", "run", "-n", "development", "python", "-c", code],
+        capture_output=True, text=True
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(f"Error running command:\n{result.stderr}")
+
+    lines = result.stdout.strip().splitlines()
+    list_line = next((line for line in reversed(lines) if line.startswith("['LWA-")), None)
+
+    if not list_line:
+        raise ValueError(f"Could not find a valid list of bad antennas in output:\n{result.stdout}")
+
+    try:
+        raw_list = ast.literal_eval(list_line)
+        ant_numbers = [int(ant.split('-')[1][:-1]) for ant in raw_list]
+        return ant_numbers
+    except Exception as e:
+        raise ValueError(f"Failed to parse antenna list:\n{list_line}") from e
