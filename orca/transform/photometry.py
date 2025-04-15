@@ -1,13 +1,17 @@
-from typing import Optional
+from typing import Optional, Tuple, List
 import logging
 import warnings
 
 from astropy import wcs
 from astropy.io import fits
+from astropy.coordinates import SkyCoord, ICRS
+import matplotlib.pyplot as plt
+from astropy.wcs.utils import skycoord_to_pixel
 
 from orca.celery import app
 
 from orca.utils import fitsutils
+from orca.utils.coordutils import TAU_BOO
 import numpy as np
 
 PATCH_SIDE_SIZE = 12
@@ -85,3 +89,60 @@ def estimate_image_noise(arr: np.ndarray) -> float:
         The estimated noise.
     """
     return 1.4826 * np.median(np.abs(arr - np.median(arr)))
+
+@app.task
+def search_src(fn: str, src: SkyCoord, stats_box_size: int, peak_search_box_size: int) -> Tuple[float, float]:
+    data, header = fitsutils.read_image_fits(fn)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        w = wcs.WCS(header)
+        noise_cutout = fitsutils.get_cutout(data, src, w, stats_box_size // 2)
+        rms = estimate_image_noise(noise_cutout)
+        peak_cutout = fitsutils.get_cutout(data, src, w, peak_search_box_size // 2)
+        peak_cutout_flattened = peak_cutout.flatten()
+        peak = peak_cutout_flattened[np.argmax(np.abs(peak_cutout_flattened))]
+    return peak, rms
+
+def noise(im, stats_box_size, src, w):
+    noise_cutout = fitsutils.get_cutout(im, src, w, stats_box_size // 2)
+    return estimate_image_noise(noise_cutout)
+
+def make_fig(v_fns: List[str], src, stats_box_size, out_dir):
+    hw = 140 # half width of cutout
+    
+    s1 = SkyCoord('13h49m39.28s', '+21deg07m28.2s', frame=ICRS)
+    s2 = SkyCoord('13h57m4.71s',  '+19deg19m7.7s', frame=ICRS)
+    s3 = SkyCoord('13h54m40.61s', '+16deg14m44.9s', frame=ICRS)
+    for i, vfn in enumerate(v_fns):
+        im2, header2 = fitsutils.read_image_fits(vfn)
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            w = wcs.WCS(header2)
+        cutout2 = fitsutils.get_cutout(im2, src, w, hw)
+        im1, header1 = fitsutils.read_image_fits(vfn.replace('V', 'I'))
+        cutout1 = fitsutils.get_cutout(im1, src, w, hw)
+        rms = noise(im2, stats_box_size, src, w)
+        fig, axes = plt.subplots(1,2, figsize=(6,3))
+        for ax in axes:
+            ax.set_axis_off()
+        fig.subplots_adjust(wspace=0, hspace=0)
+
+        xy_s1 = np.array(skycoord_to_pixel(s1, w))
+        xy_s2 = np.array(skycoord_to_pixel(s2, w))
+        xy_s3 = np.array(skycoord_to_pixel(s3, w))
+        xy_center = np.array(skycoord_to_pixel(src, w))
+        
+        axes[0].imshow(cutout1, vmin=-2, vmax=8, origin='lower')
+        center = np.array([hw-1,hw-1])
+        axes[0].scatter(*(xy_s1 - xy_center + center), marker='+', color='k', s=100)
+        axes[0].scatter(*(xy_s2 - xy_center + center), marker='+', color='k', s=100)
+        axes[0].scatter(*(xy_s3 - xy_center + center), marker='+', color='k', s=100)
+        
+        axes[0].scatter(*center, marker='o', color='k', facecolor='none', s=200)
+        axes[1].scatter(*center, marker='o', color='k', facecolor='none', s=200)
+        
+        axes[1].imshow(cutout2, vmin=-2, vmax=2, origin='lower')
+        parts = vfn.split('/')
+        fig.suptitle(f'{parts[4]} {parts[7]} rms={rms:.3f}Jy')
+        plt.savefig(f'{out_dir}/{i:05d}.jpg')
+        plt.close(fig)

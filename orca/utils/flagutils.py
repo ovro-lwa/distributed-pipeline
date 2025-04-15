@@ -21,11 +21,13 @@ def get_bad_ants(date: datetime.date, sources=['AI-VAR', 'AI-LO']):
         A list of bad antenna corr numbers.
     """
     # Sigh, hardcoded gaps.
-    if datetime.date(2024, 5, 7) < date <= datetime.date(2024, 5, 11):
+    if date == datetime.date(2024, 1, 23):
+        date = datetime.date(2024, 1, 22)
+    elif datetime.date(2024, 5, 7) < date <= datetime.date(2024, 5, 11):
         date = datetime.date(2024, 5, 7)
-    if datetime.date(2024, 5, 11) < date < datetime.date(2024, 5, 15):
+    elif datetime.date(2024, 5, 11) < date < datetime.date(2024, 5, 15):
         date = datetime.date(2024, 5, 15)
-    if date > datetime.date(2024, 5, 20): # last available date
+    elif date > datetime.date(2024, 5, 20): # last available date
         date = datetime.date(2024, 5, 20)
     res = df[df['source'].isin(sources) & (df['date'] == str(date))]['corr_num'].sort_values().unique().tolist()
     if not res or len(res) == 0:
