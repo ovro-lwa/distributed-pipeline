@@ -2,6 +2,17 @@
 
 This guide is intended to serve as a single reference point for running the core ORCA functions, as well as facilitating testing and development in a unified environment.
 
+
+## Configuration and Environment activation
+
+If you haven’t done this already, copy the default configuration file before running any functions:
+
+```bash
+cp orca/default-orca-conf.yml ~/orca-conf.yml
+```
+
+See [README.md](../README.md#configuration-setup) for more details.
+
 The shared conda environment on calim is available at:
 
 ```
@@ -17,6 +28,8 @@ conda activate /opt/devel/pipeline/envs/py38_orca_nkosogor
 - [Change Phase Center](#change-phase-center)
 - [Imaging with WSClean](#imaging-with-wsclean)
 - [Peeling with TTCal](#peeling-with-ttcal)
+- [QA Plotting](#qa-plotting)
+
 
 
 ## Concatenation
@@ -93,6 +106,9 @@ clearcal(vis=ms, addmodel=True)
 
 # Add component list model to data
 ft(vis=ms, complist=cl_path, usescratch=True)
+
+# If the MS filename ends with '.ms', you can create the delay table name by replacing it with '.delay'
+delay_table = ms.replace('.ms', '.delay')
 
 # Solve for delay calibration
 gaincal(
@@ -186,4 +202,26 @@ sources_json = '/home/pipeline/sources.json'
 
 # Run TTCal peeling
 peel_with_ttcal(ms, sources_json)
+```
+
+## QA Plotting
+
+### Delay Calibration QA Plot
+
+Generates a PDF plot of delay (in nanoseconds) per antenna.
+
+```python
+from orca.transform.qa_plotting import plot_delay_vs_antenna
+
+plot_delay_vs_antenna("your_table.delay", output_pdf="delay_vs_antenna.pdf")
+```
+
+### Bandpass Calibration QA Plot
+
+Generates a multi-page PDF showing amplitude (log) and phase per antenna.
+
+```python
+from orca.transform.qa_plotting import plot_bandpass_to_pdf_amp_phase
+
+plot_bandpass_to_pdf_amp_phase("your_table.bandpass", pdf_path="./bandpass_QA.pdf", msfile="your_table.ms")
 ```

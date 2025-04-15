@@ -2,6 +2,7 @@
 
 ## Table of Contents
 - [Installation and Environment Setup](#installation-and-environment-setup)
+- [Configuration Setup](#configuration-setup)
 - [Run with celery](#run-with-celery)
 - [Code Structure](#code-structure)
 - [Developer & Testing Guide](#developer--testing-guide)
@@ -38,7 +39,24 @@ pip install -r requirements.txt
 pip install .
 ```
 
-Copy `orca/default-orca-conf.yml` to your home directory and modify it with the correct rabbitMQ URI if you plan to run with celery. Otherwise you can run things as plain ole functions.
+
+## Configuration Setup
+
+Copy the default configuration file to your home directory:
+
+```bash
+cp orca/default-orca-conf.yml ~/orca-conf.yml
+```
+
+If you plan to use Celery, edit the `queue:` section in `~/orca-conf.yml` and update:
+
+- `broker_uri` with your RabbitMQ URI
+- `result_backend_uri` with your Redis backend address
+
+If you are not using Celery, you can leave the `queue:` section unchanged.  
+It will not affect functionality unless Celery-based task execution is used.
+
+The configuration file is still required for settings related to telescope layout and executable paths.
 
 ## Run with celery
 Adding a function to orca also requires integrating it with celery. This [example commit](https://github.com/ovro-lwa/distributed-pipeline/commit/e1e577437bef3c19162bdab1cd3973bee2128c04) shows the way to add and integrate a new function. A good way to develop code for celery is to create a function with a unit test An function can be made into a task with the celery application decorator `@app.task` (`app` is imported from the `celery.py` module in this repo). You can call the decorated function like a regular function, test it locally, etc.
