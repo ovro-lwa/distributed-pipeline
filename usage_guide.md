@@ -11,7 +11,7 @@ If you haven’t done this already, copy the default configuration file before r
 cp orca/default-orca-conf.yml ~/orca-conf.yml
 ```
 
-See [README.md](../README.md#configuration-setup) for more details.
+See [README.md](README.md#configuration-setup) for more details.
 
 The shared conda environment on calim is available at:
 
