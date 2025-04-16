@@ -1,30 +1,62 @@
-# orca
-[![Build Status](https://travis-ci.com/ovro-lwa/distributed-pipeline.svg?branch=main)](https://travis-ci.com/ovro-lwa/distributed-pipeline)
-[![codecov](https://codecov.io/gh/ovro-lwa/distributed-pipeline/branch/main/graph/badge.svg)](https://codecov.io/gh/ovro-lwa/distributed-pipeline)
-[![Documentation Status](https://readthedocs.org/projects/distributed-pipeline/badge/?version=latest)](https://distributed-pipeline.readthedocs.io/en/latest/?badge=latest)
+# ORCA — Tools for distributed OVRO-LWA data processing
 
-## Set up development environment on calim
+## Table of Contents
+- [Installation and Environment Setup](#installation-and-environment-setup)
+- [Configuration Setup](#configuration-setup)
+- [Run with celery](#run-with-celery)
+- [Code Structure](#code-structure)
+- [Developer & Testing Guide](#developer--testing-guide)
+
+## Installation and Environment Setup
+
+This repository serves as the central place for running and developing the OVRO-LWA data reduction and calibration pipelines.  
+A pre-configured environment is already available on Calim — see the [Developer & Testing Guide](#developer--testing-guide) for instructions and usage examples.  
+The following are instructions for setting up a new environment from scratch.
+
+
 If you have not done so, create a barebone python3.8 environment with conda.
 ```
 conda create --name py38_orca python=3.8 pipenv
 ```
 
 Activate with
+
 ```
 conda activate py38_orca
 ```
-Then checkout this repo and install
+
+Then checkout this repo:
+
+```
+git clone https://github.com/ovro-lwa/distributed-pipeline.git
+cd distributed-pipeline
+```
+
+Then install dependencies:
+
 ```
 pip install -r requirements.txt
+pip install .
 ```
 
-To run the tests, do
-```
-pytest
-```
-which should run the tests and output a report.
 
-Copy `orca/default-orca-conf.yml` to your home directory and modify it with the correct rabbitMQ URI if you plan to run with celery. Otherwise you can run things as plain ole functions.
+## Configuration Setup
+
+Copy the default configuration file to your home directory:
+
+```bash
+cp orca/default-orca-conf.yml ~/orca-conf.yml
+```
+
+If you plan to use Celery, edit the `queue:` section in `~/orca-conf.yml` and update:
+
+- `broker_uri` with your RabbitMQ URI
+- `result_backend_uri` with your Redis backend address
+
+If you are not using Celery, you can leave the `queue:` section unchanged.  
+It will not affect functionality unless Celery-based task execution is used.
+
+The configuration file is still required for settings related to telescope layout and executable paths.
 
 ## Run with celery
 Adding a function to orca also requires integrating it with celery. This [example commit](https://github.com/ovro-lwa/distributed-pipeline/commit/e1e577437bef3c19162bdab1cd3973bee2128c04) shows the way to add and integrate a new function. A good way to develop code for celery is to create a function with a unit test An function can be made into a task with the celery application decorator `@app.task` (`app` is imported from the `celery.py` module in this repo). You can call the decorated function like a regular function, test it locally, etc.
@@ -46,3 +78,12 @@ Celery admin notes are in `celery.md`. The submission session will show some log
 `orca` is where the wrappers and functions that do single units of work sit.
 
 `pipeline` is where the pipelines live and serve as useful examples for how to use celery.
+
+## Developer & Testing Guide
+
+For usage examples and how to test the pipeline without Celery, please refer to the [Usage Guide](usage_guide.md)
+
+
+
+
+

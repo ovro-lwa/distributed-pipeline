@@ -3,8 +3,8 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ovro-lwa-orca"
-version = "0.0.1"
+name = "orca"
+version = "0.2.1"
 description = "description"
 # python version set by casa stuf
 requires-python = "~=3.8"
@@ -23,4 +23,8 @@ dependencies = [
 ]
 
 [tool.setuptools]
-packages = ["orca"]
+#packages = ["orca"]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]

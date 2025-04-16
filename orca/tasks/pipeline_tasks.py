@@ -372,3 +372,58 @@ def run_pipeline_slow_on_one_cpu_nvme(vis: str, start: int = 1, end: int = 14, c
     else:
         # Hour not in [start..end], do nothing special, just return the original vis path
         return vis
+
+
+@app.task
+def split_2pol_task(
+    ms_input: str,
+    ms_output: str = None,
+    correlation: str = "XX,YY",
+    datacolumn: str = "all",
+    remove_original: bool = True
+) -> str:
+    """
+    Celery task to split an MS down to the specified polarizations (default "XX,YY")
+    using CASA's split task. By default, removes the original MS after splitting.
+
+    :param ms_input: Path to the input measurement set (e.g., 
+                     "/lustre/pipeline/cosmology/41MHz/2025-01-01/12/xyz.ms/")
+    :param ms_output: Path to the output measurement set. If None, we auto-generate
+                      by stripping trailing slashes, removing '.ms' extension, and
+                      appending '_2pol.ms'
+    :param correlation: Correlations to keep (e.g., "XX,YY")
+    :param datacolumn: Data column to copy (default "all")
+    :param remove_original: If True, remove the original MS after splitting
+    :return: The path to the newly created 2-pol measurement set
+    """
+    from casatasks import split as casatask_split  # Import CASA tools inside the task
+
+    # Strip trailing slash if present
+    ms_input_stripped = ms_input.rstrip('/')
+
+    if ms_output is None:
+        # Example:
+        #   ms_input_stripped = "/path/to/20250101_120802_41MHz.ms"
+        #   base_name         = "/path/to/20250101_120802_41MHz"
+        #   ms_output         = "/path/to/20250101_120802_41MHz_2pol.ms"
+        base_name, _ = os.path.splitext(ms_input_stripped)
+        ms_output = base_name + "_2pol.ms"
+
+    # Run CASA split
+    casatask_split(
+        vis         = ms_input_stripped,
+        outputvis   = ms_output,
+        correlation = correlation,
+        datacolumn  = datacolumn
+    )
+
+    print(f"[split_2pol_task] Created 2-pol MS -> {ms_output}")
+
+    if remove_original:
+        # Remove the input MS directory after the split is done
+        # Usually safe with .rmtree, but 'rm -rf' also works
+        if os.path.exists(ms_input_stripped):
+            shutil.rmtree(ms_input_stripped, ignore_errors=True)
+            print(f"[split_2pol_task] Removed original MS: {ms_input_stripped}")
+
+    return ms_output
