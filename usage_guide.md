@@ -5,13 +5,26 @@ This guide is intended to serve as a single reference point for running the core
 
 ## Configuration and Environment activation
 
-If you haven’t done this already, copy the default configuration file before running any functions:
+If you haven’t done this already, copy the default configuration file before running any functions.
+
+Option 1: If you want to clone the repository:
 
 ```bash
+git clone https://github.com/ovro-lwa/distributed-pipeline.git
+cd distributed-pipeline
 cp orca/default-orca-conf.yml ~/orca-conf.yml
 ```
 
-See [README.md](README.md#configuration-setup) for more details.
+Option 2: If you don't need the full repo, then you can download the file directly:
+
+```bash
+wget https://raw.githubusercontent.com/ovro-lwa/distributed-pipeline/main/orca/default-orca-conf.yml -O ~/orca-conf.yml
+```
+
+This file includes paths and telescope-specific settings used by the pipeline. You can edit it as needed.
+
+For more details, see [README.md](README.md#configuration-setup).
+
 
 The shared conda environment on calim is available at:
 
@@ -62,17 +75,28 @@ Obtain bad antenna list and flag:
 
 ```python
 from orca.utils.flagutils import get_bad_antenna_numbers
-from orca.transform.flagging import flag_with_aoflagger, flag_ants
+from orca.transform.flagging import flag_ants
 
 ants = get_bad_antenna_numbers("2025-01-28 19:20:04")
 flag_ants(ms, ants)
+```
+
+Flag using AOFlagger and a specified strategy:
+
+```python
+from orca.transform.flagging import flag_with_aoflagger
+from orca.utils.paths import get_aoflagger_strategy
+
+strategy_path = get_aoflagger_strategy("LWA_opt_GH1.lua")  # or "nenufar-lite.lua"
 
 flag_with_aoflagger(
-    ms=ms, strategy="/opt/share/aoflagger/strategies/nenufar-lite.lua", 
-    n_threads=5        
+    ms=ms,
+    strategy=strategy_path,
+    n_threads=5
 )
-
 ```
+
+Strategy files are included in the repository under `orca/resources/aoflagger_strategies/` and accessed using `get_aoflagger_strategy`.
 
 
 ## Model Generation

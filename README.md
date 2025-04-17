@@ -2,6 +2,7 @@
 
 ## Table of Contents
 - [Installation and Environment Setup](#installation-and-environment-setup)
+- [Additional Software Requirements](#additional-software-requirements)
 - [Configuration Setup](#configuration-setup)
 - [Run with celery](#run-with-celery)
 - [Code Structure](#code-structure)
@@ -39,6 +40,23 @@ pip install -r requirements.txt
 pip install .
 ```
 
+## Additional Software Requirements
+
+In addition to the Python packages listed in `requirements.txt`, several external tools are required to run certain ORCA functions:
+
+- **WSClean** — used for imaging. Also includes tools like `chgcentre` for changing the phase center of a measurement set. See:
+  - [WSClean GitLab repository](https://gitlab.com/aroffringa/wsclean)
+  - [WSClean documentation](https://wsclean.readthedocs.io/en/latest/)
+
+- **AOFlagger** — used for RFI flagging. See:
+  - [AOFlagger GitLab repository](https://gitlab.com/aroffringa/wsclean)
+  - [AOFlagger documentation](https://aoflagger.readthedocs.io/en/latest/)
+
+- **TTCal.jl** — used for peeling bright sources: [http://mweastwood.info/TTCal.jl/](http://mweastwood.info/TTCal.jl/)
+
+- **mnc_python** — OVRO-LWA Monitor and Control Python tools, used in functions like automatic bad antenna detection:  
+  [https://github.com/ovro-lwa/mnc_python](https://github.com/ovro-lwa/mnc_python)
+
 
 ## Configuration Setup
 
@@ -58,7 +76,7 @@ It will not affect functionality unless Celery-based task execution is used.
 
 The configuration file is still required for settings related to telescope layout and executable paths.
 
-## Run with celery
+## Run with Celery
 Adding a function to orca also requires integrating it with celery. This [example commit](https://github.com/ovro-lwa/distributed-pipeline/commit/e1e577437bef3c19162bdab1cd3973bee2128c04) shows the way to add and integrate a new function. A good way to develop code for celery is to create a function with a unit test An function can be made into a task with the celery application decorator `@app.task` (`app` is imported from the `celery.py` module in this repo). You can call the decorated function like a regular function, test it locally, etc.
 
 This is for integration testing only. Make sure you read https://docs.celeryq.dev/en/stable/getting-started/introduction.html before you start.
@@ -82,6 +100,7 @@ Celery admin notes are in `celery.md`. The submission session will show some log
 ## Developer & Testing Guide
 
 For usage examples and how to test the pipeline without Celery, please refer to the [Usage Guide](usage_guide.md)
+
 
 
 
