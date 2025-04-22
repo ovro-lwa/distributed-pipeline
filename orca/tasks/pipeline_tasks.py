@@ -4,7 +4,7 @@ import os
 from orca.celery import app
 from orca.transform.flagging import flag_ants as original_flag_ants
 #from orca.transform.flagging import flag_with_aoflagger as original_flag_with_aoflagger
-from orca.transform.flagging import flag_with_aoflagger, save_flag_metadata
+from orca.transform.flagging import flag_with_aoflagger, save_flag_metadata, flag_ants
 from orca.transform.calibration import applycal_data_col as original_applycal_data_col
 from orca.wrapper.wsclean import wsclean as original_wsclean
 from orca.wrapper.ttcal import peel_with_ttcal 
@@ -14,6 +14,18 @@ from orca.utils.calibrationutils import build_output_paths
 from typing import List
 import shutil
 from orca.utils.calibrationutils import is_within_transit_window, get_lst_from_filename, get_relative_path
+
+import logging
+from casatasks import concat, clearcal, ft, bandpass
+from orca.utils.calibratormodel import model_generation
+from orca.utils.msfix import concat_issue_fieldid
+#from orca.wrapper.change_phase_centre import get_phase_center
+from orca.utils.flagutils import get_bad_antenna_numbers
+from orca.utils.calibrationutils import parse_filename
+from orca.transform.qa_plotting import plot_bandpass_to_pdf_amp_phase
+from orca.utils.paths import get_aoflagger_strategy
+
+from orca.calibration.bandpass_pipeline import run_bandpass_calibration
 
 
 @app.task
@@ -427,3 +439,10 @@ def split_2pol_task(
             print(f"[split_2pol_task] Removed original MS: {ms_input_stripped}")
 
     return ms_output
+
+
+@app.task
+def bandpass_nvme_task(ms_list, delay_table, obs_date, nvme_root="/fast/pipeline") -> str:
+    return run_bandpass_calibration(ms_list, delay_table, obs_date, nvme_root=nvme_root)
+
+

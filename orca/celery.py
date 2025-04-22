@@ -40,7 +40,8 @@ app.conf.update(
 app.conf.task_queues = (
     Queue('default',   Exchange('default'),   routing_key='default'),
     Queue('cosmology', Exchange('cosmology'), routing_key='cosmology'),
-)
+    Queue('bandpass', Exchange('bandpass'), routing_key='bandpass'),
+    )
 
 # If you still want "default" to be the fallback for any tasks not explicitly routed
 app.conf.task_default_queue = 'default'
@@ -58,6 +59,7 @@ app.conf.task_routes = {
     # If you have other tasks you want dedicated to cosmology, list them here
     #
     # e.g. 'orca.tasks.pipeline_tasks.flag_foo_task': {'queue': 'cosmology'},
+    'orca.tasks.pipeline_tasks.bandpass_nvme_task': {'queue': 'bandpass'},
 }
 
 if __name__ == '__main__':
