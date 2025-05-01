@@ -4,7 +4,7 @@ from orca.utils.calibratormodel import model_generation
 from orca.utils.msfix import concat_issue_fieldid
 from orca.wrapper.change_phase_centre import get_phase_center, change_phase_center
 from orca.transform.flagging import flag_with_aoflagger, flag_ants
-from orca.utils.flagutils import get_bad_antenna_numbers
+from orca.utils.flagutils import get_bad_correlator_numbers
 from orca.utils.calibrationutils import parse_filename
 from orca.transform.qa_plotting import plot_bandpass_to_pdf_amp_phase
 from orca.utils.paths import get_aoflagger_strategy
@@ -93,12 +93,12 @@ def run_bandpass_calibration(ms_list, delay_table, obs_date, nvme_root="/fast/pi
 
     logging.info("Step 4: Flagging bad antennas and AOFlagger")
     utc_str = parse_filename(first_ms).replace("T", " ")
-    ants = get_bad_antenna_numbers(utc_str)
+    bad_corr_nums = get_bad_correlator_numbers(utc_str)
 
     strategy_path = get_aoflagger_strategy("LWA_opt_GH1.lua") 
     flag_with_aoflagger(concat_ms, strategy=strategy_path)
-    flag_ants(concat_ms, ants)
-    logging.info(f"Flagged {concat_ms} with AOFlagger and bad antennas: {ants}")
+    flag_ants(concat_ms, bad_corr_nums)
+    logging.info(f"Flagged {concat_ms} with AOFlagger and bad corrs: {bad_corr_nums}")
 
     # Step 5: Bandpass Calibration
 

@@ -39,7 +39,7 @@ def _clean_tmp(date, freq, hour):
     shutil.rmtree(tmp, ignore_errors=True)
 
 def main(obs_date, retries=1):
-    delay_tab = run_delay_pipeline(obs_date,  tol_min=0.05)
+    delay_tab = run_delay_pipeline(obs_date,  tol_min=0.1)
     print(f"Delay table ready: {delay_tab}")
 
     for freq in sorted(
