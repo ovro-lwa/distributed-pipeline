@@ -6,12 +6,19 @@ import os
 from orca.resources.correlator_map import correlator_to_antname
 
 
-def plot_bandpass_to_pdf_amp_phase(calfile, pdf_path="bandpass_QA_all.pdf", msfile=None):
+#def plot_bandpass_to_pdf_amp_phase(calfile, pdf_path="bandpass_QA_all.pdf", msfile=None):
+def plot_bandpass_to_pdf_amp_phase(
+    calfile,
+    pdf_path="bandpass_QA_all.pdf",
+    msfile=None,
+    amp_scale="log",
+    amp_limits=None
+):
     """
     Generate a multi-page PDF visualizing bandpass calibration solutions per antenna.
 
     Each antenna is shown with two vertically stacked subplots:
-    - Amplitude (log scale) vs frequency
+    - Amplitude (log or lin scale) vs frequency
     - Phase (in degrees) vs frequency
 
     Parameters
@@ -25,6 +32,14 @@ def plot_bandpass_to_pdf_amp_phase(calfile, pdf_path="bandpass_QA_all.pdf", msfi
         Optional path to the associated measurement set ('.ms').
         Used to extract frequency values in MHz from the SPECTRAL_WINDOW table.
         If unavailable, channel indices are used instead.
+    amp_scale : str, optional
+        Scale to use for amplitude plots: "log" (default) or "linear".
+    amp_limits : tuple of float, optional
+        Tuple specifying fixed y-axis limits for amplitude plots (ymin, ymax).
+        If not set, default fixed limits are applied:
+            - [1e-4, 2e0] for log scale if all data fits
+            - [1e-4, 1e-2] for linear scale if all data fits
+        If data does not fit within the specified or default range, y-axis is scaled automatically.
 
     Notes
     -----
@@ -33,6 +48,7 @@ def plot_bandpass_to_pdf_amp_phase(calfile, pdf_path="bandpass_QA_all.pdf", msfi
     - Amplitude plots use log scale with fixed limits [1e-4, 2e0] if all unflagged values fit.
     - Phase plots are fixed to [-180, 180] degrees.
     - Legends show Pol 0, Pol 1, and Flagged in every amplitude subplot.
+    - Antenna labels include both correlator number and LWA antenna name if available.
     """
 
 
@@ -119,11 +135,31 @@ def plot_bandpass_to_pdf_amp_phase(calfile, pdf_path="bandpass_QA_all.pdf", msfi
                 labels.append("Flagged")
 
                 # Amplitude formatting
-                ax_amp.set_yscale("log")
-                valid_amps = np.abs(gains[:, :, ant_global_idx])[~flags[:, :, ant_global_idx]]
-                if valid_amps.size > 0 and np.all((valid_amps >= 1e-4) & (valid_amps <= 2e0)):
-                    ax_amp.set_ylim(1e-4, 2e0)
+                #ax_amp.set_yscale("log")
+                #valid_amps = np.abs(gains[:, :, ant_global_idx])[~flags[:, :, ant_global_idx]]
+                #if valid_amps.size > 0 and np.all((valid_amps >= 1e-4) & (valid_amps <= 2e0)):
+                #    ax_amp.set_ylim(1e-4, 2e0)
                 #ax_amp.set_title(f"Antenna {antennas[ant_global_idx]}")
+                valid_amps = np.abs(gains[:, :, ant_global_idx])[~flags[:, :, ant_global_idx]]
+
+                if amp_scale == "log":
+                    ax_amp.set_yscale("log")
+                    if amp_limits:
+                        if valid_amps.size > 0 and np.all((valid_amps >= amp_limits[0]) & (valid_amps <= amp_limits[1])):
+                            ax_amp.set_ylim(*amp_limits)
+                    else:
+                        if valid_amps.size > 0 and np.all((valid_amps >= 1e-4) & (valid_amps <= 2e0)):
+                            ax_amp.set_ylim(1e-4, 2e0)
+                elif amp_scale == "linear":
+                    ax_amp.set_yscale("linear")
+                    if amp_limits:
+                        if valid_amps.size > 0 and np.all((valid_amps >= amp_limits[0]) & (valid_amps <= amp_limits[1])):
+                            ax_amp.set_ylim(*amp_limits)
+                    else:
+                        if valid_amps.size > 0 and np.all((valid_amps >= 1e-4) & (valid_amps <= 1e-2)):
+                            ax_amp.set_ylim(1e-4, 1e-2)
+
+                
                 corr = antennas[ant_global_idx]
                 label = f"Correlator {corr}"
                 if corr in correlator_to_antname:

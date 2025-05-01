@@ -246,25 +246,62 @@ sources_json = '/home/pipeline/sources.json'
 # Run TTCal peeling
 peel_with_ttcal(ms, sources_json)
 ```
-
 ## QA Plotting
 
 ### Delay Calibration QA Plot
 
-Generates a PDF plot of delay (in nanoseconds) per antenna.
+Generates a PDF plot of delay (in nanoseconds) per antenna or correlator number.
 
 ```python
 from orca.transform.qa_plotting import plot_delay_vs_antenna
 
+# Default: x-axis is correlator number
 plot_delay_vs_antenna("your_table.delay", output_pdf="delay_vs_antenna.pdf")
+
+# Optional: x-axis sorted by antenna number 
+plot_delay_vs_antenna("your_table.delay", output_pdf="delay_vs_antenna_antenna_sorted.pdf", use_antenna_labels=True)
 ```
+
+Also supports plotting delay **differences** between two tables:
+
+```python
+from orca.transform.qa_plotting import plot_delay_difference_vs_antenna
+
+# Compare two delay tables (default x-axis is correlator)
+plot_delay_difference_vs_antenna(
+    "new_table.delay",
+    reference_delay_table="reference_table.delay",
+    output_pdf="delay_diff.pdf"
+)
+
+# With x-axis sorted by antenna number
+plot_delay_difference_vs_antenna(
+    "new_table.delay",
+    reference_delay_table="reference_table.delay",
+    output_pdf="delay_diff_ant.pdf",
+    use_antenna_labels=True
+)
+```
+
 
 ### Bandpass Calibration QA Plot
 
-Generates a multi-page PDF showing amplitude (log) and phase per antenna.
+Generates a multi-page PDF showing amplitude and phase per correlator number.
 
 ```python
 from orca.transform.qa_plotting import plot_bandpass_to_pdf_amp_phase
 
+# Default (log scale with automatic limits if needed)
 plot_bandpass_to_pdf_amp_phase("your_table.bandpass", pdf_path="./bandpass_QA.pdf", msfile="your_table.ms")
+
+# Use linear scale with custom limits
+plot_bandpass_to_pdf_amp_phase(
+    "your_table.bandpass",
+    amp_scale="linear",
+    amp_limits=(1e-5, 1e-1),
+    pdf_path="./bandpass_QA_linear_custom.pdf",
+    msfile="your_table.ms"
+)
 ```
+
+Amplitude plots support `log` or `linear` scale. You can optionally provide amplitude limits. If data falls outside the given or default range, autoscaling is applied. Phase is always fixed to [-180, 180] degrees.
