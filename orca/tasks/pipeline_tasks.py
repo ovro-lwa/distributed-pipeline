@@ -20,7 +20,7 @@ from casatasks import concat, clearcal, ft, bandpass
 from orca.utils.calibratormodel import model_generation
 from orca.utils.msfix import concat_issue_fieldid
 #from orca.wrapper.change_phase_centre import get_phase_center
-from orca.utils.flagutils import get_bad_antenna_numbers
+#from orca.utils.flagutils import get_bad_antenna_numbers
 from orca.utils.calibrationutils import parse_filename
 from orca.transform.qa_plotting import plot_bandpass_to_pdf_amp_phase
 from orca.utils.paths import get_aoflagger_strategy

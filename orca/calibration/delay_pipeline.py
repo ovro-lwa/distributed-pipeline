@@ -9,7 +9,7 @@ from casatasks import concat, clearcal, ft, gaincal, mstransform
 from casatools import msmetadata
 from orca.utils.calibratormodel import model_generation
 from orca.transform.flagging import flag_with_aoflagger, flag_ants
-from orca.utils.flagutils import get_bad_antenna_numbers
+from orca.utils.flagutils import get_bad_correlator_numbers
 from orca.utils.msfix import concat_issue_fieldid
 from orca.utils.calibrationutils import get_lst_from_filename
 from orca.transform.qa_plotting import plot_delay_vs_antenna
@@ -138,13 +138,13 @@ def run_delay_pipeline(obs_date, ref_lst=20.00554072/24*2*3.14159265359, tol_min
 
 
     # 4. flagging 
-    ants = get_bad_antenna_numbers(utc_time) 
+    bad_corr_nums = get_bad_correlator_numbers(utc_time) 
     strategy_path = get_aoflagger_strategy("LWA_opt_GH1.lua")
 
-    logging.info(f"Bad antennas: {ants}")
+    logging.info(f"Bad corrs: {bad_corr_nums}")
     logging.info(f"Using AOFlagger strategy: {strategy_path}")
     flag_with_aoflagger(concat_tf, strategy=strategy_path)
-    flag_ants(concat_tf, ants)
+    flag_ants(concat_tf, bad_corr_nums)
     logging.info(f"Flagged {concat_tf} with AOFlagger and bad antennas")
 
     # 5. model (Cyg A only) + gaincal 

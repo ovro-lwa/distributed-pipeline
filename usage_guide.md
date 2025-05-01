@@ -71,17 +71,36 @@ concat_issue_fieldid(output_ms, obsid=True)
 
 ## Flagging
 
-Obtain bad antenna list and flag:
+### Obtain and flag bad antennas (by correlator number)
 
 ```python
-from orca.utils.flagutils import get_bad_antenna_numbers
+from orca.utils.flagutils import get_bad_correlator_numbers
 from orca.transform.flagging import flag_ants
 
-ants = get_bad_antenna_numbers("2025-01-28 19:20:04")
-flag_ants(ms, ants)
+bad_corr_nums = get_bad_correlator_numbers("2025-01-28 19:20:04")
+flag_ants(ms, bad_corr_nums)
 ```
 
-Flag using AOFlagger and a specified strategy:
+`flag_ants()` expects a list of correlator numbers (e.g., `[41, 69, 126, ...]`) and flags the corresponding antennas in the given MeasurementSet.
+
+If you need antenna names, use:
+
+```python
+from orca.utils.flagutils import get_bad_antenna_names
+
+bad_ant_names = get_bad_antenna_names("2025-01-28 19:20:04")
+# Example output: ['LWA-005B', 'LWA-069A', 'LWA-103A', ...]
+```
+
+To flag by antenna name instead of correlator number, use `from casatasks import flagdata`.
+Note that these are `LWA-XXXA/B` names and should be parsed to proper CASA antenna names by removing the dash and polarization suffix, e.g., `LWA-005B → LWA005`. Then pass them to `flagdata` like this:
+
+```python
+flagdata(vis=ms, mode='manual', antenna='LWA005,LWA068,LWA069,...', datacolumn='all')
+```
+
+
+### Flag using AOFlagger and a specified strategy
 
 ```python
 from orca.transform.flagging import flag_with_aoflagger
