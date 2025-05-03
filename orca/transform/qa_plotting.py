@@ -196,10 +196,12 @@ def plot_bandpass_to_pdf_amp_phase(
 
 
 
-def plot_delay_vs_antenna(delay_table_path, output_pdf="delay_vs_antenna.pdf", use_antenna_labels=False):
+def plot_delay_vs_antenna(delay_table_path, output_pdf="delay_vs_antenna.pdf", use_antenna_labels=False, ymin=None,
+    ymax=None):
     """
     Plot delay (in ns) vs antenna (correlator number or integer antenna number).
     If use_antenna_labels=True, x-axis uses parsed antenna numbers and data is sorted accordingly.
+    Y-axis limits can be customized via `ymin` and `ymax`.
 
     Parameters
     ----------
@@ -209,6 +211,10 @@ def plot_delay_vs_antenna(delay_table_path, output_pdf="delay_vs_antenna.pdf", u
         Output PDF filename.
     use_antenna_labels : bool
         If True, plot against integer antenna numbers instead of correlator numbers.
+    ymin : float or None
+        Custom lower Y-axis limit (ns), or None for auto/computed default.
+    ymax : float or None
+        Custom upper Y-axis limit (ns), or None for auto/computed default.
     """
     tb = table()
     tb.open(delay_table_path)
@@ -248,7 +254,8 @@ def plot_delay_vs_antenna(delay_table_path, output_pdf="delay_vs_antenna.pdf", u
     legend_done = {"Pol 0": False, "Pol 1": False, "Flagged": False}
 
     valid_delays = delays_ns[~flags]
-    use_fixed_limits = np.all((valid_delays >= -10000) & (valid_delays <= 10000))
+    #use_fixed_limits = np.all((valid_delays >= -10000) & (valid_delays <= 10000))
+    use_fixed_limits = (ymin is None or ymax is None) and np.all((valid_diffs >= -10000) & (valid_diffs <= 10000))
 
     plt.figure(figsize=(14, 6))
     for pol in range(n_pol):
@@ -268,7 +275,9 @@ def plot_delay_vs_antenna(delay_table_path, output_pdf="delay_vs_antenna.pdf", u
     plt.ylabel("Delay (ns)")
     plt.title("Delay per Antenna")
 
-    if use_fixed_limits:
+    if ymin is not None and ymax is not None:
+        plt.ylim(ymin, ymax)
+    elif use_fixed_limits:
         plt.ylim(-10000, 10000)
 
     plt.grid(True, which='both', linestyle='--', linewidth=0.5)
@@ -283,12 +292,15 @@ def plot_delay_difference_vs_antenna(
     new_delay_table,
     output_pdf="delay_difference_vs_antenna.pdf",
     reference_delay_table="/lustre/pipeline/calibration/delay/2025-01-28/20250128_delay.delay",
-    use_antenna_labels=False
-):
+    use_antenna_labels=False,
+    ymin=None,
+    ymax=None
+    ):
     """
     Plot delay difference (new - reference) per antenna from CASA .delay tables.
     Flagged points shown in red.
     Y-axis limited to [-100, 100] ns if all differences fit, otherwise automatic.
+    You can override Y-axis limits by setting `ymin` and `ymax`.
     Output saved as a PDF.
 
     Parameters
@@ -301,6 +313,10 @@ def plot_delay_difference_vs_antenna(
         Path to the reference CASA delay table (default: 2025-01-28 table).
     use_antenna_labels : bool, optional
         If True, sort and label x-axis by integer antenna numbers instead of correlator IDs.
+    ymin : float or None
+        Custom lower Y-axis limit (ns), or None for auto/computed default.
+    ymax : float or None
+        Custom upper Y-axis limit (ns), or None for auto/computed default.
     """
     tb = table()
 
@@ -360,7 +376,8 @@ def plot_delay_difference_vs_antenna(
     legend_done = {"Pol 0": False, "Pol 1": False, "Flagged": False}
 
     valid_diffs = delay_diff[~combined_flags]
-    use_fixed_limits = np.all((valid_diffs >= -100) & (valid_diffs <= 100))
+    #use_fixed_limits = np.all((valid_diffs >= -100) & (valid_diffs <= 100))
+    use_fixed_limits = (ymin is None or ymax is None) and np.all((valid_diffs >= -100) & (valid_diffs <= 100))
 
     plt.figure(figsize=(14, 6))
     for pol in range(n_pol):
@@ -381,7 +398,9 @@ def plot_delay_difference_vs_antenna(
     plt.ylabel("Delay Difference (ns)")
     plt.title(f"Delay Difference ({new_date} – {ref_date})")
 
-    if use_fixed_limits:
+    if ymin is not None and ymax is not None:
+        plt.ylim(ymin, ymax)
+    elif use_fixed_limits:
         plt.ylim(-100, 100)
 
     plt.grid(True, which='both', linestyle='--', linewidth=0.5)
