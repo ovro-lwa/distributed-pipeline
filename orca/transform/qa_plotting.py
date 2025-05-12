@@ -4,9 +4,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 from orca.resources.correlator_map import correlator_to_antname
+from scipy.stats import linregress 
+
+from typing import List, Sequence, Tuple, Optional
 
 
-#def plot_bandpass_to_pdf_amp_phase(calfile, pdf_path="bandpass_QA_all.pdf", msfile=None):
+
+
 def plot_bandpass_to_pdf_amp_phase(
     calfile,
     pdf_path="bandpass_QA_all.pdf",
@@ -255,7 +259,7 @@ def plot_delay_vs_antenna(delay_table_path, output_pdf="delay_vs_antenna.pdf", u
 
     valid_delays = delays_ns[~flags]
     #use_fixed_limits = np.all((valid_delays >= -10000) & (valid_delays <= 10000))
-    use_fixed_limits = (ymin is None or ymax is None) and np.all((valid_diffs >= -10000) & (valid_diffs <= 10000))
+    use_fixed_limits = (ymin is None or ymax is None) and np.all((valid_delays >= -10000) & (valid_delays <= 10000))
 
     plt.figure(figsize=(14, 6))
     for pol in range(n_pol):
@@ -410,3 +414,63 @@ def plot_delay_difference_vs_antenna(
     plt.close()
     print(f"Saved PDF to: {output_pdf}")
 
+def heatmap_amplitude_per_channel(
+    bandpass_paths,
+    ms_paths=None,
+    output_pdf="amp_per_channel.pdf",
+    cmap="plasma"
+):
+    """
+    Creates a 2‑page PDF:
+      Page‑1  |Gain| heat‑map for Pol 0 (XX)
+      Page‑2  |Gain| heat‑map for Pol 1 (YY)
+
+    Parameters
+    ----------
+    bandpass_paths : list[str]  – one *.bandpass per sub‑band (missing ok)
+    ms_paths       : list[str] or None – same length; MS for true MHz axis
+    output_pdf     : str
+    cmap           : str – matplotlib colormap
+    """
+    if ms_paths and len(ms_paths) != len(bandpass_paths):
+        raise ValueError("ms_paths must match bandpass_paths length")
+
+    amps_pol, _, _, freqs, ants = _stack_subbands(bandpass_paths, ms_paths)
+
+    with PdfPages(output_pdf) as pdf:
+        for p, data in enumerate(amps_pol[:2]):          # XX and YY
+            fig, ax = plt.subplots(figsize=(10, 8))
+            _plot_heatmap(data, ants, freqs,
+                          title=f"Amplitude (|G|) – Pol {p}",
+                          cbar_label="|Gain|",
+                          cmap=cmap, ax=ax)
+            plt.tight_layout()
+            pdf.savefig(); plt.close()
+    print(f"Per‑channel amplitude heat‑maps saved → {output_pdf}")
+
+def heatmap_phase_per_channel(
+    bandpass_paths,
+    ms_paths=None,
+    output_pdf="phase_per_channel.pdf",
+    cmap="twilight"
+):
+    """
+    Creates a 2‑page PDF:
+      Page‑1  Phase heat‑map (deg) for Pol 0 (XX)
+      Page‑2  Phase heat‑map (deg) for Pol 1 (YY)
+    """
+    if ms_paths and len(ms_paths) != len(bandpass_paths):
+        raise ValueError("ms_paths must match bandpass_paths length")
+
+    _, phase_pol, _, freqs, ants = _stack_subbands(bandpass_paths, ms_paths)
+
+    with PdfPages(output_pdf) as pdf:
+        for p, data in enumerate(phase_pol[:2]):
+            fig, ax = plt.subplots(figsize=(10, 8))
+            _plot_heatmap(data, ants, freqs,
+                          title=f"Phase (deg) – Pol {p}",
+                          cbar_label="Phase (°)",
+                          cmap=cmap, ax=ax)
+            plt.tight_layout()
+            pdf.savefig(); plt.close()
+    print(f"Per‑channel phase heat‑maps saved → {output_pdf}")
