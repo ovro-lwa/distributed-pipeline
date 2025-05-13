@@ -316,3 +316,24 @@ plot_bandpass_to_pdf_amp_phase(
 ```
 
 Amplitude plots support `log` or `linear` scale. You can optionally provide amplitude limits. If data falls outside the given or default range, autoscaling is applied. Phase is always fixed to [-180, 180] degrees.
+
+
+
+### Gain Calibration QA
+
+Identify bad correlator numbers and channels from a gain calibration table using amplitude and SNR stats.
+
+```python
+from orca.transform.qa import gainQA
+
+bad_ants, bad_ch = gainQA(
+    calfile="path/to/your_table.bandpass",
+    do_plot=True,                # Save AMP and SNR histograms as .png
+    save_stats=True,             # Write .qa text report
+    outdir="./qa_outputs",       # Output folder for plots
+    qa_file="./my_table.qa"      # Optional: path to write the QA report
+)
+```
+Saves `gains_AMP.png`, `gains_SNR.png` in the outdir (default is current dir), and a `.qa` summary in the qafile (default is calfile + '.qa').
+Returns lists of bad correlator numbers and bad channels.
+
