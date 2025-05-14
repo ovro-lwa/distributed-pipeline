@@ -67,16 +67,17 @@ def gainQA(
         qa_file (str): Optional path to the QA report file. If None, defaults to `calfile + '.qa'`.
 
     Returns:
-        bad_ants (np.ndarray): Array of indices of antennas with anomalous amplitude statistics.
+        bad_corrs (np.ndarray): Array of indices of CORRELATOR NUMBERS with anomalous amplitude statistics.
         bad_ch (np.ndarray): Array of indices of channels with anomalous SNR statistics.
     """
     print("--> Analyzing ", calfile)
 
     # Load gain calibration table
     tb = tables.table(calfile, readonly=True, ack=False)
-    gains = tb.getcol("CPARAM")  # Shape: (2, nchan, nant)
-    snr   = tb.getcol("SNR")     # Shape: (nchan, nant)
-    #print("shape of gains", gains.shape)
+    gains = tb.getcol("CPARAM")  
+    snr   = tb.getcol("SNR")     
+    
+    
     if "FLAG" in tb.colnames():
         flags = tb.getcol("FLAG")  # Boolean mask
     else:
@@ -91,12 +92,12 @@ def gainQA(
     amp = np.abs(ma_gains)
 
     # Compute statistics
-    amp_med_ant = np.ma.median(amp, axis=1)        # (nant, 2)
-    snr_med_ch  = np.ma.median(ma_snr, axis=0)     # (nchan, 2)
-    amp_gmed    = np.ma.median(amp, axis=(0, 1))   # (2,)
-    amp_gstd    = np.ma.std(amp, axis=(0, 1))      # (2,)
-    snr_gmed    = np.ma.median(ma_snr, axis=(0, 1))# (2,)
-    snr_gstd    = np.ma.std(ma_snr, axis=(0, 1))   # (2,)
+    amp_med_ant = np.ma.median(amp, axis=1)        
+    snr_med_ch  = np.ma.median(ma_snr, axis=0)  
+    amp_gmed    = np.ma.median(amp, axis=(0, 1))   
+    amp_gstd    = np.ma.std(amp, axis=(0, 1))      
+    snr_gmed    = np.ma.median(ma_snr, axis=(0, 1))
+    snr_gstd    = np.ma.std(ma_snr, axis=(0, 1))   
 
     # Thresholds for flagging
     th_snr = 3
