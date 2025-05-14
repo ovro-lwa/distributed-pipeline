@@ -20,7 +20,8 @@ app = Celery(
         'orca.transform.spectrum',
         'orca.transform.imaging',
         'orca.transform.photometry',
-        'orca.tasks.pipeline_tasks'  # where your tasks live
+        'orca.tasks.pipeline_tasks',  
+        'orca.tasks.imaging_tasks',
     ]
 )
 
@@ -41,6 +42,7 @@ app.conf.task_queues = (
     Queue('default',   Exchange('default'),   routing_key='default'),
     Queue('cosmology', Exchange('cosmology'), routing_key='cosmology'),
     Queue('bandpass', Exchange('bandpass'), routing_key='bandpass'),
+    Queue('imaging', Exchange('imaging'), routing_key='imaging'),
     )
 
 # If you still want "default" to be the fallback for any tasks not explicitly routed
@@ -56,11 +58,14 @@ app.conf.task_routes = {
     #
     # Example: route the new cosmology tasks to "cosmology" queue
     'orca.tasks.pipeline_tasks.split_2pol_task': {'queue': 'cosmology'},
-    # If you have other tasks you want dedicated to cosmology, list them here
+    # If you have other tasks you want, list them here
     #
     # e.g. 'orca.tasks.pipeline_tasks.flag_foo_task': {'queue': 'cosmology'},
     'orca.tasks.pipeline_tasks.bandpass_nvme_task': {'queue': 'bandpass'},
-}
+    'orca.tasks.imaging_tasks.imaging_pipeline_task': {'queue': 'imaging'},
+    'orca.tasks.imaging_tasks.imaging_shared_pipeline_task': {'queue': 'imaging'},
+
+    }
 
 if __name__ == '__main__':
     app.start()

@@ -17,7 +17,10 @@ def _group_24(ms_paths):
     """Return lists of exactly 24 MS paths (may span two consecutive hours)."""
     by_hour = defaultdict(list)
     for p in ms_paths:
-        by_hour[os.path.basename(os.path.dirname(p))].append(p)
+        hour_dir = os.path.basename(os.path.dirname(p)).zfill(2)  # zero-pad to 2 digits
+        by_hour[hour_dir].append(p)
+        #by_hour[os.path.basename(os.path.dirname(p))].append(p)
+    
     hours = sorted(by_hour)
     blocks, i = [], 0
     while i < len(hours):
@@ -38,7 +41,7 @@ def _clean_tmp(date, freq, hour):
     tmp = os.path.join(FAST_ROOT, date, f"{freq}_{hour}_bandpass_tmp")
     shutil.rmtree(tmp, ignore_errors=True)
 
-def main(obs_date, retries=1):
+def main(obs_date, retries=3):
     delay_tab = run_delay_pipeline(obs_date,  tol_min=0.1)
     print(f"Delay table ready: {delay_tab}")
 

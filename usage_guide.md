@@ -248,6 +248,7 @@ peel_with_ttcal(ms, sources_json)
 ```
 ## QA Plotting
 
+
 ### Delay Calibration QA Plot
 
 Generates a PDF plot of delay (in nanoseconds) per antenna or correlator number.
@@ -258,8 +259,11 @@ from orca.transform.qa_plotting import plot_delay_vs_antenna
 # Default: x-axis is correlator number
 plot_delay_vs_antenna("your_table.delay", output_pdf="delay_vs_antenna.pdf")
 
-# Optional: x-axis sorted by antenna number 
+# Optional: x-axis sorted by antenna number
 plot_delay_vs_antenna("your_table.delay", output_pdf="delay_vs_antenna_antenna_sorted.pdf", use_antenna_labels=True)
+
+# Optional: apply custom Y-axis limits (e.g., zoom in)
+plot_delay_vs_antenna("your_table.delay", ymin=-2000, ymax=2000)
 ```
 
 Also supports plotting delay **differences** between two tables:
@@ -281,8 +285,15 @@ plot_delay_difference_vs_antenna(
     output_pdf="delay_diff_ant.pdf",
     use_antenna_labels=True
 )
-```
 
+# With custom Y-axis limits
+plot_delay_difference_vs_antenna(
+    "new_table.delay",
+    reference_delay_table="reference_table.delay",
+    ymin=-50,
+    ymax=50
+)
+```
 
 ### Bandpass Calibration QA Plot
 
@@ -305,3 +316,24 @@ plot_bandpass_to_pdf_amp_phase(
 ```
 
 Amplitude plots support `log` or `linear` scale. You can optionally provide amplitude limits. If data falls outside the given or default range, autoscaling is applied. Phase is always fixed to [-180, 180] degrees.
+
+
+
+### Gain Calibration QA
+
+Identify bad correlator numbers and channels from a gain calibration table using amplitude and SNR stats.
+
+```python
+from orca.transform.qa import gainQA
+
+bad_ants, bad_ch = gainQA(
+    calfile="path/to/your_table.bandpass",
+    do_plot=True,                # Save AMP and SNR histograms as .png
+    save_stats=True,             # Write .qa text report
+    outdir="./qa_outputs",       # Output folder for plots
+    qa_file="./my_table.qa"      # Optional: path to write the QA report
+)
+```
+Saves `gains_AMP.png`, `gains_SNR.png` in the outdir (default is current dir), and a `.qa` summary in the qafile (default is calfile + '.qa').
+Returns lists of bad correlator numbers and bad channels.
+
