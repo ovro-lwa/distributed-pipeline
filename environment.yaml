@@ -1,6 +1,8 @@
-name: orca-env
+name: orca-env_test
 dependencies:
   - python=3.8
+  - ffmpeg
   - pip
   - pip:
     - -r requirements.txt
+    - .
