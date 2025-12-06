@@ -127,7 +127,7 @@ tifffile==2023.7.10
 tomli==2.0.1
 tornado==6.3.2
 traitlets==5.9.0
-typing_extensions==4.7.1
+typing_extensions==4.13.2
 tzdata==2023.3
 urllib3==2.0.4
 vine==5.0.0
@@ -136,3 +136,13 @@ widgetsnbextension==4.0.8
 wrapt==1.15.0
 zipp==3.16.2
 zstandard==0.22.0
+torch==2.4.1
+torchvision==0.19.1
+git+https://github.com/facebookresearch/segment-anything.git
+#git+https://github.com/SysCV/sam-hq.git
+segment-anything-hq==0.3
+timm==0.9.16
+einops>=0.6
+tqdm
+reportlab
+

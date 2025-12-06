@@ -15,30 +15,26 @@ A pre-configured environment is already available on Calim — see the [Develope
 The following are instructions for setting up a new environment from scratch.
 
 
-If you have not done so, create a barebone python3.8 environment with conda.
-```
-conda create --name py38_orca python=3.8 pipenv
-```
-
-Activate with
-
-```
-conda activate py38_orca
-```
-
-Then checkout this repo:
+First, clone the repository:
 
 ```
 git clone https://github.com/ovro-lwa/distributed-pipeline.git
 cd distributed-pipeline
 ```
 
-Then install dependencies:
+Then create the environment using the provided `environment.yaml`:
 
 ```
-pip install -r requirements.txt
-pip install .
+conda env create -f environment.yaml
 ```
+
+Activate the environment:
+
+```
+conda activate orca-env
+```
+
+All required dependencies — including both conda and pip packages — are installed automatically by `environment.yaml`, so no additional installation commands are needed.
 
 ## Additional Software Requirements
 

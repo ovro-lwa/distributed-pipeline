@@ -20,6 +20,8 @@ dependencies = [
 "casatasks==6.5.5.21",
 "gitpython",
 "casadata",
+"tqdm",
+"reportlab",
 ]
 
 [tool.setuptools]
