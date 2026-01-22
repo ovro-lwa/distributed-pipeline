@@ -209,6 +209,9 @@ def dynspec_reduce(spectra: Iterable[List[_SnapshotSpectrum]], start_ts: datetim
             hdulist.writeto(f'{out_dir_dir}/{start_ts.date().isoformat()}-{corr}.fits', overwrite=True)
 
 
+
+
+
 def test_make_dynspec_fits():
     frequency = np.linspace(100, 200, 50)
     time = np.linspace(0, 10, 100)

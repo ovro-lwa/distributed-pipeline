@@ -33,27 +33,28 @@ utc_str = parse_filename(os.path.basename(first_cal_ms)).replace("T", " ")
 bad_corr_nums = get_bad_correlator_numbers(utc_str)+bad_corr_qa
 '''
 
-freq = "46MHz"# 59MHz  64MHz  69MHz  73MHz  78MHz  82MHz
-obs_date = "2025-04-19"
-imaging_hour = "05"
-bandpass_hour = "06"  # bandpass is always from hour 06
+freq = "50MHz"# 59MHz  64MHz  69MHz  73MHz  78MHz  82MHz
+obs_date = "2025-02-06"
+imaging_hour = "22"
+bandpass_hour = "22"  # bandpass is always from this hour 13
 print(freq,imaging_hour)
 delay = f"/lustre/pipeline/calibration/delay/{obs_date}/{obs_date.replace('-', '')}_delay.delay"
 bandpass = f"/lustre/pipeline/calibration/bandpass/{freq}/{obs_date}/{bandpass_hour}/bandpass_concat.{freq}_{bandpass_hour}.bandpass"
-qa_path = bandpass + ".qa"
+#qa_path = bandpass + ".qa"
 out_dir = f"/lustre/pipeline/images_test/{freq}/{obs_date}/{imaging_hour}"
-ms_files = sorted(glob(f"/lustre/pipeline/night-time/averaged/{freq}/{obs_date}/{imaging_hour}/*.ms"))
+#ms_files = sorted(glob(f"/lustre/pipeline/night-time/averaged/{freq}/{obs_date}/{imaging_hour}/*.ms"))
+ms_files = sorted(glob(f"/lustre/pipeline/S250206dm/S250206dm_slow_vis_data/{freq}/{obs_date}/{imaging_hour}/*.ms"))
 first_cal_ms = sorted(glob(f"/lustre/pipeline/calibration/{freq}/{obs_date}/{bandpass_hour}/*.ms"))[0]
 
 
 
-bad_corr_qa = load_bad_antennas(qa_path)
+#bad_corr_qa = load_bad_antennas(qa_path)
 utc_str = parse_filename(os.path.basename(first_cal_ms)).replace("T", " ")
-bad_corr_nums = get_bad_correlator_numbers(utc_str) + bad_corr_qa
-
-
-#ms_files = ms_files[0:1]
-
+bad_corr_nums = get_bad_correlator_numbers(utc_str)# + bad_corr_qa
+#print("from qa", bad_corr_qa, "all", bad_corr_nums)
+print( "all", bad_corr_nums)
+ms_files = ms_files[3:]
+#print(ms_files)
 batch_root = os.path.join("/fast/pipeline",
                           f"imaging-batch-{uuid.uuid4().hex[:8]}")
 os.makedirs(batch_root, exist_ok=True)

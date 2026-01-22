@@ -191,13 +191,20 @@ class _SnapshotSpectrumV2:
         return cls(d["type"], d["subband_no"], d["scan_no"], d["key"])
 
 # 3. New dynspec_map_v2  (read-only, flag-aware, bcal optional)
-@app.task #(name="orca.transform.dynspec_map_v2")
-def dynspec_map_v2(subband_no: int,
-                   scan_no:   int,
-                   ms:  str,
-                   bcal: str | None = None,
-                   use_ms_flags: bool = True,
-                  ) -> List[_SnapshotSpectrumV2]:
+#@app.task(bind=True,autoretry_for=(Exception,),retry_kwargs={"max_retries": 3, "countdown": 10},) 
+#def dynspec_map_v2(subband_no: int,
+#                   scan_no:   int,
+#                   ms:  str,
+#                   bcal: str | None = None,
+#                   use_ms_flags: bool = True,
+#                  ) -> List[_SnapshotSpectrumV2]:
+@app.task(
+    name="orca.transform.spectrum_v2.dynspec_map_v2",
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_kwargs={"max_retries": 3, "countdown": 10},
+)
+def dynspec_map_v2(self, subband_no:int, scan_no:int, ms:str, *, bcal:str=None, use_ms_flags:bool=True):
     """
     Produce incoherent-sum + selected-baseline spectra from a **single** MS.
 

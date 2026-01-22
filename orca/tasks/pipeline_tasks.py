@@ -7,11 +7,11 @@ from orca.transform.flagging import flag_ants as original_flag_ants
 from orca.transform.flagging import flag_with_aoflagger, save_flag_metadata, flag_ants
 from orca.transform.calibration import applycal_data_col as original_applycal_data_col
 from orca.wrapper.wsclean import wsclean as original_wsclean
-from orca.wrapper.ttcal import peel_with_ttcal 
+from orca.wrapper.ttcal import peel_with_ttcal, zest_with_ttcal 
 from orca.transform.averagems import average_frequency
 from orca.wrapper import change_phase_centre
 from orca.utils.calibrationutils import build_output_paths
-from typing import List
+from typing import List, Tuple
 import shutil
 from orca.utils.calibrationutils import is_within_transit_window, get_lst_from_filename, get_relative_path
 
@@ -26,7 +26,10 @@ from orca.transform.qa_plotting import plot_bandpass_to_pdf_amp_phase
 from orca.utils.paths import get_aoflagger_strategy
 
 from orca.calibration.bandpass_pipeline import run_bandpass_calibration
+from orca.utils.paths import get_aoflagger_strategy
 
+from celery.exceptions import Retry
+import time
 
 @app.task
 def copy_ms_task(original_ms: str, base_output_dir: str = '/lustre/pipeline/slow-averaged/') -> str:
@@ -267,7 +270,9 @@ def run_entire_pipeline_on_one_cpu_nvme(vis: str, window_minutes: int=4, start_h
     nvme_ms = copy_ms_to_nvme_task(vis)
 
     # Flag on NVMe
-    flagged_ms = flag_with_aoflagger(ms=nvme_ms, strategy='/opt/share/aoflagger/strategies/nenufar-lite.lua', in_memory=False, n_threads=1)
+    strategy = get_aoflagger_strategy("LWA_opt_GH1.lua")
+    logging.info(f"[NVMe pipeline] Flagging {nvme_ms} with strategy {strategy}")
+    flagged_ms = flag_with_aoflagger(ms=nvme_ms,strategy=strategy, in_memory=False, n_threads=1)
 
     # Save flag metadata on NVMe
     flagged_ms = save_flag_metadata_nvme_task(flagged_ms)
@@ -326,8 +331,8 @@ def get_utc_hour_from_path(ms_path: str) -> int:
     return int(hour_str)
 
 
-@app.task
-def run_pipeline_slow_on_one_cpu_nvme(vis: str, start: int = 1, end: int = 14, chanbin: int = 4) -> str:
+@app.task(bind=True,autoretry_for=(Exception,),retry_kwargs={"max_retries": 3, "countdown": 10},)
+def run_pipeline_slow_on_one_cpu_nvme(self, vis: str, start: int = 1, end: int = 14, chanbin: int = 4) -> str:
     """
     A pipeline that:
     - Checks if MS is a calibrator; if yes, copy to calibration directory without removing original.
@@ -338,10 +343,10 @@ def run_pipeline_slow_on_one_cpu_nvme(vis: str, start: int = 1, end: int = 14, c
     """
 
     # Check if calibrator
-    sources_in_window = is_within_transit_window(vis, window_minutes=4)
-    if sources_in_window:
+    #sources_in_window = is_within_transit_window(vis, window_minutes=4)
+    #if sources_in_window:
         # Copy to calibration directory
-        copy_ms_to_calibration_task(vis)
+    #    copy_ms_to_calibration_task(vis)
 
     # Check the UTC hour
     utc_hour = get_utc_hour_from_path(vis)
@@ -352,7 +357,9 @@ def run_pipeline_slow_on_one_cpu_nvme(vis: str, start: int = 1, end: int = 14, c
         nvme_ms = copy_ms_to_nvme_task(vis)
 
         # Flag on NVMe
-        flagged_ms = flag_with_aoflagger_task.run(nvme_ms, strategy='/opt/share/aoflagger/strategies/nenufar-lite.lua', in_memory=False, n_threads=1)
+        strategy = get_aoflagger_strategy("LWA_opt_GH1.lua")
+        logging.info(f"[NVMe pipeline] Flagging {nvme_ms} with strategy {strategy}")
+        flagged_ms = flag_with_aoflagger_task.run(nvme_ms, strategy=strategy, in_memory=False, n_threads=1)
 
         # Save flag metadata on NVMe
         flagged_ms = save_flag_metadata_nvme_task.run(flagged_ms)
@@ -445,4 +452,263 @@ def split_2pol_task(
 def bandpass_nvme_task(ms_list, delay_table, obs_date, nvme_root="/fast/pipeline") -> str:
     return run_bandpass_calibration(ms_list, delay_table, obs_date, nvme_root=nvme_root)
 
+#for Xander's data
+import uuid
+
+def _copy_ms_to_nvme_unique(original_ms: str, nvme_base_dir: str, task_id: str) -> str:
+    """
+    Copy the MS into a *unique* NVMe staging dir: <nvme_base_dir>/<task_id>/<ms_name>
+    This avoids collisions even if multiple workers process the same MS.
+    """
+    ms_name = os.path.basename(original_ms)
+    nvme_staging_root = os.path.join(nvme_base_dir, task_id)
+    nvme_ms = os.path.join(nvme_staging_root, ms_name)
+
+    os.makedirs(nvme_staging_root, exist_ok=True)
+    if not os.path.isdir(nvme_ms):
+        shutil.copytree(original_ms, nvme_ms)
+    return nvme_ms
+
+
+
+@app.task(
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+    retry_kwargs={'max_retries': 4},
+    acks_late=True,
+)
+def run_nvme_reduce_all_unconditional(
+    self,
+    vis: str,
+    *,
+    chanbin: int = 4,
+    nvme_base_dir: str = '/fast/pipeline',
+    cleanup_nvme: bool = True,
+) -> str:
+    """
+    Process one MS on NVMe (no LST/transit gating), never touch/delete original.
+    Output:
+      /lustre/pipeline/night-time/averaged/{subband}/{date}/{hour}/{BASE}_averaged.ms
+      /lustre/pipeline/night-time/averaged/{subband}/{date}/{hour}/{BASE}_flagmeta.bin
+    """
+
+    # Final Lustre destinations
+    final_output_dir, ms_base = build_output_paths(
+        vis, base_output_dir='/lustre/pipeline/night-time/averaged/'
+    )
+    final_averaged_ms = os.path.join(final_output_dir, f"{ms_base}_averaged.ms")
+    orig_base_noext = os.path.splitext(os.path.basename(vis))[0]
+    final_flag_meta  = os.path.join(final_output_dir, f"{orig_base_noext}_flagmeta.bin")
+
+    # Idempotent skip
+    if os.path.isdir(final_averaged_ms) and os.path.isfile(final_flag_meta):
+        logging.info(f"[NVMe unconditional] Already exists, skipping: {final_averaged_ms}")
+        return final_averaged_ms
+
+    # Unique NVMe staging (avoid clashes across Calum servers)
+    task_id = getattr(self, 'request', None) and self.request.id or str(uuid.uuid4())
+    nvme_ms = _copy_ms_to_nvme_unique(vis, nvme_base_dir, task_id)
+    nvme_staging_root = os.path.dirname(nvme_ms)  # /fast/pipeline/<task_id>
+
+    try:
+        # 1) Flag on NVMe
+        strategy = get_aoflagger_strategy("LWA_opt_GH1.lua")
+        logging.info(f"[NVMe unconditional] Flagging {nvme_ms} with {strategy}")
+        flagged_ms = flag_with_aoflagger(ms=nvme_ms, strategy=strategy, in_memory=False, n_threads=1)
+
+        # 2) Save flag metadata (wherever your helper writes it)
+        try:
+            from orca.transform.flagging import save_flag_metadata as _save_flagmeta
+            _save_flagmeta(flagged_ms)
+        except Exception as meta_e:
+            logging.warning(f"[NVMe unconditional] save_flag_metadata error: {meta_e}")
+
+        # 3) Average on NVMe — **pass output_vis** (fixes the TypeError)
+        nvme_averaged_out = os.path.join(nvme_staging_root, f"{orig_base_noext}_averaged.ms")
+        logging.info(f"[NVMe unconditional] Averaging -> {nvme_averaged_out} (chanbin={chanbin})")
+        average_frequency(flagged_ms, nvme_averaged_out, chanbin=chanbin)  # <-- corrected call
+        averaged_ms_on_nvme = nvme_averaged_out
+
+        # 4) Move outputs to final Lustre folder
+        os.makedirs(final_output_dir, exist_ok=True)
+
+        if os.path.isdir(final_averaged_ms):
+            shutil.rmtree(final_averaged_ms, ignore_errors=True)
+        logging.info(f"[NVMe unconditional] Moving averaged MS -> {final_averaged_ms}")
+        shutil.move(averaged_ms_on_nvme, final_averaged_ms)
+
+        # Flagmeta may be on NVMe or (by your helper) in slow-averaged; move it next to the MS
+        nvme_flagmeta  = os.path.join(nvme_staging_root, f"{orig_base_noext}_flagmeta.bin")
+        slow_flagmeta  = os.path.join('/lustre/pipeline/slow-averaged', f"{orig_base_noext}_flagmeta.bin")
+
+        src_flagmeta = None
+        if os.path.exists(nvme_flagmeta):
+            src_flagmeta = nvme_flagmeta
+        elif os.path.exists(slow_flagmeta):
+            src_flagmeta = slow_flagmeta
+
+        if src_flagmeta:
+            if os.path.exists(final_flag_meta):
+                os.remove(final_flag_meta)
+            logging.info(f"[NVMe unconditional] Moving flagmeta -> {final_flag_meta}")
+            shutil.move(src_flagmeta, final_flag_meta)
+        else:
+            logging.warning(f"[NVMe unconditional] Flagmeta not found in NVMe or slow-averaged for base={orig_base_noext}")
+
+        return final_averaged_ms
+
+    except Exception as e:
+        logging.exception(f"[NVMe unconditional] Failed for {vis}: {e}")
+        raise
+
+    finally:
+        if cleanup_nvme:
+            try:
+                shutil.rmtree(nvme_staging_root, ignore_errors=True)
+            except Exception as ce:
+                logging.warning(f"[NVMe unconditional] NVMe cleanup warning ({nvme_staging_root}): {ce}")
+
+# --- Zesting: stage -> applycal -> TTCal zest -> move; params passed by submitter ---
+def _zesting_stage_to_nvme(ms_path: str, nvme_root: str, unique: bool = False) -> Tuple[str, str]:
+    """
+    Copy MS directory to NVMe staging.
+    If unique=True, stage under <nvme_root>/<ms_basename>__<ts>_<pid>/<ms_basename>
+    Else, stage under <nvme_root>/<ms_basename>/
+
+    Returns (staged_ms, staging_root).
+    """
+    ms_base = os.path.basename(ms_path.rstrip("/"))
+
+    if unique:
+        ts = str(int(time.time()))         # uses existing imports: time, os
+        suffix = f"__{ts}_{os.getpid()}"
+        staging_root = os.path.join(nvme_root, ms_base + suffix)
+        staged_ms    = os.path.join(staging_root, ms_base)
+    else:
+        staging_root = os.path.join(nvme_root, ms_base)
+        staged_ms    = staging_root  # MS lives directly at this path
+
+    os.makedirs(staging_root, exist_ok=True)
+
+    if os.path.exists(staged_ms):
+        shutil.rmtree(staged_ms, ignore_errors=True)
+
+    shutil.copytree(ms_path, staged_ms)
+    return staged_ms, staging_root
+
+
+def _zesting_dest_path(ms_src: str, subband: str, obs_date: str, hour: str, dest_root: str) -> str:
+    """
+    Destination: <dest_root>/<subband>/<date>/<hour>/<ms_basename>/
+    """
+    ms_name = os.path.basename(ms_src.rstrip("/"))
+    dest_dir = os.path.join(dest_root, subband, obs_date, hour)
+    os.makedirs(dest_dir, exist_ok=True)
+    return os.path.join(dest_dir, ms_name)
+
+def _cleanup_flagversions(staged_ms: str) -> None:
+    """
+    Remove CASA '<ms>.flagversions' directory created next to the staged MS.
+    Works for both layouts:
+      - unique=True:  <nvme_root>/<ms_base>__ts_pid/<ms_base>  -> sibling: .../<ms_base>.flagversions
+      - unique=False: <nvme_root>/<ms_base>                    -> sibling: <nvme_root>/<ms_base>.flagversions
+    """
+    parent = os.path.dirname(staged_ms)
+    ms_base = os.path.basename(staged_ms.rstrip("/"))
+    fv = os.path.join(parent, f"{ms_base}.flagversions")
+    if os.path.isdir(fv):
+        try:
+            shutil.rmtree(fv, ignore_errors=True)
+            logging.info(f"[ZEST] Removed flagversions: {fv}")
+        except Exception as ce:
+            logging.warning(f"[ZEST] Could not remove flagversions {fv}: {ce}")
+
+
+@app.task(
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_jitter=True,
+    retry_kwargs={"max_retries": 3},
+    acks_late=True,
+)
+def zesting_one_ms_task(
+    self,
+    ms_path: str,
+    subband: str,
+    obs_date: str,
+    hour: str,
+    *,
+    bandpass_table: str,
+    sources_json: str,
+    nvme_root: str = "/fast/pipeline/peel",
+    dest_root: str = "/lustre/pipeline/peel_test",
+    nvme_unique: bool = False,   # set True if same-basename tasks might run concurrently
+) -> str:
+    """
+    Stage MS to NVMe, CASA applycal(bandpass_table), TTCal zest(sources_json),
+    then move to <dest_root>/<sb>/<date>/<hour>. Cleans NVMe on failure. Original untouched.
+    """
+    from casatasks import applycal
+    from orca.wrapper.ttcal import zest_with_ttcal
+
+    staged_ms = None
+    staging_root = None
+
+    try:
+        # 1) Stage
+        staged_ms, staging_root = _zesting_stage_to_nvme(ms_path, nvme_root, unique=nvme_unique)
+        logging.info(f"[ZEST] Staged: {staged_ms}")
+
+        # 2) Apply calibration
+        logging.info(f"[ZEST] applycal -> {staged_ms} using {bandpass_table}")
+        applycal(
+            vis=staged_ms,
+            gaintable=[bandpass_table],
+            calwt=[False],
+            flagbackup=True,
+        )
+
+        # 3) TTCal zest
+        logging.info(f"[ZEST] TTCal zest -> {staged_ms} (sources={sources_json})")
+        zest_with_ttcal(
+            ms=staged_ms,
+            sources=sources_json,
+            beam="constant",
+            minuvw=10,
+            maxiter=30,
+            tolerance="1e-4",
+        )
+
+        # 4) Move to destination
+        dest_ms = _zesting_dest_path(ms_path, subband, obs_date, hour, dest_root)
+        if os.path.exists(dest_ms):
+            shutil.rmtree(dest_ms, ignore_errors=True)
+        logging.info(f"[ZEST] Moving -> {dest_ms}")
+        shutil.move(staged_ms, dest_ms)
+        
+        # Remove any leftover '<ms>.flagversions' beside the staged MS
+        _cleanup_flagversions(staged_ms)
+        
+        # best-effort cleanup of an empty staging root (when unique=True, root != staged_ms)
+        if staging_root and os.path.isdir(staging_root):
+            shutil.rmtree(staging_root, ignore_errors=True)
+
+        return dest_ms
+
+    except Exception as e:
+        logging.exception(f"[ZEST] Failed for {ms_path}: {e}")
+        # Clean staged copy only
+        try:
+            if staged_ms and os.path.exists(staged_ms):
+                shutil.rmtree(staged_ms, ignore_errors=True)
+                _cleanup_flagversions(staged_ms)
+            if staging_root and os.path.isdir(staging_root):
+                shutil.rmtree(staging_root, ignore_errors=True)
+        except Exception as ce:
+            logging.warning(f"[ZEST] Cleanup warning ({staging_root}): {ce}")
+        raise
 
