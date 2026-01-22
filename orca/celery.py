@@ -18,10 +18,13 @@ app = Celery(
         'orca.transform.qa',
         'orca.tasks.fortests',
         'orca.transform.spectrum',
+        'orca.transform.spectrum_v2',
+        'orca.transform.spectrum_v3',
         'orca.transform.imaging',
         'orca.transform.photometry',
         'orca.tasks.pipeline_tasks',  
         'orca.tasks.imaging_tasks',
+        'orca.tasks.peel_stage1_tasks',
     ]
 )
 
