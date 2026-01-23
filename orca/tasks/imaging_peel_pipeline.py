@@ -1,12 +1,11 @@
-"""
-Celery task that runs
+"""Peeled imaging pipeline Celery task.
 
+Implements a complete imaging pipeline with peeling:
     copy → applycal → flag_ants → AOFlagger → TTCal peel → WSClean
 
-and then moves the whole NVMe workspace back to Lustre.
+Results are generated on NVMe scratch and moved to Lustre on completion.
 
-Nothing in the old codebase is touched; `orca/tasks/imaging_tasks.py`
-will import this module so that Celery registers the task automatically.
+This module extends the base imaging_tasks without modifying them.
 """
 from __future__ import annotations
 import os, shutil, uuid, glob, logging
@@ -26,10 +25,19 @@ from orca.tasks.imaging_tasks import (            # reuse helpers
     _nvme_workspace, _plot_dirty,
 )
 import subprocess
+
+
 def peel_with_ttcal_maxiter5(ms: str, sources: str):
-    """
-    A local version of peel_with_ttcal but forcing --maxiter=5.
-    Leaves orca/wrapper/ttcal.py untouched.
+    """Run TTCal peeling with reduced iteration count.
+
+    Local wrapper forcing --maxiter=5 for faster peeling.
+
+    Args:
+        ms: Path to measurement set.
+        sources: Path to sources.json file.
+
+    Raises:
+        RuntimeError: If TTCal returns non-zero exit code.
     """
     env = dict(os.environ, LD_LIBRARY_PATH='/opt/astro/mwe/usr/lib64:/opt/astro/lib/',
                AIPSPATH='/opt/astro/casa-data dummy dummy')

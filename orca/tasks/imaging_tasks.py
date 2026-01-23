@@ -1,4 +1,11 @@
 # orca/tasks/imaging_tasks.py
+"""Imaging Celery tasks for snapshot and batch imaging.
+
+Provides Celery tasks for imaging pipelines including:
+- Single measurement set imaging with calibration
+- Batch imaging with shared NVMe workspace
+- PNG preview generation from FITS images
+"""
 import os, shutil, uuid, glob
 from typing import List, Tuple, Optional, Dict
 from casatasks import applycal
@@ -25,13 +32,29 @@ logger = logging.getLogger(__name__)
 
 NVME_ROOT = "/fast/pipeline"
 
-def _nvme_workspace(ms_path: str) -> (str, str):
+
+def _nvme_workspace(ms_path: str) -> Tuple[str, str]:
+    """Create a unique NVMe workspace for processing.
+
+    Args:
+        ms_path: Path to the measurement set.
+
+    Returns:
+        Tuple of (workspace_dir, ms_copy_path).
+    """
     base = os.path.basename(ms_path.rstrip("/"))
     work = os.path.join(NVME_ROOT, f"{base}-{uuid.uuid4().hex[:8]}")
     os.makedirs(work, exist_ok=True)
     return work, os.path.join(work, base)
 
+
 def _plot_dirty(dirty_fits: str, png_out: str):
+    """Generate a PNG preview of a dirty image.
+
+    Args:
+        dirty_fits: Path to the FITS image.
+        png_out: Output PNG file path.
+    """
     with fits.open(dirty_fits) as hdul:
         data = hdul[0].data[0, 0, :, :]
         wcs  = WCS(hdul[0].header, naxis=[1, 2])
@@ -50,15 +73,22 @@ def _plot_dirty(dirty_fits: str, png_out: str):
     plt.savefig(png_out, dpi=150, bbox_inches='tight')
     plt.close()
 
+
 def _shared_nvme_workspace(batch_root: str, ms_path: str) -> Tuple[str, str]:
-    """
-    Re-use a single directory (batch_root) as the workspace.
-    Returns (workdir, ms_copy_path).
+    """Create or reuse a shared NVMe workspace for batch processing.
+
+    Args:
+        batch_root: Root directory for the batch.
+        ms_path: Path to the measurement set.
+
+    Returns:
+        Tuple of (workdir, ms_copy_path).
     """
     workdir = batch_root          # caller creates it once
     os.makedirs(workdir, exist_ok=True)
     ms_copy = os.path.join(workdir, os.path.basename(ms_path.rstrip("/")))
     return workdir, ms_copy
+
 
 @app.task
 def imaging_pipeline_task(

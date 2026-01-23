@@ -1,3 +1,15 @@
+"""Pre-calibration flagging based on autocorrelation power.
+
+Identifies dead or malfunctioning antennas before calibration by
+analyzing autocorrelation power levels relative to the array median.
+
+Functions
+---------
+is_fft_overflow
+    Check for FFT overflow conditions (not yet implemented).
+find_dead_ants
+    Identify antennas with abnormally low power.
+"""
 from typing import List
 import numpy as np
 import logging
@@ -10,12 +22,33 @@ logger = logging.getLogger(__name__)
 
 DEAD_POWER_THRESHOLD = 0.1
 
+
 def is_fft_overflow(ms: str) -> bool:
+    """Check if the measurement set shows signs of FFT overflow.
+
+    Args:
+        ms: Path to the measurement set.
+
+    Returns:
+        True if overflow detected, False otherwise.
+
+    Raises:
+        NotImplementedError: Function not yet implemented.
+    """
     raise NotImplementedError
 
 
 def find_dead_ants(ms: str) -> List[int]:
-    """ Identify the list of dead antennas.
+    """Identify antennas with abnormally low power.
+
+    Compares each antenna's total autocorrelation power to the array
+    median for core and outrigger antennas separately.
+
+    Args:
+        ms: Path to the measurement set.
+
+    Returns:
+        Sorted list of antenna indices with power below threshold.
     """
     with table(ms, ack=False) as t:
         t_auto = t.query('ANTENNA1=ANTENNA2')

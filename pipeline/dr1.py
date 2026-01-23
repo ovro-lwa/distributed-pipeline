@@ -1,3 +1,9 @@
+"""Data Release 1 imaging pipeline.
+
+This script produces Stokes I/V images for the DR1 data release.
+Processes 15-minute chunks over multiple hours with zenith-centered
+phase tracking.
+"""
 from orca import celery
 from orca.transform.imaging import stokes_IV_imaging
 from orca.utils import coordutils

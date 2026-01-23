@@ -1,3 +1,9 @@
+"""Stokes I snapshot imaging pipeline.
+
+This script produces Stokes I/V snapshot images at hourly cadence
+for the low-frequency bands. Used for quick-look visualization
+and transient monitoring.
+"""
 from orca import celery
 from orca.transform.imaging import stokes_IV_imaging
 from orca.utils import coordutils

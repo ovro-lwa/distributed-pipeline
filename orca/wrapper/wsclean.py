@@ -1,4 +1,7 @@
-"""wsclean wrapper
+"""WSClean imaging wrapper.
+
+Provides Python interface to WSClean for radio interferometric imaging.
+Handles common output conventions and error handling.
 """
 import subprocess
 import os

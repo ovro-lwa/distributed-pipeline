@@ -1,3 +1,9 @@
+"""Five-hour comparison imaging pipeline.
+
+This script integrates multiple measurement sets from the nighttime data
+and produces Stokes I/V images for transient analysis. Concatenates
+data across a 5-hour observation window for improved sensitivity.
+"""
 from multiprocessing import Pool
 
 from orca.metadata.stageiii import spws

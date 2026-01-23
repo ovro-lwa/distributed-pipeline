@@ -1,3 +1,9 @@
+"""Source model generation and manipulation utilities.
+
+Provides functions for generating solar and sky source models, computing
+source positions, creating CASA component lists, and performing model
+visibility calculations for calibration and imaging.
+"""
 import os, sys
 from astropy.time import Time
 from astropy.io import fits
@@ -7,14 +13,17 @@ import logging, glob
 from orca.utils.beam_nmahesh import jones_beam as beam 
 from astropy.coordinates import get_sun, EarthLocation,SkyCoord, AltAz
 
-def get_sun_pos(msfile, str_output=True):
-    """
-    Return J2000 RA and DEC coordinates of the solar disk center
 
-    :param msfile: input CASA measurement set
-    :param str_output: if True, return coordinate in string form acceptable by CASA tclean
-        if False, return a dictionary in CASA measures format: https://casa.nrao.edu/docs/casaref/measures.measure.html
-    :return: solar disk center coordinate in string or dictionary format
+def get_sun_pos(msfile: str, str_output: bool = True):
+    """Return J2000 coordinates of the solar disk center.
+
+    Args:
+        msfile: Input CASA measurement set.
+        str_output: If True, return coordinate as CASA-compatible string.
+            If False, return a CASA measures dictionary.
+
+    Returns:
+        Solar disk center coordinate in string or dictionary format.
     """
     tb=table()
     me=measures()

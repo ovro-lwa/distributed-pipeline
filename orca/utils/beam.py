@@ -1,3 +1,9 @@
+"""Primary beam models for OVRO-LWA observations.
+
+Provides abstract base class and implementations for computing beam
+response as a function of position. Includes analytic approximations
+and simulation-derived beam models (Woody beam).
+"""
 from abc import ABC, abstractmethod
 from typing import Tuple
 
@@ -14,35 +20,70 @@ if tele.n_ant > 256:
 else:
     BEAM_FILE_PATH = os.path.abspath('/lustre/mmanders/LWA/modules/beam')
 
+
 class BaseBeam(ABC):
+    """Abstract base class for beam models.
+
+    Defines the interface for computing beam response at arbitrary
+    sky positions.
+    """
+
     @abstractmethod
     def __init__(self, msfile: str):
+        """Initialize beam model from measurement set.
+
+        Args:
+            msfile: Path to measurement set for frequency information.
+        """
         pass
 
     @abstractmethod
-    def srcIQUV(self, az: float, el: float) -> \
-            Tuple[float, float, float, float]:
-        """
+    def srcIQUV(self, az: float, el: float) -> Tuple[float, float, float, float]:
+        """Get beam response in Stokes I, Q, U, V at given position.
+
         Args:
-            az: azimuth in degrees
-            el: elevation in degrees
+            az: Azimuth in degrees.
+            el: Elevation in degrees.
+
+        Returns:
+            Tuple of (I, Q, U, V) beam response values.
         """
         pass
+
 
 class AnalyticBeam(BaseBeam):
-    def __init__(self, msfile):
+    """Simple analytic beam model using sin(el)^1.6 approximation."""
+
+    def __init__(self, msfile: str):
+        """Initialize analytic beam (no MS data needed)."""
         pass
 
-    def srcIQUV(self, az, el):
+    def srcIQUV(self, az: float, el: float) -> Tuple[float, float, float, float]:
+        """Compute analytic beam response.
+
+        Args:
+            az: Azimuth in degrees (unused).
+            el: Elevation in degrees.
+
+        Returns:
+            Tuple of (I, 0, 0, 0) with I = sin(el)^1.6.
+        """
         return np.sin(el * 2 * np.pi/360) ** 1.6, 0, 0, 0
 
+
 class WoodyBeam(BaseBeam):
+    """Simulation-derived LWA dipole beam model.
+
+    Uses pre-computed beam grids from DW beam simulations interpolated
+    to the observation frequency. Supports full Stokes (I, Q, U, V).
     """
-    For loading and returning LWA dipole beam values (derived from DW beam simulations) on the ASTM.
-    Last edit: 08 August 2016
-    """
-    def __init__(self,msfile):
-        #self.CRFREQ = float(tables.table(msfile+'/SPECTRAL_WINDOW', ack=False).getcell('NAME', 0))/1.e6 # center frequency in MHz
+
+    def __init__(self, msfile: str):
+        """Initialize Woody beam from measurement set frequency.
+
+        Args:
+            msfile: Path to measurement set for extracting center frequency.
+        """
         self.CRFREQ = float(tables.table(msfile+'/SPECTRAL_WINDOW', ack=False).getcell('REF_FREQUENCY', 0))/1.e6 # starting frequency in MHz
         self.path   = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe()))) # absolute path to module
         # load 4096x4096 grid of azimuth,elevation values

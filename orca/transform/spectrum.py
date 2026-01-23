@@ -1,3 +1,9 @@
+"""Spectrum extraction from visibility data.
+
+Provides functions for generating dynamic spectra and time series from
+measurement set visibility data. Supports phase shifting, weighting,
+beam correction, and DFT-based spectrum extraction.
+"""
 from os import path
 import os
 from typing import List, Iterable
@@ -126,8 +132,23 @@ register_type(_SnapshotSpectrum, '_SnapshotSpectrum',
 
 _TRANSPORT_DTYPE = np.float32
 
+
 @app.task
-def dynspec_map(subband_no:int, scan_no:int, ms: str, bcal: str) -> List[_SnapshotSpectrum]:
+def dynspec_map(subband_no: int, scan_no: int, ms: str, bcal: str) -> List[_SnapshotSpectrum]:
+    """Map task for dynamic spectrum generation.
+
+    Applies calibration and extracts spectrum data for a single snapshot,
+    storing results in Redis for later reduction.
+
+    Args:
+        subband_no: Subband index (0-15).
+        scan_no: Scan/timestamp index.
+        ms: Path to the measurement set.
+        bcal: Path to bandpass calibration table.
+
+    Returns:
+        List of _SnapshotSpectrum objects with Redis keys.
+    """
     with table(ms, ack=False) as t:
         tcross = t.query('ANTENNA1!=ANTENNA2')
         dat = tcross.getcol('DATA')
@@ -161,6 +182,16 @@ def dynspec_map(subband_no:int, scan_no:int, ms: str, bcal: str) -> List[_Snapsh
 
 @app.task
 def dynspec_reduce(spectra: Iterable[List[_SnapshotSpectrum]], start_ts: datetime, out_dir: str) -> None:
+    """Reduce task to combine spectrum data into FITS files.
+
+    Collects spectrum data from Redis, combines across time and frequency,
+    and writes output FITS files with proper WCS headers.
+
+    Args:
+        spectra: Iterable of spectrum lists from dynspec_map tasks.
+        start_ts: Start timestamp for the observation.
+        out_dir: Output directory for FITS files.
+    """
     n_scans = max(spectra, key=lambda x: x[0].scan_no)[0].scan_no + 1
     n_freqs = 192 * 16
     types = ['incoherent-sum'] + [name for name, _ in ROW_NUMS]

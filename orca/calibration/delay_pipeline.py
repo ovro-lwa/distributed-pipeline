@@ -1,3 +1,20 @@
+"""Delay calibration pipeline.
+
+This module provides the delay calibration pipeline for OVRO-LWA data.
+Combines measurement sets across all frequencies to solve for per-antenna
+delays using Cygnus A as the calibrator.
+
+The pipeline:
+    1. Selects optimal MS per frequency based on LST proximity to Cyg A transit.
+    2. Concatenates and combines spectral windows with mstransform.
+    3. Flags RFI and bad antennas.
+    4. Generates Cyg A model and solves for delays.
+    5. Produces QA plots showing delay solutions per antenna.
+
+Example:
+    >>> from orca.calibration.delay_pipeline import run_delay_pipeline
+    >>> run_delay_pipeline('2024-01-15')
+"""
 import argparse, os, shutil, glob, logging
 from datetime import timedelta
 import re
@@ -21,7 +38,15 @@ from orca.utils.paths import get_aoflagger_strategy
 
 
 def closest_ms_by_lst(ms_list, target_lst_rad):
-    """Return the MS whose LST is closest to the target LST in radians."""
+    """Find the measurement set closest to target LST.
+
+    Args:
+        ms_list: List of measurement set paths.
+        target_lst_rad: Target LST in radians.
+
+    Returns:
+        Path to the MS with LST closest to target.
+    """
     best_ms, best_diff = None, float("inf")
     for vis in ms_list:
         try:
@@ -35,7 +60,14 @@ def closest_ms_by_lst(ms_list, target_lst_rad):
             continue
     return best_ms
 
+
 def copytree(src, dst):
+    """Copy directory tree, removing destination if it exists.
+
+    Args:
+        src: Source directory path.
+        dst: Destination directory path.
+    """
     if os.path.exists(dst):
         shutil.rmtree(dst)
     shutil.copytree(src, dst)

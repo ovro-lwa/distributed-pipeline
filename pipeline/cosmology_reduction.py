@@ -1,3 +1,9 @@
+"""Cosmology data reduction pipeline.
+
+This script processes OVRO-LWA data for cosmology (21cm) analysis.
+Splits polarization data and organizes by frequency and date for
+subsequent foreground subtraction and power spectrum analysis.
+"""
 import os
 import glob
 import random

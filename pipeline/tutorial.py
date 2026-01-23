@@ -1,3 +1,13 @@
+"""OVRO-LWA processing tutorial script.
+
+This module provides a step-by-step tutorial for processing OVRO-LWA data,
+demonstrating the full pipeline workflow from DADA files to calibrated
+images. Includes examples of flagging, calibration, and imaging.
+
+Note:
+    This script references internal pipeline modules that may have moved.
+    Update imports as needed for current package structure.
+"""
 from orca.pipeline.boilerplate import run_dada2ms, flag_chans, apply_ant_flag, flag_ants, \
     apply_bl_flag, do_bl_flags, zest, run_chgcentre, run_integrate_with_concat, \
     do_calibration, get_spectrum, do_bandpass_correction, do_applycal, do_split, \

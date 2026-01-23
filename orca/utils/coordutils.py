@@ -1,5 +1,10 @@
-""" Coordinates utilities having to do with local coordinates.
-For image plane pixel numbers, use the fits header and astropy.WCS.
+"""Coordinate utilities for OVRO-LWA observations.
+
+Provides functions for coordinate transformations between celestial and
+local horizontal coordinate systems, visibility calculations accounting
+for horizon and mountain obstructions, and sky position utilities.
+
+For image plane pixel coordinates, use FITS headers with astropy.WCS.
 """
 from datetime import datetime, date
 from os import path

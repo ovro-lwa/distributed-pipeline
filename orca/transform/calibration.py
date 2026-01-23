@@ -1,3 +1,27 @@
+"""Visibility calibration operations.
+
+Provides functions for direction-independent calibration of OVRO-LWA
+measurement sets, including bandpass solving and application.
+
+Functions
+---------
+di_cal
+    Solve for bandpass calibration from a single MS.
+di_cal_multi_v2
+    Solve for bandpass from multiple concatenated MS files (with auto-retry).
+di_cal_multi
+    Solve for bandpass from multiple concatenated MS files.
+flag_bad_sol
+    Flag bad solutions in a bandpass table.
+applycal_data_col
+    Apply calibration and write to a new measurement set.
+applycal_data_col_nocopy
+    Apply calibration in-place without copying.
+applycal_in_mem
+    Apply bandpass calibration to data array in memory.
+applycal_in_mem_cross
+    Apply bandpass calibration to cross-correlation data in memory.
+"""
 from os import path
 import logging
 import shutil
@@ -124,7 +148,16 @@ def di_cal_multi(ms_list, scrach_dir, out, do_polcal=False, refant='199', flag_a
 
 
 def flag_bad_sol(bcal:str) -> str:
-    """ Flag bad solutions in bandpass calibration. Modify the bandpass table.
+    """Flag bad solutions in a bandpass calibration table.
+
+    Flags solutions with amplitudes below 1% of the median, which would
+    cause excessive amplification when applied.
+
+    Args:
+        bcal: Path to the bandpass calibration table.
+
+    Returns:
+        Path to the modified calibration table.
     """
     with table(bcal, ack=False, readonly=False) as t:
         gain_amps = np.abs(t.getcol('CPARAM'))
@@ -137,15 +170,20 @@ def flag_bad_sol(bcal:str) -> str:
         logger.info(f'Flagged {n_bad} sols that will blow up amplitude in {bcal}.')
     return bcal
 
+
 def applycal_data_col(ms: str, gaintable: str, out_ms: str) -> str:
-    """ Apply calibration to the measurement set. Write to a new measurement set.
+    """Apply calibration and write to a new measurement set.
+
+    Copies the MS, applies calibration to CORRECTED_DATA, then replaces
+    DATA with the calibrated values.
 
     Args:
-        ms: Measurement set to apply calibration to
-        caltable: Calibration table to apply
-        out: Output path for the calibrated measurement set
+        ms: Input measurement set.
+        gaintable: Calibration table to apply.
+        out_ms: Output path for the calibrated measurement set.
 
-    Returns: Path to the calibrated measurement set.
+    Returns:
+        Path to the calibrated measurement set.
     """
     shutil.copytree(ms, out_ms)
     applycal(out_ms, gaintable=gaintable, flagbackup=False, applymode='calflag')
@@ -155,7 +193,19 @@ def applycal_data_col(ms: str, gaintable: str, out_ms: str) -> str:
         t.putcol('DATA', d)
     return out_ms
 
+
 def applycal_data_col_nocopy(ms: str, gaintable: str) -> str:
+    """Apply calibration in-place without copying the measurement set.
+
+    Uses Numba-accelerated in-memory calibration for performance.
+
+    Args:
+        ms: Path to the measurement set (modified in-place).
+        gaintable: Path to the bandpass calibration table.
+
+    Returns:
+        Path to the calibrated measurement set.
+    """
     with table(gaintable, ack=False) as bt:
         bcal = bt.getcol('CPARAM')
         flags = bt.getcol('FLAG')
@@ -166,10 +216,22 @@ def applycal_data_col_nocopy(ms: str, gaintable: str) -> str:
         t.putcol('DATA', data)
     return ms
 
+
 @njit
 def applycal_in_mem(data: np.ndarray, bcal: np.ndarray) -> np.ndarray:
-    # data has shape (nbl, nchan, ncorr), (62128, 192, 4), ordering (0, 0) (0, 1)... (1,1), (1,2)...
-    # bcal has shape (nant, nchan, npol), (352, 192, 2)
+    """Apply bandpass calibration to visibility data in memory.
+
+    Numba-JIT compiled function for efficient calibration application.
+    Handles the full visibility matrix including both autocorrelations
+    and cross-correlations.
+
+    Args:
+        data: Visibility data with shape (n_bl, n_chan, 4).
+        bcal: Bandpass gains with shape (n_ant, n_chan, 2).
+
+    Returns:
+        Calibrated visibility data with same shape as input.
+    """
     bcal = (1. / bcal).astype(np.complex64)
     n_ant = bcal.shape[0]
     n_chan = bcal.shape[1]
@@ -188,8 +250,18 @@ def applycal_in_mem(data: np.ndarray, bcal: np.ndarray) -> np.ndarray:
 
 @njit
 def applycal_in_mem_cross(data: np.ndarray, bcal: np.ndarray) -> np.ndarray:
-    """
-    For cross correlation.
+    """Apply bandpass calibration to cross-correlation visibility data.
+
+    Numba-JIT compiled function for efficient calibration of cross-correlations
+    only (excludes autocorrelations). Uses the same algorithm as applycal_in_mem
+    but only iterates over baselines where antenna i < j.
+
+    Args:
+        data: Visibility data with shape (n_cross_bl, n_chan, 4).
+        bcal: Bandpass gains with shape (n_ant, n_chan, 2).
+
+    Returns:
+        Calibrated visibility data with same shape as input.
     """
     # data has shape (nbl, nchan, ncorr), (61776, 192, 4), ordering (0, 0) (0, 1)... (1,1), (1,2)...
     # bcal has shape (nant, nchan, npol), (352, 192, 2)

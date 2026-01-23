@@ -1,4 +1,8 @@
-""" Wrappers for TTCal.
+"""TTCal peeling and calibration wrapper.
+
+Provides Python interface to TTCal, a Julia-based direction-dependent
+calibration tool for peeling bright sources from visibility data.
+Supports both standard peeling and polarized (ZEST) peeling modes.
 """
 import subprocess
 import logging

@@ -1,5 +1,15 @@
 # orca/tasks/peel_experiment.py
+"""Experimental peeling pipeline tasks.
 
+Provides Celery tasks for testing and developing peeling workflows
+including:
+- TTCal peeling with configurable source lists
+- RFI source peeling
+- Multiple peeling iterations with different maxiter settings
+- Diagnostic image generation
+
+This is an experimental module for peeling algorithm development.
+"""
 from __future__ import absolute_import, unicode_literals
 
 import os

@@ -1,3 +1,9 @@
+"""Source sifting and classification tools (version 1).
+
+Provides interactive widgets and algorithms for sifting through detected
+sources to identify transient candidates. Filters based on altitude,
+persistent source catalogs, and other criteria.
+"""
 from typing import List, Tuple, Optional, Union, Sized
 from datetime import datetime, timedelta
 import numpy as np

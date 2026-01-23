@@ -1,4 +1,10 @@
-"""Visibility subtraction (not tested)
+"""Visibility subtraction utilities.
+
+Provides functions for computing difference between visibility datasets,
+useful for transient detection and background subtraction.
+
+Note:
+    This module is experimental and not fully tested.
 """
 import argparse
 import logging
@@ -6,7 +12,20 @@ from casacore.tables import table, tablecopy
 import numpy as np
 
 
-def diff(early_vis, late_vis, out_vis):
+def diff(early_vis: str, late_vis: str, out_vis: str):
+    """Compute difference between two visibility files.
+
+    Subtracts early_vis from late_vis and writes to out_vis.
+    Output metadata (including uvw) comes from early_vis.
+
+    Args:
+        early_vis: Path to the earlier visibility file.
+        late_vis: Path to the later visibility file.
+        out_vis: Path for the output difference visibility file.
+
+    Raises:
+        AssertionError: If the visibility files have different antenna ordering.
+    """
     late_vis_table = table(late_vis, ack=False)
     diff_table = tablecopy(early_vis, out_vis)
     # Validating that the two vis sets have the same antenna pairs for each row

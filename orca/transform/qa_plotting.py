@@ -1,3 +1,9 @@
+"""QA plotting utilities for calibration diagnostics.
+
+Provides functions for generating diagnostic plots of bandpass calibration
+solutions, gain variations, and other calibration quality metrics.
+Supports multi-page PDF output with per-antenna visualizations.
+"""
 from matplotlib.backends.backend_pdf import PdfPages
 from casatools import table
 import numpy as np

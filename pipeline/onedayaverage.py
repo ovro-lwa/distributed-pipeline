@@ -1,3 +1,8 @@
+"""One-day averaging Celery task.
+
+This module provides a Celery task for averaging multiple measurement sets
+into a single output file, with temporary storage on fast NVMe.
+"""
 from ..transform.averagems import average_ms
 from orca.celery import app
 import shutil

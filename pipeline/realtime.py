@@ -1,3 +1,9 @@
+"""Real-time processing pipeline.
+
+This script demonstrates a real-time pipeline workflow including
+flagging, averaging, calibration, imaging with WSClean, and peeling
+with TTCal. Designed for on-the-fly processing of incoming data.
+"""
 from celery import chain
 from orca.tasks.pipeline_tasks import (
     flag_ants_task,

@@ -1,3 +1,9 @@
+"""Gain variation analysis via autocorrelation monitoring.
+
+This Celery task extracts autocorrelation power from measurement sets
+to track antenna gain variations over time. Useful for identifying
+faulty antennas and calibration stability.
+"""
 from orca.celery import app
 from typing import Tuple
 from datetime import datetime

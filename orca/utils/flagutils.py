@@ -1,3 +1,8 @@
+"""Flag file utilities for antenna and visibility flagging.
+
+Provides functions for reading and writing flag data, looking up
+bad antennas from the flag database, and visualizing flag statistics.
+"""
 import datetime
 import pandas as pd
 import numpy as np

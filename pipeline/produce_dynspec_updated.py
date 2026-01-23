@@ -1,3 +1,9 @@
+"""Updated dynamic spectrum production pipeline.
+
+This script produces dynamic spectra with improved timestamp parsing
+and directory iteration. Processes averaged nighttime data across
+all frequencies.
+"""
 from pathlib import Path
 from datetime import datetime, timedelta
 from celery import group

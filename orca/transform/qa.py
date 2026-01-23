@@ -1,3 +1,9 @@
+"""Quality assurance transforms for data validation.
+
+Provides functions for data sanity checking, gain calibration quality
+assessment, and identification of problematic antennas and channels.
+Integrates with ClickHouse for logging QA metrics.
+"""
 from typing import List
 from casacore.tables import table
 import clickhouse_connect
@@ -16,7 +22,18 @@ from casatasks import flagdata
 logger = get_task_logger(__name__)
 
 @app.task
-def sanity_check(msl) -> List[str]:
+def sanity_check(msl: List[str]) -> List[str]:
+    """Check measurement sets for data integrity issues.
+
+    Reads data from each measurement set and checks for excessive zero values.
+    Reports statistics to ClickHouse database and returns list of problematic files.
+
+    Args:
+        msl: List of measurement set paths to check.
+
+    Returns:
+        List of measurement sets that had I/O errors or unexpected row counts.
+    """
     client = clickhouse_connect.get_client(host='10.41.0.85', username=os.getenv('CH_USER'),
                                   password=os.getenv('CH_PWD'))
     dt_list = []

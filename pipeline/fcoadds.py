@@ -1,3 +1,9 @@
+"""Frequency coadd pipeline for Tau Boötis observations.
+
+This script coadds FITS images across frequency bands for improved
+sensitivity. Organizes spectral windows into three bands and averages
+for Tau Boötis exoplanet search.
+"""
 from pathlib import Path
 from typing import List
 

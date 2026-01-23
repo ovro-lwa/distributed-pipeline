@@ -1,3 +1,9 @@
+"""Flagging and frequency averaging pipeline.
+
+This script applies RFI flagging with AOFlagger and frequency averaging
+to measurement sets. Processes data in Celery task chains for distributed
+execution.
+"""
 from celery import chain, group
 from orca.tasks.pipeline_tasks import (
     flag_with_aoflagger_task,

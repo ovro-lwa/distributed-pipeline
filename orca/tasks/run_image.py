@@ -1,4 +1,15 @@
 # imaging_pipeline.py  –  v3  (with split after uvsub)
+"""Imaging pipeline with model subtraction and peeling.
+
+Implements a complete imaging workflow including:
+- Calibration application (delay + bandpass)
+- Antenna flagging
+- TTCal peeling
+- WSClean imaging (dirty + phase-centered)
+- Source blanking and uvsub
+
+This version includes split after uvsub for cleaner output.
+"""
 from __future__ import annotations
 from pathlib import Path
 import shutil, subprocess, logging, argparse, os

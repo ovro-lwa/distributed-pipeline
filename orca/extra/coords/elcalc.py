@@ -1,12 +1,27 @@
+"""Elevation calculation for celestial sources.
+
+This module calculates the elevation (altitude) of a celestial source
+given its RA/Dec and the zenith coordinates, assuming SIN projection.
+"""
 from __future__ import division
 from math import *
 
-def elcalc(ra,dec,zenra,zendec,returnaz=False):
-    '''
-    Returns elevation of source in deg, given source ra+dec, ra+dec of zenith, and assuming
-    SIN projection. If returnaz=True, will also return azimuth of source in deg.
-    Last edit: 23 Nov 2016
-    '''
+
+def elcalc(ra, dec, zenra, zendec, returnaz=False):
+    """Calculate elevation of a source above the horizon.
+
+    Uses inverse spherical coordinate rotation with SIN projection.
+
+    Args:
+        ra: Right ascension of source in degrees.
+        dec: Declination of source in degrees.
+        zenra: Right ascension of zenith in degrees.
+        zendec: Declination of zenith in degrees.
+        returnaz: If True, also return azimuth. Defaults to False.
+
+    Returns:
+        Elevation in degrees, or tuple (elevation, azimuth) if returnaz=True.
+    """
     if zendec >= 90.:
         phi_p = 0.
     elif zendec < 90.:

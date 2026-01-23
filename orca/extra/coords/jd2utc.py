@@ -1,12 +1,20 @@
+"""Julian Date to UTC conversion.
+
+This module converts Julian Date to a formatted UTC datetime string.
+"""
 from __future__ import division
 from math import *
 
+
 def jd2utc(jd):
-    '''
-    Go from Julian date to UTC.
-    Source:    http://stackoverflow.com/questions/29627533/conversion-of-julian-date-number-to-normal-date-utc-in-javascript/29627963#29627963
-    Last edit: 04 April 2016
-    '''
+    """Convert Julian Date to UTC datetime string.
+
+    Args:
+        jd: Julian Date.
+
+    Returns:
+        UTC datetime string in 'YYYY-MM-DD HH:MM:SS' format.
+    """
     X = jd + 0.5
     Z = floor(X)
     F = X-Z

@@ -1,3 +1,9 @@
+"""Dynamic spectrum production pipeline.
+
+This script orchestrates dynamic spectrum extraction across multiple dates
+and frequencies using Celery distributed tasks. Excludes problematic dates
+and generates waterfall plots.
+"""
 from pathlib import Path
 from datetime import datetime
 from celery import group

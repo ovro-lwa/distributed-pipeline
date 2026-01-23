@@ -1,3 +1,14 @@
+"""Correlator number to antenna name mapping.
+
+This module provides lookup dictionaries for converting between correlator
+numbers (0-351) and LWA antenna names (e.g., 'LWA-266'). Used for flagging
+and metadata operations.
+
+Attributes:
+    correlator_to_antname: Dict mapping correlator number to antenna name.
+    antname_to_correlator: Dict mapping antenna name to correlator number.
+"""
+
 correlator_to_antname = {
     0: 'LWA-266',
     1: 'LWA-259',

@@ -1,3 +1,8 @@
+"""Makeup imaging runs for missed observations.
+
+This script queues Stokes I/V imaging tasks for observations that
+were missed in the regular processing schedule.
+"""
 import datetime
 from orca import celery
 from orca.transform.imaging import stokes_IV_imaging

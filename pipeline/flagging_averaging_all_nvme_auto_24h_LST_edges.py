@@ -1,4 +1,17 @@
 #!/usr/bin/env python3
+"""Automated 24-hour flagging and averaging with NVMe acceleration.
+
+This script processes a full day of slow-cadence data, applying AOFlagger
+RFI flagging and frequency averaging. Uses NVMe for fast I/O and handles
+LST edge cases for proper time binning.
+
+The pipeline:
+    1. Scans slow data directories for available dates.
+    2. Filters by LST range to avoid problematic edge times.
+    3. Copies to NVMe for fast processing.
+    4. Runs AOFlagger and frequency averaging.
+    5. Archives results to Lustre.
+"""
 import os
 import sys
 import glob

@@ -1,3 +1,9 @@
+"""Direction-independent calibration pipeline.
+
+This script runs direction-independent (DI) calibration on nighttime data,
+solving for gain solutions across multiple spectral windows. Processes
+data month by month with hour-dependent calibration windows.
+"""
 from datetime import datetime
 from os import path
 import os

@@ -1,3 +1,34 @@
+"""Celery application configuration for the ORCA distributed pipeline.
+
+This module initializes the Celery application with broker and backend
+settings, configures task queues for different workload types (default,
+cosmology, bandpass, imaging), and sets up task routing to direct specific
+tasks to appropriate queues.
+
+The Celery app is configured to:
+- Use JSON serialization for tasks
+- Limit worker prefetch to 1 task at a time
+- Restart workers after 20 tasks to prevent memory leaks
+- Expire results after 2 hours
+
+Queues
+------
+default
+    General-purpose queue for most tasks.
+cosmology
+    Queue for cosmology-specific processing tasks.
+bandpass
+    Queue for bandpass calibration tasks.
+imaging
+    Queue for imaging pipeline tasks.
+
+Example
+-------
+Start a worker for the imaging queue::
+
+    celery -A orca.celery worker -Q imaging -c 4
+
+"""
 # orca/celery.py
 
 from __future__ import absolute_import, unicode_literals

@@ -1,4 +1,7 @@
-"""dada2ms wrapper
+"""DADA to measurement set conversion wrapper.
+
+Provides Python interface to Stephen Bourke's dada2ms tool for
+converting OVRO-LWA correlator DADA files to CASA measurement sets.
 """
 import logging
 from os import path

@@ -1,5 +1,15 @@
 # orca/tasks/pipeline_tasks.py
+"""Core pipeline processing tasks for OVRO-LWA data reduction.
 
+Contains Celery tasks for the main data processing workflows including:
+- Measurement set copying and management
+- Calibration application and flagging
+- Bandpass calibration pipeline
+- Frequency averaging
+- Image generation and cleanup
+
+These tasks form the building blocks of the automated pipeline.
+"""
 import os
 from orca.celery import app
 from orca.transform.flagging import flag_ants as original_flag_ants

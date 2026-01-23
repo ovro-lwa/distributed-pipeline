@@ -1,3 +1,13 @@
+"""Primary beam models for OVRO-LWA (N. Mahesh implementation).
+
+This module provides classes for computing primary beam corrections using
+various beam models including analytic approximations and simulated beam
+patterns. Used for source flux density corrections and calibrator modeling.
+
+Classes:
+    analytic_beam: Simple sin^1.6 elevation-based beam model.
+    jones_beam: Full Jones matrix beam from HDF5 simulation files.
+"""
 import numpy as np
 import glob, logging, math, os
 from casatools import msmetadata
@@ -5,17 +15,35 @@ from scipy.interpolate import griddata as gd
 import h5py
 from scipy.interpolate import RegularGridInterpolator
 
-def knn_search(arr,grid):
-    '''
-    Find 'nearest neighbor' of array of points in multi-dimensional grid
-    
-    Source: glowingpython.blogspot.com/2012/04/k-nearest-neighbor-search.html
-    '''
+
+def knn_search(arr, grid):
+    """Find nearest neighbor of array of points in a multi-dimensional grid.
+
+    Args:
+        arr: Query points array.
+        grid: Grid of reference points.
+
+    Returns:
+        Index of nearest neighbor.
+
+    Source:
+        glowingpython.blogspot.com/2012/04/k-nearest-neighbor-search.html
+    """
     gridsize = grid.shape[1]
     dists    = np.sqrt(((grid - arr[:,:gridsize])**2.).sum(axis=0))
     return np.argsort(dists)[0]
-    
-def primary_beam_correction_val(pol,jones_matrix):
+
+
+def primary_beam_correction_val(pol, jones_matrix):
+    """Calculate primary beam correction value for a polarization.
+
+    Args:
+        pol: Polarization type ('XX', 'YY', or 'I').
+        jones_matrix: 2x2 Jones matrix.
+
+    Returns:
+        Beam correction factor for the specified polarization.
+    """
     if pol=='XX':
         return jones_matrix[0,0]**2
     if pol=='YY':
@@ -26,6 +54,16 @@ def primary_beam_correction_val(pol,jones_matrix):
 
 
 class analytic_beam():
+    """Analytic primary beam model using sin^1.6 elevation dependence.
+
+    A simplified beam model that approximates the OVRO-LWA primary beam
+    as a function of elevation only, ignoring azimuthal structure.
+
+    Args:
+        msfile: Path to measurement set (unused).
+        beam_file_path: Path to beam files (unused).
+        freq: Observing frequency (unused).
+    """
     def __init__(self,msfile=None,beam_file_path='/opt/beam/',freq=None):
         return
     def srcjones(self,az,el): ### az, el in degrees

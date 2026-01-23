@@ -1,3 +1,21 @@
+"""Bandpass calibration pipeline.
+
+This module provides the bandpass calibration pipeline for OVRO-LWA data.
+Processes multiple measurement sets at a given frequency and LST hour to
+produce a bandpass calibration table.
+
+The pipeline:
+    1. Copies MS files to NVMe for fast processing.
+    2. Generates beam-based sky models and applies to each MS.
+    3. Concatenates and fixes metadata issues.
+    4. Flags RFI using AOFlagger and known bad antennas.
+    5. Solves for bandpass using CASA bandpass task.
+    6. Generates QA plots and archives results.
+
+Example:
+    >>> from orca.calibration.bandpass_pipeline import run_bandpass_calibration
+    >>> run_bandpass_calibration(ms_list, delay_table, '2024-01-15')
+"""
 import os, shutil, logging
 from casatasks import concat, clearcal, ft, bandpass
 from orca.utils.calibratormodel import model_generation

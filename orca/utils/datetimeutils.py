@@ -1,8 +1,12 @@
-"""Utilities for timestamps.
+"""Date and time utilities for OVRO-LWA data processing.
+
+Provides timestamp manipulation functions and defines the standard
+integration time for Stage III data products.
 """
 from datetime import datetime, timedelta
 from typing import Iterable
 
+#: Standard integration time for Stage III measurement sets.
 STAGE_III_INTEGRATION_TIME = timedelta(seconds=10.031)
 
 def find_closest(pivot: datetime, date_time_list: Iterable) -> datetime:

@@ -1,4 +1,8 @@
-"""fits related utilities.
+"""FITS file I/O and image manipulation utilities.
+
+Provides functions for reading and writing FITS images, creating masks,
+co-adding images, and extracting cutouts and statistics around source
+positions.
 """
 import warnings
 
@@ -10,13 +14,33 @@ from typing import Tuple, List, Optional
 
 
 def read_image_fits(fn: str) -> Tuple[np.ndarray, fits.Header]:
+    """Read a 2D image from a FITS file.
+
+    Extracts the first plane from a 4D FITS cube (typical WSClean output).
+
+    Args:
+        fn: Path to the FITS file.
+
+    Returns:
+        Tuple of (image_data, header).
+    """
     with fits.open(fn) as hdulist:
         image = hdulist[0].data[0, 0]
         header = hdulist[0].header
     return image, header
 
 
-def write_image_fits(fn, header, data, overwrite=False):
+def write_image_fits(fn: str, header: fits.Header, data: np.ndarray, overwrite: bool = False):
+    """Write a 2D image to a FITS file.
+
+    Reshapes 2D data into 4D format for CASA/WSClean compatibility.
+
+    Args:
+        fn: Output file path.
+        header: FITS header to use.
+        data: 2D image data array.
+        overwrite: If True, overwrite existing file.
+    """
     fits.PrimaryHDU(np.reshape(data, newshape=(1, 1, *data.shape)), header=header).writeto(
         fn, overwrite=overwrite)
 

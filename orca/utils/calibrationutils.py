@@ -1,3 +1,9 @@
+"""Calibration utilities for source model generation.
+
+Provides functions for creating calibrator source models, selecting
+calibration time ranges based on source transits, and generating
+CASA component lists for calibration and peeling.
+"""
 import numpy as np
 from os import path
 import math, shutil

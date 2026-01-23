@@ -1,11 +1,25 @@
 #!/usr/bin/env python
+"""Measurement set repair utilities.
 
+Provides functions for fixing common issues with measurement sets
+after concatenation, such as inconsistent FIELD_ID values.
+"""
 from __future__ import division
 import numpy as np
 import pyrap.tables as pt
 import os,argparse
 
-def concat_issue_fieldid(msfile,obsid=False):
+
+def concat_issue_fieldid(msfile: str, obsid: bool = False):
+    """Fix FIELD_ID and optionally OBSERVATION_ID after CASA concat.
+
+    Sets all FIELD_ID (and optionally OBSERVATION_ID) values to 0,
+    which is required for WSClean to work with concatenated MSs.
+
+    Args:
+        msfile: Path to the measurement set.
+        obsid: If True, also reset OBSERVATION_ID to 0.
+    """
     t       = pt.table(msfile, readonly=False)
     fid     = t.getcol('FIELD_ID')
     fidnew  = np.zeros(fid.shape,dtype=int)

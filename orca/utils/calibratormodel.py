@@ -1,3 +1,15 @@
+"""Calibrator sky model generation for OVRO-LWA.
+
+This module generates sky models for calibration sources with primary beam
+corrections. Supports both full-sky models and specific source selection
+(e.g., Cygnus A only for delay calibration).
+
+Classes:
+    model_generation: Main class for generating CASA component lists.
+
+The generated component lists can be applied to measurement sets using
+CASA's ft task for model-based calibration.
+"""
 #from . import primary_beam
 import numpy as np
 import math,os,logging

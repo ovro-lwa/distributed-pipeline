@@ -1,3 +1,9 @@
+"""Nighttime flagging and averaging pipeline.
+
+This script processes nighttime measurement sets with AOFlagger RFI
+flagging and frequency averaging. Filters data by LST range to select
+appropriate calibration windows.
+"""
 from celery import chain, group
 from orca.tasks.pipeline_tasks import (
     copy_ms_nighttime_task,  

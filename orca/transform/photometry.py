@@ -1,3 +1,8 @@
+"""Photometry transforms for FITS image analysis.
+
+Provides functions for source detection, flux measurement, noise estimation,
+and image quality assessment from radio FITS images.
+"""
 from typing import Optional, Tuple, List
 import logging
 import warnings
@@ -38,7 +43,23 @@ def std_and_max_around_coord(fits_file, coord, radius=5):
     return fitsutils.std_and_max_around_src(data.T, radius, coord, w)
 
 @app.task
-def average_with_rms_threshold(fits_list, out_fn, source_coord, radius_px, threshold_multiple) -> Optional[str]:
+def average_with_rms_threshold(fits_list: List[str], out_fn: str, source_coord: Optional[SkyCoord],
+                                radius_px: int, threshold_multiple: float) -> Optional[str]:
+    """Average FITS images while rejecting those with high RMS near a source.
+
+    Calculates RMS in a box around the source coordinate and rejects images
+    where RMS exceeds the median RMS times threshold_multiple.
+
+    Args:
+        fits_list: List of FITS file paths to average.
+        out_fn: Output file path.
+        source_coord: Coordinate for RMS measurement. If None, no filtering.
+        radius_px: Box half-size in pixels for RMS calculation.
+        threshold_multiple: Reject images with RMS > median * threshold_multiple.
+
+    Returns:
+        Output file path on success.
+    """
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
         contents = [fitsutils.read_image_fits(fn) for fn in fits_list]
@@ -92,6 +113,17 @@ def estimate_image_noise(arr: np.ndarray) -> float:
 
 @app.task
 def search_src(fn: str, src: SkyCoord, stats_box_size: int, peak_search_box_size: int) -> Tuple[float, float]:
+    """Search for a source and measure its peak flux and local RMS.
+
+    Args:
+        fn: Path to the FITS image.
+        src: Sky coordinate of the source to measure.
+        stats_box_size: Box size in pixels for noise estimation.
+        peak_search_box_size: Box size in pixels for peak search.
+
+    Returns:
+        Tuple of (peak_flux, rms) values.
+    """
     data, header = fitsutils.read_image_fits(fn)
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
@@ -103,11 +135,35 @@ def search_src(fn: str, src: SkyCoord, stats_box_size: int, peak_search_box_size
         peak = peak_cutout_flattened[np.argmax(np.abs(peak_cutout_flattened))]
     return peak, rms
 
-def noise(im, stats_box_size, src, w):
+
+def noise(im: np.ndarray, stats_box_size: int, src: SkyCoord, w: wcs.WCS) -> float:
+    """Estimate noise level around a source position.
+
+    Args:
+        im: Image data array.
+        stats_box_size: Box size in pixels for noise estimation.
+        src: Sky coordinate of the source.
+        w: WCS object for coordinate transformation.
+
+    Returns:
+        Estimated noise level using MAD estimator.
+    """
     noise_cutout = fitsutils.get_cutout(im, src, w, stats_box_size // 2)
     return estimate_image_noise(noise_cutout)
 
-def make_fig(v_fns: List[str], src, stats_box_size, out_dir):
+
+def make_fig(v_fns: List[str], src: SkyCoord, stats_box_size: int, out_dir: str):
+    """Generate diagnostic figures showing Stokes I and V images.
+
+    Creates side-by-side plots of Stokes I and V cutouts around a source
+    with calibrator positions marked.
+
+    Args:
+        v_fns: List of Stokes V FITS file paths.
+        src: Source coordinate for cutout center.
+        stats_box_size: Box size for noise estimation.
+        out_dir: Output directory for figures.
+    """
     hw = 140 # half width of cutout
     
     s1 = SkyCoord('13h49m39.28s', '+21deg07m28.2s', frame=ICRS)

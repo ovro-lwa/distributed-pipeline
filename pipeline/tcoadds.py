@@ -1,3 +1,9 @@
+"""Time coadd pipeline for Tau Boötis observations.
+
+This script coadds FITS images in 30-minute windows across time
+for improved sensitivity in the Tau Boötis exoplanet search.
+Organizes by frequency band and applies RMS thresholding.
+"""
 from pathlib import Path
 from typing import List
 

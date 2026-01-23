@@ -1,3 +1,12 @@
+"""Interactive widget for Tau Boötis source candidate sifting (version 2).
+
+This module provides a Jupyter widget interface for interactively reviewing
+source candidates near Tau Boötis. Uses ipywidgets to display cutouts from
+difference images, allowing visual classification and navigation.
+
+Module Attributes:
+    S1, S2, S3: Reference source coordinates for calibration.
+"""
 import ipywidgets as widgets
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
@@ -13,7 +22,20 @@ S1 = SkyCoord('13h49m39.28s', '+21deg07m28.2s', frame=ICRS)
 S2 = SkyCoord('13h57m4.71s',  '+19deg19m7.7s', frame=ICRS)
 S3 = SkyCoord('13h54m40.61s', '+16deg14m44.9s', frame=ICRS)
 
+
 class TauBooSearch(widgets.HBox):
+    """Interactive Jupyter widget for sifting Tau Boötis source candidates.
+
+    Displays difference image cutouts centered on detected sources with
+    before/after comparison views. Provides navigation controls and
+    visualization adjustments for candidate inspection.
+
+    Attributes:
+        fig2: Matplotlib figure for cutout display.
+        diff_imshow: Image display for difference image cutout.
+        before_imshow: Image display for before-subtraction cutout.
+        after_imshow: Image display for after-subtraction cutout.
+    """
     def __init__(self, start_date: datetime, end_time: datetime, cutout_width=125):
         super().__init__()
 

@@ -1,8 +1,10 @@
-"""
-Improved dynamic-spectrum helpers that
-* are 100 % read-only,
-* respect the MS FLAG column,
-* accept bcal=None.
+"""Improved dynamic spectrum helpers (version 2).
+
+Enhanced dynamic spectrum extraction with:
+* Read-only measurement set access
+* Proper MS FLAG column handling
+* Support for bcal=None (no calibration)
+* 4x frequency averaging (192 → 48 channels)
 """
 from __future__ import annotations
 from pathlib import Path

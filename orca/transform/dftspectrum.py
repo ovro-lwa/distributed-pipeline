@@ -1,3 +1,22 @@
+"""Direct Fourier Transform spectrum extraction.
+
+Provides functions for phase-shifting visibility data to extract spectra
+at arbitrary sky positions using DFT techniques. This allows extracting
+spectra for sources that are not at the phase center.
+
+Functions
+---------
+phase_shift_vis
+    Phase shift visibility data to a new sky position.
+dftspectrum
+    Compute DFT spectrum at specified positions (not yet implemented).
+phase_data_to_pos_inplace
+    In-place phase shift of visibility data array.
+
+Notes
+-----
+INVERSE_C_MS is 1/c in units of seconds per meter (3.3356e-9 s/m).
+"""
 from typing import Union, Optional
 
 import numpy as np

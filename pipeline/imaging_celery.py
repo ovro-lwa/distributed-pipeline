@@ -1,3 +1,9 @@
+"""Celery-distributed imaging pipeline.
+
+This script submits imaging tasks to Celery workers for distributed
+execution. Handles calibration table lookup, bad antenna identification
+from QA files, and WSClean imaging with peeling.
+"""
 from glob import glob
 import uuid, os, shutil
 from celery import group
