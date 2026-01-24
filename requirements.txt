@@ -136,7 +136,7 @@ widgetsnbextension==4.0.8
 wrapt==1.15.0
 zipp==3.16.2
 zstandard==0.22.0
-torch==2.4.1
+torch==2.8.0
 torchvision==0.19.1
 git+https://github.com/facebookresearch/segment-anything.git
 #git+https://github.com/SysCV/sam-hq.git
