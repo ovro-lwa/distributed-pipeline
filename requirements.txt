@@ -33,7 +33,7 @@ docutils==0.18.1
 exceptiongroup==1.1.2
 executing==1.2.0
 flower==2.0.0
-fonttools==4.42.0
+fonttools==4.60.2
 gitdb==4.0.10
 GitPython==3.1.32
 h5py==3.8.0
