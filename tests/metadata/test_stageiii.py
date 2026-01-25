@@ -44,7 +44,10 @@ def test_get_ms_list_multi_hour():
         prefix = Path('.')
         assert _get_ms_list(prefix, datetime(2024, 4, 2, 12, 15, 0), datetime(2024, 4, 2, 13, 15, 20), partitioned_by_hour=True) == [m for l in msl for m in l][:5]
 
-@pytest.mark.skipif(not path.isdir(DATA_DIR), reason="need acual data.")
+# These tests require specific April 2024 data that may not be available
+SPECIFIC_DATA_DIR = DATA_DIR + '13MHz/2024-04-02'
+
+@pytest.mark.skipif(not path.isdir(SPECIFIC_DATA_DIR), reason="Requires April 2024 night-time data")
 def test_get_ms_list_real():
     prefix = Path(DATA_DIR) / '13MHz'
     res = _get_ms_list(prefix, datetime(2024, 4, 2, 8, 15, 0), datetime(2024, 4, 2, 8, 15, 20), partitioned_by_hour=True)
@@ -52,7 +55,7 @@ def test_get_ms_list_real():
     for r in res:
         assert path.isdir(r.resolve())
 
-@pytest.mark.skipif(not path.isdir(DATA_DIR), reason="need acual data.")
+@pytest.mark.skipif(not path.isdir(SPECIFIC_DATA_DIR), reason="Requires April 2024 night-time data")
 def test_get_ms_list_multi_day_real():
     prefix = Path(DATA_DIR) / '13MHz'
     res = _get_ms_list(prefix, datetime(2024, 4, 2, 3, 10, 0), datetime(2024, 4, 2, 11, 10, 0), partitioned_by_hour=True)
