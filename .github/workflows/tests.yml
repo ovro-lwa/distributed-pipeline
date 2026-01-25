@@ -23,20 +23,28 @@ jobs:
           environment-file: environment.yaml
           python-version: '3.8'
           auto-activate-base: false
+          use-mamba: true  # Mamba is much faster than conda
+          miniforge-version: latest
 
-      - name: Install package in dev mode
+      - name: Cache conda environment
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CONDA }}/envs
+          key: conda-${{ runner.os }}-${{ hashFiles('environment.yaml') }}
+
+      - name: Install test dependencies
         shell: bash -el {0}
         run: |
           pip install pytest pytest-cov mock
-          pip install -e . --no-deps
 
       - name: Run tests
         shell: bash -el {0}
         run: |
-          pytest --cov=orca --cov-report=xml -v
+          pytest tests/ --cov=orca --cov-report=xml -v --tb=short
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
+        if: always()
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
