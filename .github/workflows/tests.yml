@@ -3,7 +3,7 @@ name: Tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/improve-tests-ci]
   pull_request:
     branches: [main]
   workflow_dispatch:  # Allow manual trigger
@@ -15,6 +15,15 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          lfs: true  # Fetch LFS files (test data)
+
+      - name: Cache conda environment
+        uses: actions/cache@v4
+        id: cache-conda
+        with:
+          path: ~/conda_pkgs_dir
+          key: conda-${{ runner.os }}-${{ hashFiles('environment.yaml', 'requirements.txt') }}
 
       - name: Set up Miniconda
         uses: conda-incubator/setup-miniconda@v3
@@ -25,17 +34,12 @@ jobs:
           auto-activate-base: false
           use-mamba: true  # Mamba is much faster than conda
           miniforge-version: latest
+          use-only-tar-bz2: true  # Required for caching
 
-      - name: Cache conda environment
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.CONDA }}/envs
-          key: conda-${{ runner.os }}-${{ hashFiles('environment.yaml') }}
-
-      - name: Install test dependencies
+      - name: Install package in dev mode
         shell: bash -el {0}
         run: |
-          pip install pytest pytest-cov mock
+          pip install -e ".[dev]"
 
       - name: Run tests
         shell: bash -el {0}
