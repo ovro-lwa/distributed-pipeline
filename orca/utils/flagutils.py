@@ -13,7 +13,12 @@ import ast
 import textwrap
 
 FLAG_TABLE = '/opt/devel/yuping/ant_flags.csv'
-df = pd.read_csv(FLAG_TABLE, parse_dates=['date'])
+
+# Load flag table if it exists, otherwise create empty DataFrame
+if os.path.exists(FLAG_TABLE):
+    df = pd.read_csv(FLAG_TABLE, parse_dates=['date'])
+else:
+    df = pd.DataFrame(columns=['date', 'ant', 'source'])
 
 def get_bad_ants(date: datetime.date, sources=['AI-VAR', 'AI-LO']):
     """Return a list of bad antennas for a given date and kinds of flags.
