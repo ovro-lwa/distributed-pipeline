@@ -1,5 +1,8 @@
 # ORCA — Tools for distributed OVRO-LWA data processing
 
+[![Tests](https://github.com/ovro-lwa/distributed-pipeline/actions/workflows/tests.yml/badge.svg)](https://github.com/ovro-lwa/distributed-pipeline/actions/workflows/tests.yml)
+[![Docs](https://github.com/ovro-lwa/distributed-pipeline/actions/workflows/docs.yml/badge.svg)](https://github.com/ovro-lwa/distributed-pipeline/actions/workflows/docs.yml)
+
 ## Table of Contents
 - [Installation and Environment Setup](#installation-and-environment-setup)
 - [Additional Software Requirements](#additional-software-requirements)

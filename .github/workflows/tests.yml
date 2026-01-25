@@ -1,0 +1,43 @@
+# GitHub Actions workflow for running tests
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: orca-env
+          environment-file: environment.yaml
+          python-version: '3.8'
+          auto-activate-base: false
+
+      - name: Install package in dev mode
+        shell: bash -el {0}
+        run: |
+          pip install pytest pytest-cov mock
+          pip install -e . --no-deps
+
+      - name: Run tests
+        shell: bash -el {0}
+        run: |
+          pytest --cov=orca --cov-report=xml -v
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+          verbose: true

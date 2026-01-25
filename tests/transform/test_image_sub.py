@@ -11,12 +11,13 @@ from ..common import TEST_FITS
 
 @pytest.fixture(scope='module')
 def empty_image():
-    fn = '/tmp/empty.fits'
+    fn = tempfile.mktemp(suffix='.fits')
     im, header = fitsutils.read_image_fits(TEST_FITS)
-    fitsutils.write_image_fits(fn, header, np.zeros(shape=im.shape), header)
+    fitsutils.write_image_fits(fn, header, np.zeros(shape=im.shape), overwrite=True)
     yield fn
     # teardown
-    os.remove(fn)
+    if os.path.exists(fn):
+        os.remove(fn)
 
 
 def test_image_sub(empty_image):
