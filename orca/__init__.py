@@ -1,6 +1,19 @@
 """ORCA: OVRO-LWA Radio Camera Analysis Pipeline.
 
 The orca package provides a distributed data processing pipeline for the
+OVRO Long Wavelength Array (OVRO-LWA) radio telescope.
+"""
+
+from importlib.metadata import version, PackageNotFoundError
+
+try:
+    __version__ = version("orca-pipeline")
+except PackageNotFoundError:
+    __version__ = "unknown"
+
+__doc__ = """ORCA: OVRO-LWA Radio Camera Analysis Pipeline.
+
+The orca package provides a distributed data processing pipeline for the
 OVRO Long Wavelength Array (OVRO-LWA) radio telescope. It is built on top
 of Celery for distributed task execution and provides tools for:
 
