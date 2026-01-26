@@ -9,6 +9,7 @@ from orca.transform import photometry
 
 DATADIR = '/lustre/yuping/orca-test-resource/coadd-test/'
 
+@pytest.mark.skip(reason="Requires external /lustre/yuping/orca-test-resource with write permissions")
 def test_average_with_no_rms_threshold():
     photometry.average_with_rms_threshold(
         [DATADIR + 'test2.fits', DATADIR + 'test3.fits', DATADIR + 'test100.fits'],
@@ -19,6 +20,7 @@ def test_average_with_no_rms_threshold():
     assert im[1000, 2000] == float(3 + 100 + 2) / 3
 
 
+@pytest.mark.skip(reason="Requires external /lustre/yuping/orca-test-resource with write permissions")
 def test_average_with_rms_threshold():
     photometry.average_with_rms_threshold(
         [DATADIR + 'test2.fits', DATADIR + 'test3.fits', DATADIR + 'test100.fits'],

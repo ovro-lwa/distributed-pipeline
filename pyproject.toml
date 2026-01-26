@@ -3,10 +3,10 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "orca"
-version = "0.2.1"
-description = "description"
-# python version set by casa stuf
+name = "orca-pipeline"
+version = "0.3.0"
+description = "Tools for distributed OVRO-LWA data processing"
+# python version set by casa stuff
 requires-python = "~=3.8"
 dependencies = [
 "astropy",
@@ -22,6 +22,13 @@ dependencies = [
 "casadata",
 "tqdm",
 "reportlab",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "mock",
 ]
 
 [tool.setuptools]

@@ -32,6 +32,7 @@ def test_make_dirty_image_and_psf(wsclean):
                                                               '-scale', str(imaging.IM_SCALE_DEGREE)]
 
 
+@pytest.mark.skip(reason="Requires external /lustre/yuping/orca-test-resource with write permissions")
 def test_coadd_fits():
     fns = glob.glob('/lustre/yuping/orca-test-resource/??MHz_2024-04-16T*I.image.fits')
     imaging.coadd_fits(fns, '/lustre/yuping/orca-test-resource/coadded.fits')

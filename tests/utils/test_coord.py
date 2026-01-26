@@ -7,12 +7,17 @@ import numpy as np
 from math import radians, atan2, sin, cos, asin, pi, sqrt, degrees
 import math
 from orca.utils import fitsutils
-from tests.common import TEST_FITS
+from tests.common import TEST_FITS, LEGACY_FITS
 from astropy.coordinates import SkyCoord, get_sun, Angle, ICRS, GCRS
 from astropy.time import Time
 from astropy import units as u
+from os import path
 
 from datetime import datetime
+
+
+# Check if legacy test data is available
+HAS_LEGACY_DATA = path.isfile(LEGACY_FITS)
 
 
 def test_verify_coordinates():
@@ -105,8 +110,9 @@ Regression test for using astropy's wcs conversions
 """
 
 
+@pytest.mark.skipif(not HAS_LEGACY_DATA, reason="Requires legacy 4096x4096 test FITS file")
 def test_wcs_zenith_from_marin():
-    im, header = fitsutils.read_image_fits(TEST_FITS)
+    im, header = fitsutils.read_image_fits(LEGACY_FITS)
     w = __WCSFromMarin(header)
     check_convert_marin(92.9907752, 37.0295406, w, 2047, 2047)
 
@@ -118,14 +124,16 @@ def check_convert_marin(ra, dec, w, x, y):
     assert sqrt((sky[0] - ra) ** 2 + (sky[1] - dec) ** 2) < 0.01
 
 
+@pytest.mark.skipif(not HAS_LEGACY_DATA, reason="Requires legacy 4096x4096 test FITS file")
 def test_wcs_low_el_from_marin():
-    im, header = fitsutils.read_image_fits(TEST_FITS)
+    im, header = fitsutils.read_image_fits(LEGACY_FITS)
     w = __WCSFromMarin(header)
     check_convert_marin(139.1670454, -12.9494991, w, 758, 975)
 
 
+@pytest.mark.skipif(not HAS_LEGACY_DATA, reason="Requires legacy 4096x4096 test FITS file")
 def test_wcs_below_horizon_from_marin():
-    im, header = fitsutils.read_image_fits(TEST_FITS)
+    im, header = fitsutils.read_image_fits(LEGACY_FITS)
     w = __WCSFromMarin(header)
     assert w.sky2pix(91., -60.) == (np.nan, np.nan)
     sky = w.pix2sky(90., 2000)

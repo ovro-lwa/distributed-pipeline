@@ -1,0 +1,55 @@
+# GitHub Actions workflow for running tests
+name: Tests
+
+on:
+  push:
+    branches: [main, feature/improve-tests-ci]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true  # Fetch LFS files (test data)
+
+      - name: Cache conda environment
+        uses: actions/cache@v4
+        id: cache-conda
+        with:
+          path: ~/conda_pkgs_dir
+          key: conda-${{ runner.os }}-${{ hashFiles('environment.yaml', 'requirements.txt') }}
+
+      - name: Set up Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: orca-env
+          environment-file: environment.yaml
+          python-version: '3.8'
+          auto-activate-base: false
+          use-mamba: true  # Mamba is much faster than conda
+          miniforge-version: latest
+          use-only-tar-bz2: true  # Required for caching
+
+      - name: Install package in dev mode
+        shell: bash -el {0}
+        run: |
+          pip install -e ".[dev]"
+
+      - name: Run tests
+        shell: bash -el {0}
+        run: |
+          pytest tests/ --cov=orca --cov-report=xml -v --tb=short
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+          verbose: true
