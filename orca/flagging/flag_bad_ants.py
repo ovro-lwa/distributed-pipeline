@@ -1,3 +1,16 @@
+"""Antenna flagging based on autocorrelation statistics.
+
+Identifies bad antennas by analyzing post-calibration autocorrelation
+amplitudes and time-series variability. Core and outrigger antennas
+are evaluated separately with appropriate thresholds.
+
+Functions
+---------
+flag_ants_from_postcal_autocorr
+    Identify bad antennas from post-calibration autocorrelation data.
+flag_bad_ants
+    Identify bad antennas from raw autocorrelation statistics.
+"""
 import numpy as np
 from typing import Optional
 import os,argparse

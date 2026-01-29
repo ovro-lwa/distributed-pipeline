@@ -36,6 +36,7 @@ flower==2.0.0
 fonttools==4.42.0
 gitdb==4.0.10
 GitPython==3.1.32
+h5py==3.8.0
 humanize==4.7.0
 idna==3.4
 imageio==2.31.1
@@ -71,7 +72,7 @@ networkx==3.1
 numba==0.58.1
 numpy==1.24.4
 opencv-python==4.10.0.84
--e git+ssh://git@github.com/ovro-lwa/distributed-pipeline.git@4ab4c281fe7ae47a18c6424993b75dee6496a47e#egg=ovro_lwa_orca
+#-e git+http://git@github.com/ovro-lwa/distributed-pipeline.git@4ab4c281fe7ae47a18c6424993b75dee6496a47e#egg=ovro_lwa_orca
 packaging==23.1
 pandas==2.0.3
 paramiko==3.3.1
@@ -126,7 +127,7 @@ tifffile==2023.7.10
 tomli==2.0.1
 tornado==6.3.2
 traitlets==5.9.0
-typing_extensions==4.7.1
+typing_extensions==4.13.2
 tzdata==2023.3
 urllib3==2.0.4
 vine==5.0.0
@@ -134,6 +135,14 @@ wcwidth==0.2.6
 widgetsnbextension==4.0.8
 wrapt==1.15.0
 zipp==3.16.2
-zstandard==0.22.0
 reproject==0.13.1
 multiprocess==0.70.18
+torch==2.4.1
+torchvision==0.19.1
+git+https://github.com/facebookresearch/segment-anything.git
+#git+https://github.com/SysCV/sam-hq.git
+segment-anything-hq==0.3
+timm==0.9.16
+einops>=0.6
+tqdm
+reportlab

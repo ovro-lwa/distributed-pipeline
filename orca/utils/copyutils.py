@@ -1,8 +1,27 @@
+"""File copying utilities with fsync support.
+
+Provides file copying functions that include explicit fsync calls
+to ensure data is flushed to disk, important for HPC environments
+with network/parallel filesystems.
+
+Modified from shutil to add fsync after write operations.
+"""
 import os
 import stat
 from shutil import _samefile, _stat, SpecialFileError, SameFileError, _fastcopy_sendfile, _islink, copymode, copyfileobj
 
-def copy(src, dst, *, follow_symlinks=True):
+
+def copy(src: str, dst: str, *, follow_symlinks: bool = True) -> str:
+    """Copy file with mode bits, ensuring data is synced to disk.
+
+    Args:
+        src: Source file path.
+        dst: Destination file or directory path.
+        follow_symlinks: If False, copy symlinks as symlinks.
+
+    Returns:
+        Destination path.
+    """
     if os.path.isdir(dst):
         dst = os.path.join(dst, os.path.basename(src))
     copyfile(src, dst, follow_symlinks=follow_symlinks)

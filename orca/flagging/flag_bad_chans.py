@@ -1,3 +1,15 @@
+"""Channel flagging based on visibility amplitude statistics.
+
+Identifies bad frequency channels by analyzing visibility amplitude
+and SNR distributions. Uses median filtering to detect outliers.
+
+Originally adapted from Marin Anderson's code (3/8/2019).
+
+Functions
+---------
+flag_bad_chans
+    Identify and optionally apply channel flags.
+"""
 #!/usr/bin/env python
 
 """

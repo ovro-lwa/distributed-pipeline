@@ -1,11 +1,19 @@
+"""Cleanup utility for measurement sets with excessive zero values.
+
+Queries ClickHouse database for measurement sets with high zero-value
+percentages and removes them from disk. Used for data quality maintenance.
+"""
 import clickhouse_connect
 import os
 import shutil
 
 
-# Done 11, 12, 1, 2, 3,4, 5
-
 def main():
+    """Remove measurement sets with >10% zero values from disk.
+
+    Queries the slowviz.zero_percent table in ClickHouse and deletes
+    corresponding directories from the pipeline storage.
+    """
     client = clickhouse_connect.get_client(host='10.41.0.85', username=os.getenv('CH_USER'),
                                   password=os.getenv('CH_PWD'))
     res = client.query('SELECT timestamp, mhz FROM slowviz.zero_percent WHERE zero_percent > 10 AND toMonth(timestamp) = 6')

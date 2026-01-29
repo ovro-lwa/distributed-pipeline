@@ -1,4 +1,8 @@
-"""Make a phased measurement set out of many measurement sets.
+"""Measurement set integration transforms.
+
+Provides functions to combine multiple measurement sets into a single
+integrated measurement set with a common phase center. Used for creating
+multi-scan or multi-snapshot datasets for imaging.
 """
 from typing import List, Optional
 import os

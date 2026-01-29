@@ -1,3 +1,9 @@
+"""Spectrum extraction from visibility data.
+
+Provides functions for generating dynamic spectra and time series from
+measurement set visibility data. Supports phase shifting, weighting,
+beam correction, and DFT-based spectrum extraction.
+"""
 from os import path
 import os
 from typing import List, Iterable
@@ -16,14 +22,17 @@ import numpy as np
 from astropy.io import fits
 import redis
 
-from orca.celery import app, REDIS_URL
+from orca.celery import app
 from orca.transform import dftspectrum, calibration
 from orca.utils.datetimeutils import STAGE_III_INTEGRATION_TIME
+
+from orca.configmanager import queue_config
 
 logger = logging.getLogger(__name__)
 
 N_CHAN = 192
 
+REDIS_URL = queue_config.result_backend_uri
 REDIS_EXPIRE_S = 3600*10
 REDIS_KEY_PREFIX = 'spec-'
 
@@ -123,8 +132,23 @@ register_type(_SnapshotSpectrum, '_SnapshotSpectrum',
 
 _TRANSPORT_DTYPE = np.float32
 
+
 @app.task
-def dynspec_map(subband_no:int, scan_no:int, ms: str, bcal: str) -> List[_SnapshotSpectrum]:
+def dynspec_map(subband_no: int, scan_no: int, ms: str, bcal: str) -> List[_SnapshotSpectrum]:
+    """Map task for dynamic spectrum generation.
+
+    Applies calibration and extracts spectrum data for a single snapshot,
+    storing results in Redis for later reduction.
+
+    Args:
+        subband_no: Subband index (0-15).
+        scan_no: Scan/timestamp index.
+        ms: Path to the measurement set.
+        bcal: Path to bandpass calibration table.
+
+    Returns:
+        List of _SnapshotSpectrum objects with Redis keys.
+    """
     with table(ms, ack=False) as t:
         tcross = t.query('ANTENNA1!=ANTENNA2')
         dat = tcross.getcol('DATA')
@@ -158,6 +182,16 @@ def dynspec_map(subband_no:int, scan_no:int, ms: str, bcal: str) -> List[_Snapsh
 
 @app.task
 def dynspec_reduce(spectra: Iterable[List[_SnapshotSpectrum]], start_ts: datetime, out_dir: str) -> None:
+    """Reduce task to combine spectrum data into FITS files.
+
+    Collects spectrum data from Redis, combines across time and frequency,
+    and writes output FITS files with proper WCS headers.
+
+    Args:
+        spectra: Iterable of spectrum lists from dynspec_map tasks.
+        start_ts: Start timestamp for the observation.
+        out_dir: Output directory for FITS files.
+    """
     n_scans = max(spectra, key=lambda x: x[0].scan_no)[0].scan_no + 1
     n_freqs = 192 * 16
     types = ['incoherent-sum'] + [name for name, _ in ROW_NUMS]
@@ -204,6 +238,9 @@ def dynspec_reduce(spectra: Iterable[List[_SnapshotSpectrum]], start_ts: datetim
             out_dir_dir = f'{out_dir}/{name}'
             os.makedirs(out_dir_dir, exist_ok=True)
             hdulist.writeto(f'{out_dir_dir}/{start_ts.date().isoformat()}-{corr}.fits', overwrite=True)
+
+
+
 
 
 def test_make_dynspec_fits():

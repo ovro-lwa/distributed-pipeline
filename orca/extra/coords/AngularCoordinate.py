@@ -1,13 +1,32 @@
+"""Angular coordinate representation and conversion.
+
+This module provides a simple AngularCoordinate class for parsing and
+formatting sexagesimal coordinate strings. An astropysics.coords equivalent.
+
+Note:
+    For new code, prefer astropy.coordinates.Angle or SkyCoord.
+"""
 from __future__ import division
 from math import *
 import re
 import numpy as np
 
+
 class AngularCoordinate:
-    '''
-    An astropysics.coords.AngularCoordinate equivalent.
-    Last edit: 21 September 2017
-    '''
+    """Angular coordinate with sexagesimal parsing and formatting.
+
+    Parses coordinate strings in HH:MM:SS (RA) or +/-dd:mm:ss (Dec)
+    format and provides conversion to degrees and formatted output.
+
+    Attributes:
+        pos: Original position value (string or numeric).
+        angtype: Type of angle ('ra' or 'dec').
+
+    Example:
+        >>> coord = AngularCoordinate('12:30:00')
+        >>> coord.d  # Returns degrees
+        187.5
+    """
     def __init__(self,pos):
         self.pos = pos
         if isinstance(pos,str):     # 'HH:MM:SS' or '+/-dd:mm:ss'
@@ -18,10 +37,11 @@ class AngularCoordinate:
 
     @property
     def d(self):
-        '''
-        A coords.AngularCoordinate('HH:MM:SS').d equivalent.
-        OUTPUT: position in degrees.
-        '''
+        """Convert coordinate to degrees.
+
+        Returns:
+            Position in degrees. For RA input, converts hours to degrees.
+        """
         # separate string
         posarr = re.split('[:]',self.pos)
         if self.angtype == 'dec':
@@ -36,10 +56,11 @@ class AngularCoordinate:
 
     @property
     def dms(self):
-        '''
-        A coords.AngularCoordinate(xxx.x).dms equivalent.
-        OUTPUT: position in string format.
-        '''
+        """Format numeric position as degrees/arcmin/arcsec string.
+
+        Returns:
+            Formatted string in 'DDdMMmSS.Ss' format.
+        """
         dg = int(self.pos)
         mi = int((self.pos - dg) * 60.)
         se = (((self.pos - dg) * 60.) - mi) * 60
@@ -47,10 +68,11 @@ class AngularCoordinate:
 
     @property
     def hms(self):
-        '''
-        A coords.AngularCoordinate(xxx.x).hms equivalent.
-        OUTPUT: position in string format.
-        '''
+        """Format numeric position as hours/min/sec string.
+
+        Returns:
+            Formatted string in 'HHhMMmSS.Ss' format.
+        """
         if self.pos < 0:
             self.pos += 360
         valhr = self.pos / 15.

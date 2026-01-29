@@ -1,3 +1,13 @@
+"""Baseline flagging based on cross-hand visibility statistics.
+
+Identifies bad baselines by analyzing cross-hand (XY, YX) correlation
+amplitudes. Baselines with excessive cross-hand power are flagged.
+
+Functions
+---------
+flag_bad_bls
+    Identify and write bad baselines to a text file.
+"""
 #!/usr/bin/env python
 
 from __future__ import division
@@ -7,13 +17,21 @@ import casacore.tables as pt
 import os,argparse,sys
 import numpy.ma as ma
 
+
 def flag_bad_bls(msfile: str, usedatacol: bool = False) -> Optional[str]:
-    """Flag bad baselines using the crosshand visibilities.
-    DOES NOT ACTUALLY APPLY FLAGS. JUST WRITES TO BASELINE FLAGS TO TEXT FILE.
-    
+    """Flag bad baselines using the visibilities.
+
+    Identifies baselines with anomalously high cross-hand (XY, YX) correlation
+    amplitudes and writes them to a text file. Does NOT apply flags directly
+    to the measurement set.
+
     Args:
-        msfile: measurement set to identify flags.
-        usedatacol: If True, uses DATA column, else use CORRECTED_DATA.
+        msfile: Path to the measurement set.
+        usedatacol: If True, use DATA column; otherwise use CORRECTED_DATA.
+
+    Returns:
+        Path to the text file listing baselines to flag, or None if no
+        bad baselines were found. Format is one baseline per line as 'ant1&ant2'.
     """
     with pt.table(msfile, readonly=True) as t:
         tcross = t.query('ANTENNA1!=ANTENNA2')

@@ -1,14 +1,29 @@
+"""UTC to Julian Date conversion.
+
+This module converts UTC datetime components to Julian Date.
+"""
 from __future__ import division
 from math import *
 
+
 def utc2jd(year, month, day, hour, minute, second):
-    '''
-    Go from UTC to Julian date.
-    If you don't trust the answer, check here:
-        http://aa.usno.navy.mil/data/docs/JulianDate.php
-    Example usage: utc2jd(*filter(None,re.split('[-:T]','2015-03-29T06:04:46.0')))
-    Last edit: 18 Nov 2016
-    '''
+    """Convert UTC datetime to Julian Date.
+
+    Args:
+        year: Year (e.g., 2024).
+        month: Month (1-12).
+        day: Day of month.
+        hour: Hour (0-23).
+        minute: Minute (0-59).
+        second: Second (0-59).
+
+    Returns:
+        Julian Date as float.
+
+    Example:
+        >>> utc2jd(2024, 1, 1, 12, 0, 0)
+        2460311.0
+    """
     year   = float(year)
     month  = float(month)
     day    = float(day)

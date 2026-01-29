@@ -1,5 +1,11 @@
-"""fits related utilities.
+"""FITS file I/O and image manipulation utilities.
+
+Provides functions for reading and writing FITS images, creating masks,
+co-adding images, and extracting cutouts and statistics around source
+positions.
 """
+import warnings
+
 from astropy.io import fits
 from astropy import wcs
 from astropy.coordinates import SkyCoord
@@ -8,13 +14,33 @@ from typing import Tuple, List, Optional
 
 
 def read_image_fits(fn: str) -> Tuple[np.ndarray, fits.Header]:
+    """Read a 2D image from a FITS file.
+
+    Extracts the first plane from a 4D FITS cube (typical WSClean output).
+
+    Args:
+        fn: Path to the FITS file.
+
+    Returns:
+        Tuple of (image_data, header).
+    """
     with fits.open(fn) as hdulist:
         image = hdulist[0].data[0, 0]
         header = hdulist[0].header
     return image, header
 
 
-def write_image_fits(fn, header, data, overwrite=False):
+def write_image_fits(fn: str, header: fits.Header, data: np.ndarray, overwrite: bool = False):
+    """Write a 2D image to a FITS file.
+
+    Reshapes 2D data into 4D format for CASA/WSClean compatibility.
+
+    Args:
+        fn: Output file path.
+        header: FITS header to use.
+        data: 2D image data array.
+        overwrite: If True, overwrite existing file.
+    """
     fits.PrimaryHDU(np.reshape(data, newshape=(1, 1, *data.shape)), header=header).writeto(
         fn, overwrite=overwrite)
 
@@ -63,11 +89,11 @@ def co_add_arr(fits_list, dims):
     return averaged_im
 
 
-def get_peak_around_src(im_T: np.ndarray, source_coord: SkyCoord, w: wcs.WCS) -> Tuple[int, int]:
+def get_peak_around_src(im_T: np.ndarray, source_coord: SkyCoord, w: wcs.WCS, radius_px:int = 100) -> Tuple[int, int]:
     x, y = wcs.utils.skycoord_to_pixel(source_coord, w)
-    x_start = int(x) - 100
-    y_start = int(y) - 100
-    im_box = im_T[x_start:x_start + 200, y_start:y_start + 200]
+    x_start = int(x) - radius_px
+    y_start = int(y) - radius_px
+    im_box = im_T[x_start:x_start + 2 * radius_px, y_start:y_start + 2 * radius_px]
     peakx, peaky = np.unravel_index(np.argmax(im_box),
                                     im_box.shape)
     peakx += x_start
@@ -84,6 +110,13 @@ def std_and_max_around_src(im_T: np.ndarray, radius:int, source_coord: SkyCoord,
     im_box = im_T[x - radius :x + radius, y - radius : y + radius]
     return np.std(im_box), np.max(im_box)
 
+def get_cutout(im: np.ndarray, coord: SkyCoord, w: wcs.WCS, radius_px: int) -> np.ndarray:
+    x, y = wcs.utils.skycoord_to_pixel(coord, w)
+    if np.isnan(x) or np.isnan(y):
+        raise ValueError(f'Coordinate {coord} is not in the image.')
+    x = int(x)
+    y = int(y)
+    return im.T[x - radius_px : x + radius_px, y - radius_px : y + radius_px].T
 
 def get_sample_header() -> fits.Header:
     return fits.Header(

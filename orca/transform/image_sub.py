@@ -1,4 +1,9 @@
-"""Image subtraction util by Marin Anderson
+"""Image subtraction utilities for FITS images.
+
+Provides functions for subtracting pairs or lists of FITS images
+and computing image statistics within specified regions.
+
+Originally written by Marin Anderson.
 """
 from astropy.io import fits
 import os
@@ -9,8 +14,25 @@ from orca.utils import fitsutils
 
 from typing import Union, List
 
-# equation for a rotated ellipse centered at x0,y0
-def rot_ellipse(x,y,x0,y0,sigmax,sigmay,theta):
+
+def rot_ellipse(x: np.ndarray, y: np.ndarray, x0: float, y0: float,
+                sigmax: float, sigmay: float, theta: float) -> np.ndarray:
+    """Compute the ellipse equation value for a rotated ellipse.
+
+    Points where the return value <= 1 are inside the ellipse.
+
+    Args:
+        x: X coordinates.
+        y: Y coordinates.
+        x0: Ellipse center X coordinate.
+        y0: Ellipse center Y coordinate.
+        sigmax: Semi-major axis in X direction.
+        sigmay: Semi-minor axis in Y direction.
+        theta: Rotation angle in radians.
+
+    Returns:
+        Array of ellipse equation values at each (x, y) point.
+    """
     ans = ((x-x0)*np.cos(theta) + (y-y0)*np.sin(theta))**2. / sigmax**2. \
             + ((x-x0)*np.sin(theta) - (y-y0)*np.cos(theta))**2. / sigmay**2.
     return ans
@@ -55,9 +77,19 @@ def image_sub(file1: Union[str, List[str]], file2: Union[str, List[str]], out_di
     return out_path
 
 
-# take rms of image within given box
-def getimrms(filepath: List[str], radius=0):
-    #filelist = np.sort(glob(filepath))
+def getimrms(filepath: List[str], radius: int = 0):
+    """Compute RMS, median, and frequency for a list of FITS images.
+
+    Calculates image statistics either from a central 1000x1000 pixel box
+    or from a circular aperture of specified radius centered on the image.
+
+    Args:
+        filepath: List of paths to FITS image files.
+        radius: Aperture radius in pixels. If 0, uses central 1000x1000 box.
+
+    Returns:
+        Tuple of (rms_array, median_array, frequency_array, dateobs_array).
+    """
     filelist = filepath
     rmsarray = np.zeros(len(filelist))
     medarray = np.zeros(len(filelist))

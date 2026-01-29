@@ -1,68 +1,107 @@
-# orca
-[![Build Status](https://travis-ci.com/ovro-lwa/distributed-pipeline.svg?branch=main)](https://travis-ci.com/ovro-lwa/distributed-pipeline)
-[![codecov](https://codecov.io/gh/ovro-lwa/distributed-pipeline/branch/main/graph/badge.svg)](https://codecov.io/gh/ovro-lwa/distributed-pipeline)
-[![Documentation Status](https://readthedocs.org/projects/distributed-pipeline/badge/?version=latest)](https://distributed-pipeline.readthedocs.io/en/latest/?badge=latest)
-## Set up development environment on calim
-If you have not done so, create a barebone python3.8 environment with conda (on calim there's a py38_orca environment that you can just use).
-You will need conda-forge in your channels to install pipenv. If it's not there, you can use the `-c conda-forge` flag.
-```
-conda create --name py38_orca python=3.8 pipenv
-```
+# ORCA — Tools for distributed OVRO-LWA data processing
 
-Activate with
-```
-conda activate py38_orca
-```
-Then checkout this repo and run the following command from the repo's root directory
-```
-pipenv sync --dev
-```
-This should install the dependencies of the project (with versions etc as specified in `Pipfile.lock`). Then run the pipenv-managed virtualenv:
-```pipenv shell```
-or prefix any command with:
-```pipenv run```
+[![Tests](https://github.com/ovro-lwa/distributed-pipeline/actions/workflows/tests.yml/badge.svg)](https://github.com/ovro-lwa/distributed-pipeline/actions/workflows/tests.yml)
+[![Docs](https://github.com/ovro-lwa/distributed-pipeline/actions/workflows/docs.yml/badge.svg)](https://github.com/ovro-lwa/distributed-pipeline/actions/workflows/docs.yml)
+
+## Table of Contents
+- [Installation and Environment Setup](#installation-and-environment-setup)
+- [Additional Software Requirements](#additional-software-requirements)
+- [Configuration Setup](#configuration-setup)
+- [Run with celery](#run-with-celery)
+- [Code Structure](#code-structure)
+- [Developer & Testing Guide](#developer--testing-guide)
+
+## Installation and Environment Setup
+
+This repository serves as the central place for running and developing the OVRO-LWA data reduction and calibration pipelines.  
+A pre-configured environment is already available on Calim — see the [Developer & Testing Guide](#developer--testing-guide) for instructions and usage examples.  
+The following are instructions for setting up a new environment from scratch.
 
 
-To run the tests, do
-```
-pytest
-```
-which should run the tests and output a report.
+First, clone the repository:
 
-Adding a function to orca also requires integrating it with celery. This [example commit](https://github.com/ovro-lwa/distributed-pipeline/commit/e1e577437bef3c19162bdab1cd3973bee2128c04) shows the way to add and integrate a new function.
+```
+git clone https://github.com/ovro-lwa/distributed-pipeline.git
+cd distributed-pipeline
+```
 
-## Run with celery
-TBA, but meanwhile see scripts in `proj` directory. celery admin notes are in `celery.md`.
+Then create the environment using the provided `environment.yaml`:
+
+```
+conda env create -f environment.yaml
+```
+
+Activate the environment:
+
+```
+conda activate orca-env
+```
+
+All required dependencies — including both conda and pip packages — are installed automatically by `environment.yaml`, so no additional installation commands are needed.
+
+## Additional Software Requirements
+
+In addition to the Python packages listed in `requirements.txt`, several external tools are required to run certain ORCA functions:
+
+- **WSClean** — used for imaging. Also includes tools like `chgcentre` for changing the phase center of a measurement set. See:
+  - [WSClean GitLab repository](https://gitlab.com/aroffringa/wsclean)
+  - [WSClean documentation](https://wsclean.readthedocs.io/en/latest/)
+
+- **AOFlagger** — used for RFI flagging. See:
+  - [AOFlagger GitLab repository](https://gitlab.com/aroffringa/wsclean)
+  - [AOFlagger documentation](https://aoflagger.readthedocs.io/en/latest/)
+
+- **TTCal.jl** — used for peeling bright sources: [http://mweastwood.info/TTCal.jl/](http://mweastwood.info/TTCal.jl/)
+
+- **mnc_python** — OVRO-LWA Monitor and Control Python tools, used in functions like automatic bad antenna detection:  
+  [https://github.com/ovro-lwa/mnc_python](https://github.com/ovro-lwa/mnc_python)
+
+
+## Configuration Setup
+
+Copy the default configuration file to your home directory:
+
+```bash
+cp orca/default-orca-conf.yml ~/orca-conf.yml
+```
+
+If you plan to use Celery, edit the `queue:` section in `~/orca-conf.yml` and update:
+
+- `broker_uri` with your RabbitMQ URI
+- `result_backend_uri` with your Redis backend address
+
+If you are not using Celery, you can leave the `queue:` section unchanged.  
+It will not affect functionality unless Celery-based task execution is used.
+
+The configuration file is still required for settings related to telescope layout and executable paths.
+
+## Run with Celery
+Adding a function to orca also requires integrating it with celery. This [example commit](https://github.com/ovro-lwa/distributed-pipeline/commit/e1e577437bef3c19162bdab1cd3973bee2128c04) shows the way to add and integrate a new function. A good way to develop code for celery is to create a function with a unit test An function can be made into a task with the celery application decorator `@app.task` (`app` is imported from the `celery.py` module in this repo). You can call the decorated function like a regular function, test it locally, etc.
+
+This is for integration testing only. Make sure you read https://docs.celeryq.dev/en/stable/getting-started/introduction.html before you start.
+
+You can start a celery worker with
+```
+celery -A orca.celery worker -Q default --name=<give-it-a-name> --loglevel=INFO
+```
+
+The queue and backend are configured in `celery.py` under `orca`. Make sure you use a different rabbitMQ vhost for testing.
+
+Now you can submit tasks to the application from another session (e.g., IPython, notebook, etc). A common way to submit a task is to use the `delay` member function, so for your decorated function `do_something(a, b)`, you can run it as `result = do_something.delay(a, b)`.  The object `result` will refer to the task running asynchronously. You can use properties on `result` to see the status and return value of the function.
+
+Celery admin notes are in `celery.md`. The submission session will show some logging, but the celery application process will show more.
 
 ## Code Structure
 `orca` is where the wrappers and functions that do single units of work sit.
 
-`proj` contains code that executes the pipeline with celery.
+`pipeline` is where the pipelines live and serve as useful examples for how to use celery.
 
-## Install new packages/dependencies
-`pipenv.lock` is the definitive source of all the dependencies (it records the version number, the buid, etc).
-When you call `pipenv sync`, it installs all the packages recorded in `pipenv.lock`. To add a new package as
-dependency to the project, instead of calling `pip install`, do from the root directory of the repo
-`pipenv install --keep-oudated` with the package
-so that it installs the package, update the minimal set of packages required, and then write the current state
-of the packages into `pipenv.lock`. Add a `--dev` flag to `instaill` if you only want the package in the `dev`
-environment (say, if you're only gonna use this for your notebooks/offline analyses instead of your pipeline).
-Then commit and submit a pull request for both `Pipfile` and `Pipenv.lock`.
+## Developer & Testing Guide
 
-## Updating package
-`pipenv install` is still the command to call. Say I want to upgrade numpy to 1.19.1, I'd do
-```
-pipenv install --keep-outdated 'numpy==1.19.1'
-```
-This would update both `Pipfile.lock` and `Pipfile`. I then usually do the following so that I don't spec these
-packages in the `Pipfile` (so that the versions don't get accidentally locked)
-```
-git checkout -- Pipfile
-```
-Note that the new environment is still stored in `Pipfile.lock`.
+For usage examples and how to test the pipeline without Celery, please refer to the [Usage Guide](usage_guide.md)
 
-`pipenv update` would try to update the entire environment, no matter what you call it with. I don't use it. It is
-useful to see what's oudated with
-```
-pipenv update --dry-run
-```
+
+
+
+
+

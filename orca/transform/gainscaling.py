@@ -17,6 +17,15 @@ log = logging.getLogger(__name__)
 
 
 def auto_corr_data_and_flag(t: table, data_column: str) -> Tuple[np.ndarray, np.ndarray]:
+    """Extract autocorrelation data and flags from a measurement set table.
+
+    Args:
+        t: Open casacore table object.
+        data_column: Name of the data column to read.
+
+    Returns:
+        Tuple of (data, flag) arrays for autocorrelation baselines.
+    """
     t_auto = t.query('ANTENNA1==ANTENNA2')
     data = t_auto.getcol(data_column)
     flag = t_auto.getcol('FLAG')
@@ -24,18 +33,20 @@ def auto_corr_data_and_flag(t: table, data_column: str) -> Tuple[np.ndarray, np.
 
 
 def calculate_gain_scale(to_scale_data: np.ndarray, to_scale_flag: np.ndarray,
-                         target_data: np.ndarray, target_flag: np.ndarray):
-    """
-    Calcualte the gain scaling factor required to scale to_scale to target.
+                         target_data: np.ndarray, target_flag: np.ndarray) -> np.ndarray:
+    """Calculate the gain scaling factor to match autocorrelation levels.
+
+    Computes per-antenna per-channel per-polarization scaling factors
+    required to scale one dataset's autocorrelations to match another's.
 
     Args:
-        to_scale_data:
-        to_scale_flag:
-        target_data:
-        target_flag:
+        to_scale_data: Autocorrelation data to be scaled.
+        to_scale_flag: Flags for to_scale_data.
+        target_data: Target autocorrelation data to match.
+        target_flag: Flags for target_data.
 
     Returns:
-
+        Scaling factors array; flagged values are set to 1.0.
     """
     quotient = np.sqrt(target_data/to_scale_data)
     return np.where(np.logical_or(to_scale_flag, target_flag), 1., quotient)
@@ -70,16 +81,18 @@ def apply_gain_scale_in_place(data: np.ndarray, scale_spectrum: np.ndarray) -> N
 
 
 def correct_scaling(to_scale_ms: str, target_ms: str, data_column: str = 'CORRECTED_DATA'):
-    """ Correct for per-antenna per-pol per-channel scaling between two measurement sets.
-    Scales data in target_ms such that the autocorrelation for baseline_ms and target_ms are the same.
+    """Correct for per-antenna per-pol per-channel scaling between two measurement sets.
+
+    Scales data in to_scale_ms such that its autocorrelation matches target_ms.
+    Uses autocorrelation ratios to derive per-antenna scaling factors.
 
     Args:
-        to_scale_ms: Measurement set to scale to
-        target_ms: Measurement set that this function modifies so that the autocorr is the same as baseline_ms
+        to_scale_ms: Measurement set to scale (modified in-place).
+        target_ms: Reference measurement set whose autocorrelation levels to match.
         data_column: The data column to apply this operation to.
 
     Returns:
-
+        None. Modifies to_scale_ms in place.
     """
     log.info(f'Applying gainscaling change to {to_scale_ms}.')
     with table(target_ms, ack=False) as target:

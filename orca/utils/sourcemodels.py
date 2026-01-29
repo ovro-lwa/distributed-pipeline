@@ -1,4 +1,11 @@
-"""Just a bunch of dictionaries of source models.
+"""Predefined source model dictionaries for calibration and peeling.
+
+Contains TTCal-compatible source model definitions for:
+- RFI sources (power lines)
+- Cygnus A (resolved, two-component Gaussian)
+- Cassiopeia A (resolved Gaussian)
+
+These models are used by the peeling and calibration transforms.
 """
 RFI_B = {
     "name": "Noise Power Lines2",

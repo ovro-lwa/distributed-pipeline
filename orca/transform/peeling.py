@@ -1,4 +1,9 @@
-"""Peeling related transforms
+"""Peeling transforms for bright source subtraction.
+
+Provides functions for peeling (direction-dependent calibration and
+subtraction) of bright sources like Cygnus A, Cassiopeia A, and RFI
+sources from visibility data. Supports both TTCal-based and CASA-based
+peeling workflows including polarized (ZEST) peeling.
 """
 import logging
 
@@ -57,6 +62,16 @@ def ttcal_peel_from_data_to_corrected_data(ms: str, utc_time: datetime, include_
 
 
 def _write_peeling_sources_json(utc_timestamp: datetime, out_json: str, include_rfi_source: bool) -> Optional[str]:
+    """Write a JSON file listing sources to peel for TTCal.
+
+    Args:
+        utc_timestamp: UTC time for visibility calculations.
+        out_json: Output JSON file path.
+        include_rfi_source: Whether to include RFI source in the list.
+
+    Returns:
+        Path to the JSON file if sources were written, None otherwise.
+    """
     sources = _get_peeling_sources_list(utc_timestamp, include_rfi_source)
     if sources:
         log.info(f'{len(sources)} sources to peel for {utc_timestamp.isoformat()}.')
@@ -69,6 +84,18 @@ def _write_peeling_sources_json(utc_timestamp: datetime, out_json: str, include_
 
 
 def _get_peeling_sources_list(utc_timestamp: datetime, include_rfi_source: bool) -> List[dict]:
+    """Get list of sources to peel based on visibility at given time.
+
+    Checks whether Cygnus A and Cassiopeia A are above the horizon
+    and optionally includes generic RFI sources.
+
+    Args:
+        utc_timestamp: UTC time to check source visibility.
+        include_rfi_source: Whether to include near-field RFI source.
+
+    Returns:
+        List of source dictionaries in TTCal format.
+    """
     sources = []
 
     if coordutils.is_visible(coordutils.CYG_A, utc_timestamp):
@@ -140,7 +167,21 @@ def zest_with_casa(ms: str, reverse: bool = False):
     return ms
 
 
-def _model_data_uvsub(msfile,msfilemodels,gain=1,add=False):
+def _model_data_uvsub(msfile: str, msfilemodels: str, gain: float = 1, add: bool = False):
+    """Subtract or add model visibilities from data.
+
+    Combines polarization components from separate model measurement sets
+    and subtracts (or adds) them from the original data.
+
+    Args:
+        msfile: Path to the data measurement set.
+        msfilemodels: Path to the model measurement set.
+        gain: Scaling factor for the model. Default is 1.
+        add: If True, add model to data; otherwise subtract.
+
+    Note:
+        Modifies msfile in place, writing result to CORRECTED_DATA.
+    """
     msfileallmodels = path.splitext(msfile)[0]+'_allmodels.ms'
     msfilemodels_XX = path.splitext(msfilemodels)[0]+'XX.ms'
     msfilemodels_XY = path.splitext(msfilemodels)[0]+'XY.ms'
@@ -188,7 +229,18 @@ def _model_data_uvsub(msfile,msfilemodels,gain=1,add=False):
     tallmodels.close()
 
 
-def _model_data_rearrange(modelmsfile):
+def _model_data_rearrange(modelmsfile: str):
+    """Rearrange model data for polarized peeling.
+
+    Creates separate measurement sets for each polarization correlation
+    (XX, XY, YX, YY) with appropriately scaled data for applycal.
+
+    Args:
+        modelmsfile: Path to the model measurement set.
+
+    Returns:
+        Tuple of (XX_ms, XY_ms, YX_ms, YY_ms) paths.
+    """
     tmodels = tables.table(modelmsfile,readonly=False)
     data    = tmodels.getcol('DATA')
     corr    = tmodels.getcol('CORRECTED_DATA')
@@ -237,7 +289,15 @@ def _model_data_rearrange(modelmsfile):
     return msfilemodels_XX, msfilemodels_XY, msfilemodels_YX, msfilemodels_YY
 
 
-def _model_to_data(msfile):
+def _model_to_data(msfile: str):
+    """Copy MODEL_DATA column to DATA column.
+
+    Args:
+        msfile: Path to the measurement set.
+
+    Returns:
+        Path to the modified measurement set.
+    """
     t      = tables.table(msfile, readonly=False)
     model_data = t.getcol('MODEL_DATA')
     t.putcol('DATA',model_data)
@@ -246,6 +306,18 @@ def _model_to_data(msfile):
 
 
 def _cal_reverse(bcalfile: str, dcalfile: str):
+    """Invert calibration solutions for reverse application.
+
+    Inverts bandpass gains (1/g) and negates D-term solutions for
+    removing calibration effects during peeling.
+
+    Args:
+        bcalfile: Path to bandpass calibration table.
+        dcalfile: Path to D-term (leakage) calibration table.
+
+    Returns:
+        Tuple of (bcalfile, dcalfile) paths.
+    """
     bcalfileflags = path.splitext(bcalfile)[0]+'_flags.bcal'
     tables.tablecopy(bcalfile,bcalfileflags)
     b      = tables.table(bcalfile, readonly=False)

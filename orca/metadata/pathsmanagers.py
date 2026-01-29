@@ -1,3 +1,13 @@
+"""Path management utilities for OVRO-LWA data access.
+
+This module provides PathsManager classes that handle file path resolution
+for measurement sets, calibration tables, and output directories. Supports
+both offline batch processing and real-time pipeline modes.
+
+Classes:
+    PathsManager: Abstract base class defining the path management interface.
+    OfflinePathsManager: Path manager for offline transient processing.
+"""
 from datetime import datetime, date, timedelta
 from os import path
 from typing import Optional, Union, Dict, List

@@ -1,5 +1,10 @@
-""" Coordinates utilities having to do with local coordinates.
-For image plane pixel numbers, use the fits header and astropy.WCS.
+"""Coordinate utilities for OVRO-LWA observations.
+
+Provides functions for coordinate transformations between celestial and
+local horizontal coordinate systems, visibility calculations accounting
+for horizon and mountain obstructions, and sky position utilities.
+
+For image plane pixel coordinates, use FITS headers with astropy.WCS.
 """
 from datetime import datetime, date
 from os import path
@@ -18,6 +23,8 @@ OVRO_LWA_LOCATION = EarthLocation(lat=37.2398 * u.deg, lon=-118.282 * u.deg, hei
 CAS_A = SkyCoord('23h23m24s', '+58deg48m54s', frame=ICRS)
 CYG_A = SkyCoord('19h59m28.36s', '+40deg44m02.09s', frame=ICRS)
 TAU_A = SkyCoord('05h34m31s +22deg00m52s', frame=ICRS)
+
+TAU_BOO = SkyCoord('13h47m15.74s', '+17deg27m24.9s', frame=ICRS)
 
 MOUNTAIN_AZ_DEG, MOUNTAIN_ALT_DEG = np.loadtxt(pkg_resources.resource_filename('orca', 'resources/mountain_azel.csv'),
                                                unpack=True)

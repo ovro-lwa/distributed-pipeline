@@ -1,6 +1,10 @@
 name: orca-env
 dependencies:
   - python=3.8
+  - ffmpeg
   - pip
   - pip:
     - -r requirements.txt
+    - bdsf         
+    - .
+

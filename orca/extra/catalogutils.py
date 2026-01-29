@@ -1,14 +1,14 @@
-"""Utilities for source catalogs.
+"""Source catalog manipulation utilities.
 
-astropy.table.Table is the internal representation of source catalogs. The column names are derived from Aegean.
-See the SimpleSource class in Aegean
-https://github.com/PaulHancock/Aegean/blob/169ecf3870f37e5f60a336c5fd5008da0c40be71/AegeanTools/models.py#L14.
-Columns are local_rms, ra, dec, peak_flux, peak_pixel, x, y, a, b, pa, id. uuid can happen too if there's a need.
+Provides functions for creating, reading, and manipulating source catalogs
+in astropy Table format. Uses column naming conventions compatible with
+Aegean source finder.
 
-FITS is the recommended storage format for catalogs. When adding a new metadata entry, check and make sure that it gets
-stored in the file (with a unit test or something).
+Internal representation uses astropy.table.Table with columns derived from
+Aegean's SimpleSource class (local_rms, ra, dec, peak_flux, peak_pixel,
+x, y, a, b, pa, id).
 
-Use astropy.Table.write and read to do I/O with fits. See unit test module for examples.
+FITS is the recommended storage format. Use astropy.Table.write/read for I/O.
 """
 from typing import Dict, Optional
 from astropy.table import Table

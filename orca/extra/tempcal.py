@@ -1,3 +1,17 @@
+"""Temporary calibration table generation.
+
+This module provides utilities for quickly generating bandpass calibration
+tables from measurement sets. Designed for on-the-fly calibration during
+pipeline testing or debugging.
+
+Example:
+    Command-line usage::
+
+        $ python tempcal.py 2024-01-15T12:00:00 LWA-049 --image
+
+Attributes:
+    BAD_ANT_FILE: Path to file containing known bad antennas.
+"""
 import argparse
 import glob
 from orca.utils import calibrationutils
@@ -19,8 +33,27 @@ logger = logging.getLogger(__name__)
 
 BAD_ANT_FILE = '/home/pipeline/bad_ants_latest.txt'
 
-# main function that takes prefix with argparse
+
 def make_cal_tables(prefix: str, refant: str, image: bool):
+    """Generate bandpass calibration tables from measurement sets.
+
+    Copies measurement sets to working directory, applies bad antenna flags,
+    generates delay and bandpass calibration solutions, and optionally
+    creates diagnostic images.
+
+    Args:
+        prefix: Timestamp prefix for measurement set identification
+            (e.g., '2024-01-15T12:00:00').
+        refant: Reference antenna name for calibration.
+        image: If True, apply calibration and create dirty images.
+
+    Raises:
+        AssertionError: If no MS files found or more than 2 found.
+        ValueError: If no calibrator sources found in field.
+
+    Note:
+        Calibration tables are copied to /home/pipeline/caltables/staging/.
+    """
     # TODO copy the ms to /fast``
     ms_l = sorted(glob.glob(f"/data??/slow/{prefix}*.ms"))
     assert len(ms_l) > 0, 'No MS files found for the specified timestamp. Abort.'

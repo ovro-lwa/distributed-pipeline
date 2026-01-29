@@ -1,17 +1,35 @@
+"""Angular separation calculation using Vincenty formula.
+
+This module provides accurate angular separation calculation between
+two points on the celestial sphere using the Vincenty formula for
+great-circle distance.
+
+Note:
+    For new code, prefer astropy.coordinates.SkyCoord.separation().
+"""
 from __future__ import division
 from math import *
 import numpy as np
 
-def angsep(phi1,theta1,phi2,theta2):
-    '''
-    Input:  phi1,theta1 - latitude and longitude of point1, respectively, in degrees
-            phi2,theta2 - latitude and longitude of point2, respectively, in degrees
-    Output: Returns the angular separation between the two points, in degrees.
-    Uses the Vincenty formula -- https://en.wikipedia.org/wiki/Great-circle_distance
-    Note: phi ==> latitude ==> dec ==> elevation
-          theta ==> longitude ==> ra ==> azimuth
-    Last edit: 17 Nov 2016
-    '''
+
+def angsep(phi1, theta1, phi2, theta2):
+    """Calculate angular separation between two points on the sphere.
+
+    Uses the Vincenty formula for accurate great-circle distance.
+
+    Args:
+        phi1: Latitude (declination/elevation) of point 1 in degrees.
+        theta1: Longitude (RA/azimuth) of point 1 in degrees.
+        phi2: Latitude (declination/elevation) of point 2 in degrees.
+        theta2: Longitude (RA/azimuth) of point 2 in degrees.
+
+    Returns:
+        Angular separation in degrees.
+
+    Note:
+        phi corresponds to latitude/dec/elevation.
+        theta corresponds to longitude/ra/azimuth.
+    """
     deltatheta  = np.abs(theta2-theta1)
     numerator   = np.sqrt( (np.cos(np.radians(phi2))*np.sin(np.radians(deltatheta)))**2. 
             + (np.cos(np.radians(phi1))*np.sin(np.radians(phi2)) 

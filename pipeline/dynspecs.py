@@ -1,4 +1,9 @@
-# dynamic spectra for subet of baselines and incoherent sum
+"""Dynamic spectrum extraction pipeline.
+
+This script extracts dynamic spectra from measurement sets using
+a subset of baselines and incoherent sum. Produces waterfall plots
+across frequency and time for transient analysis.
+"""
 from datetime import datetime, timedelta, date
 from os import path
 
