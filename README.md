@@ -56,6 +56,9 @@ In addition to the Python packages listed in `requirements.txt`, several externa
 - **mnc_python** — OVRO-LWA Monitor and Control Python tools, used in functions like automatic bad antenna detection:  
   [https://github.com/ovro-lwa/mnc_python](https://github.com/ovro-lwa/mnc_python)
 
+- **dada2ms** — converts DADA files to measurement sets. **Note:** This is an outdated method no longer actively used for OVRO-LWA data processing.  
+  [https://github.com/ovro-lwa/dada2ms](https://github.com/ovro-lwa/dada2ms)
+
 
 ## Configuration Setup
 
@@ -89,7 +92,7 @@ The queue and backend are configured in `celery.py` under `orca`. Make sure you 
 
 Now you can submit tasks to the application from another session (e.g., IPython, notebook, etc). A common way to submit a task is to use the `delay` member function, so for your decorated function `do_something(a, b)`, you can run it as `result = do_something.delay(a, b)`.  The object `result` will refer to the task running asynchronously. You can use properties on `result` to see the status and return value of the function.
 
-Celery admin notes are in `celery.md`. The submission session will show some logging, but the celery application process will show more.
+For cluster deployment, worker management, and troubleshooting, see [docs/CELERY_DEPLOYMENT.md](docs/CELERY_DEPLOYMENT.md).
 
 ## Code Structure
 `orca` is where the wrappers and functions that do single units of work sit.
