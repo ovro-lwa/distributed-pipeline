@@ -1,25 +1,65 @@
+"""Celery application configuration for the ORCA distributed pipeline.
+
+This module initializes the Celery application with broker and backend
+settings, configures task queues for different workload types (default,
+cosmology, bandpass, imaging), and sets up task routing to direct specific
+tasks to appropriate queues.
+
+The Celery app is configured to:
+- Use JSON serialization for tasks
+- Limit worker prefetch to 1 task at a time
+- Restart workers after 20 tasks to prevent memory leaks
+- Expire results after 2 hours
+
+Queues
+------
+default
+    General-purpose queue for most tasks.
+cosmology
+    Queue for cosmology-specific processing tasks.
+bandpass
+    Queue for bandpass calibration tasks.
+imaging
+    Queue for imaging pipeline tasks.
+
+Example
+-------
+Start a worker for the imaging queue::
+
+    celery -A orca.celery worker -Q imaging -c 4
+
+"""
+# orca/celery.py
+
 from __future__ import absolute_import, unicode_literals
 from celery import Celery
 from orca.configmanager import queue_config
 
-CELERY_APP_NAME = 'claw'
-REDIS_URL = 'redis://10.41.0.85:6379/0'
+# You'll need these if you define custom Queues/Exchanges
+from kombu import Queue, Exchange
 
-# TODO: what if I import a module that imports orca.transform.*?
+CELERY_APP_NAME = 'orca'
 
-app = Celery(CELERY_APP_NAME,
-             broker='pyamqp://claw:claw@rabbitmq.calim.mcs.pvt:5672/claw',
-             backend=REDIS_URL,
-             include=['orca.transform.deconvolve',
-                      'orca.transform.imaging',
-                      'orca.transform.image_warp',
-                      'orca.utils',
-                      'orca.metadata',
-                      'orca.wrapper',
-                      'orca.flagging',
-                      'orca.tasks'])
+app = Celery(
+    CELERY_APP_NAME,
+    broker=queue_config.broker_uri,
+    backend=queue_config.result_backend_uri,
+    include=[
+        'orca.transform.calibration',
+        'orca.transform.qa',
+        'orca.tasks.fortests',
+        'orca.transform.spectrum',
+        'orca.transform.spectrum_v2',
+        'orca.transform.spectrum_v3',
+        'orca.transform.imaging',
+        'orca.transform.photometry',
+        'orca.tasks.pipeline_tasks',  
+        'orca.tasks.imaging_tasks',
+        #'orca.tasks.peel_stage1_tasks',
+    ]
+)
 
-# Optional configuration, see the application user guide.
+# Basic configs
 app.conf.update(
     result_expires=7200,
     worker_prefetch_multiplier=1,
@@ -29,7 +69,38 @@ app.conf.update(
     broker_connection_retry_on_startup=True,
 )
 
-app.conf.task_routes = {'*': queue_config.prefix}
+######################
+# Define your QUEUES
+######################
+app.conf.task_queues = (
+    Queue('default',   Exchange('default'),   routing_key='default'),
+    Queue('cosmology', Exchange('cosmology'), routing_key='cosmology'),
+    Queue('bandpass', Exchange('bandpass'), routing_key='bandpass'),
+    Queue('imaging', Exchange('imaging'), routing_key='imaging'),
+    )
+
+# If you still want "default" to be the fallback for any tasks not explicitly routed
+app.conf.task_default_queue = 'default'
+app.conf.task_default_exchange = 'default'
+app.conf.task_default_routing_key = 'default'
+
+###################
+# TASK ROUTING
+###################
+app.conf.task_routes = {
+    # All pipeline tasks can stay on default, *except* the special one(s):
+    #
+    # Example: route the new cosmology tasks to "cosmology" queue
+    'orca.tasks.pipeline_tasks.split_2pol_task': {'queue': 'cosmology'},
+    # If you have other tasks you want, list them here
+    #
+    # e.g. 'orca.tasks.pipeline_tasks.flag_foo_task': {'queue': 'cosmology'},
+    'orca.tasks.pipeline_tasks.bandpass_nvme_task': {'queue': 'bandpass'},
+    'orca.tasks.imaging_tasks.imaging_pipeline_task': {'queue': 'imaging'},
+    'orca.tasks.imaging_tasks.imaging_shared_pipeline_task': {'queue': 'imaging'},
+
+    }
 
 if __name__ == '__main__':
     app.start()
+

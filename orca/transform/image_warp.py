@@ -1,3 +1,11 @@
+"""Image warping transforms for astrometric correction.
+
+.. warning::
+    EXPERIMENTAL/INCOMPLETE: This module requires external dependencies
+    (source_detection, catalogs) that are not included in this package.
+    Use at your own risk.
+
+"""
 from astropy.io import fits
 from astropy.coordinates import SkyCoord
 from astropy import wcs

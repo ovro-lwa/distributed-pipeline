@@ -1,4 +1,8 @@
-"""Transforms that make images
+"""Image generation transforms using WSClean.
+
+Provides functions for creating dirty images, movies from FITS sequences,
+integrated images, and Stokes I/V imaging from measurement sets.
+Uses WSClean for imaging and supports multi-frequency synthesis.
 """
 from typing import Tuple, Optional, List, Union
 import uuid
@@ -45,8 +49,22 @@ register_type(SkyCoord, 'SkyCoord',
               SkyCoord.to_string,
               lambda s: SkyCoord(s, unit='degree'))
 
+
 def make_movie_from_fits(fits_tuple: Tuple[str], output_dir: str, scale: float,
                          output_filename: Optional[str] = None) -> str:
+    """Create an MP4 movie from a sequence of FITS images.
+
+    Uses matplotlib to render each frame and ffmpeg to encode the movie.
+
+    Args:
+        fits_tuple: Ordered sequence of paths to FITS image files.
+        output_dir: Directory to save the output movie.
+        scale: Symmetric color scale for image display (-scale to +scale).
+        output_filename: Optional output filename. Defaults to input basename + .mp4.
+
+    Returns:
+        Path to the generated movie file.
+    """
     # Check this out https://github.com/will-henney/fits2image
     with TemporaryDirectory() as tmpdir:
         dpi = 200
@@ -74,26 +92,38 @@ def make_movie_from_fits(fits_tuple: Tuple[str], output_dir: str, scale: float,
 
 
 def integrated_image(msl: List[str]):
+    """Create an integrated image from multiple measurement sets.
+
+    Args:
+        msl: List of measurement set paths.
+
+    Note:
+        Not yet implemented.
+    """
     pass
 
 
 def make_dirty_image(ms_list: List[str], output_dir: str, output_prefix: str, make_psf: bool = False,
                      briggs: float = 0, inner_tukey: Optional[int] = None, n_thread: int = 10,
                      more_args: Optional[List[str]] = None) -> Union[str, Tuple[str, str]]:
-    """Make dirty image out of list of measurement sets.
+    """Make dirty image from a list of measurement sets using WSClean.
+
+    Creates a dirty (non-deconvolved) image with specified weighting scheme.
+    Optionally generates the PSF image as well.
 
     Args:
-        ms_list:
-        output_dir:
-        output_prefix:
-        make_psf:
-        briggs:
-        inner_tukey:
-        n_thread:
-        more_args:
+        ms_list: List of measurement set paths to image.
+        output_dir: Directory for output images.
+        output_prefix: Prefix for output filenames.
+        make_psf: If True, also generate the PSF image at 2x size.
+        briggs: Briggs robust weighting parameter (-2 to 2).
+        inner_tukey: Inner Tukey taper width in wavelengths.
+        n_thread: Number of threads for WSClean.
+        more_args: Additional WSClean arguments.
 
-    Returns: if make_psf, (image path, psf path), else just the image path.
-
+    Returns:
+        If make_psf is True, tuple of (image_path, psf_path).
+        Otherwise, just the image path.
     """
     taper_args = ['-taper-inner-tukey', str(inner_tukey)] if inner_tukey else []
 
@@ -140,8 +170,7 @@ def reproject_fits(fits_path1: str, fits_path2: str, output_path: Union[str, Non
     # alternatively use reproject_and_coadd on list of images
 
     if output_path is not None:
-#        fitsutils.write_image_fits(output_path, hdu1.header, new_im)  # using Yuping's function
-        fits.PrimaryHDU(np.reshape(new_im, newshape=(1, 1, *new_im.shape)), header=hdu1.header).writeto(output_path)  # rewrote it to get axes right
+        fits.PrimaryHDU(np.reshape(new_im, newshape=(1, 1, *new_im.shape)), header=hdu1.header).writeto(output_path)
         return output_path
     else:
         return new_im
@@ -167,15 +196,38 @@ def stack_images(fits_list: List[str], output_path: str):
         stacked_image += reprojected_image
 
     stacked_image /= len(fits_list)
-#    fitsutils.write_image_fits(output_path, hdr, stacked_image)
-    fits.PrimaryHDU(np.reshape(stacked_image, newshape=(1, 1, *stacked_image.shape)), header=hdr).writeto(output_path)  # rewrote it to get axes right
+    fits.PrimaryHDU(np.reshape(stacked_image, newshape=(1, 1, *stacked_image.shape)), header=hdr).writeto(output_path)
 
-@app.task
+
+@app.task(autoretry_for=(Exception,), max_retries=1)
 def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: datetime,
                         source_dir: str, work_dir: str, scratch_dir: str,
                         phase_center: Optional[SkyCoord] = None, taper_inner_tukey: int = 30,
                         make_snapshots: bool = False,
-                        keep_sratch_dir: bool = False):
+                        keep_scratch_dir: bool = False,
+                        partitioned_by_hour: bool = True):
+    """Generate Stokes I and V images from calibrated measurement sets.
+
+    Celery task that applies calibration, flags, integrates across spectral
+    windows, and produces Stokes I/V images. Can optionally generate snapshot
+    images for each timestep.
+
+    Args:
+        spw_list: List of spectral window identifiers.
+        start_time: Start of the observation time range.
+        end_time: End of the observation time range.
+        source_dir: Directory containing source measurement sets.
+        work_dir: Working directory for intermediate products.
+        scratch_dir: Scratch directory for temporary files.
+        phase_center: Optional phase center for imaging. Defaults to zenith.
+        taper_inner_tukey: Inner Tukey taper width in wavelengths.
+        make_snapshots: If True, produce per-timestep snapshot images.
+        keep_scratch_dir: If True, don't delete temporary directory.
+        partitioned_by_hour: Whether data is partitioned by hour.
+
+    Returns:
+        None. Writes output images to work_dir.
+    """
     s = start_time
     e = end_time
     tmpdir = f'{scratch_dir}/tmp-{str(uuid.uuid4())}'
@@ -188,7 +240,7 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
             phase_center = coordutils.zenith_coord_at_ovro(start_time + (end_time - start_time) / 2)
         for spw in spw_list:
             logger.info('Applycal SPW %s', spw)
-            pm = StageIIIPathsManager(source_dir, work_dir, spw, s, e)
+            pm = StageIIIPathsManager(source_dir, work_dir, spw, s, e, partitioned_by_hour)
             if not pm.ms_list:
                 logger.warning('No measurement sets found for SPW %s', spw)
                 continue
@@ -235,8 +287,6 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
             if make_snapshots:
                 arg_list += ['-intervals-out', str(n_timesteps)]
 
-            print(integrated_msl)
-            print(arg_list)
             wsclean.wsclean(integrated_msl, tmpdir, 'OUT',
                     extra_arg_list=arg_list,
                     num_threads=20, mem_gb=100)
@@ -256,12 +306,31 @@ def stokes_IV_imaging(spw_list:List[str], start_time: datetime, end_time: dateti
                     os.makedirs(path.dirname(out_path), exist_ok=True)
                     shutil.copy(fitsname, out_path)
 
+                out_images = sorted(glob(f'{tmpdir}/OUT-t*-V-image.fits'))
+                for dt, fitsname in zip(datetime_list, out_images):
+                    out_path = pm.data_product_path(dt, f'snap.V.image.fits')
+                    os.makedirs(path.dirname(out_path), exist_ok=True)
+                    shutil.copy(fitsname, out_path)
+
             logger.info('Done imaging.')
     finally:
-        if not keep_sratch_dir:
+        if not keep_scratch_dir:
             shutil.rmtree(tmpdir)
 
+
 def coadd_fits(fits_list: List[str], output_path: str) -> Optional[str]:
+    """Co-add multiple FITS images by averaging.
+
+    Computes the mean of all input images pixel-by-pixel.
+    Header is taken from the first image.
+
+    Args:
+        fits_list: List of paths to FITS images to co-add.
+        output_path: Output path for the averaged image.
+
+    Returns:
+        Output path on success, None if fewer than 2 images provided.
+    """
     n = len(fits_list)
     if n < 2:
         logger.warning('Cannot coadd less than 2 images.')

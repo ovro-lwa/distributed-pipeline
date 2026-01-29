@@ -135,3 +135,5 @@ widgetsnbextension==4.0.8
 wrapt==1.15.0
 zipp==3.16.2
 zstandard==0.22.0
+reproject==0.13.1
+multiprocess==0.70.18
