@@ -22,6 +22,8 @@ dependencies = [
 "casadata",
 "tqdm",
 "reportlab",
+"reproject",
+"multiprocess",
 ]
 
 [project.optional-dependencies]

@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from matplotlib import colors as mpl_colors
 from matplotlib import pyplot as plt
 from astropy import wcs
+from astropy.io import fits
 from astropy.coordinates import SkyCoord
 import numpy as np
 
@@ -30,6 +31,8 @@ from orca.metadata.stageiii import StageIIIPathsManager
 from orca.transform.integrate import integrate
 from orca.transform.calibration import applycal_data_col_nocopy
 from orca.celery import app
+
+from reproject import reproject_interp
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +144,59 @@ def make_dirty_image(ms_list: List[str], output_dir: str, output_prefix: str, ma
         return f'{output_dir}/{output_prefix}-image.fits', f'{output_dir}/{output_prefix}-psf.fits'
     else:
         return f'{output_dir}/{output_prefix}-image.fits'
+
+
+def reproject_fits(fits_path1: str, fits_path2: str, output_path: Union[str, None] = None) -> Union[str, np.ndarray]:
+    """Reproject one fits image to wcs of another.
+
+    Args:
+        fits_path1: fits file of reference image
+        fits_path2: fits file to be reprojected
+        output_path: output for reprojected fits image (optional)
+
+    Returns:
+        path to reprojected fits image if output_path is not None, else the numpy array of the reprojected image.
+
+    """
+    hdu1 = fits.open(fits_path1)[0]
+    wcs1 = wcs.WCS(header=hdu1.header)
+    wcs1s = wcs1[0,0,:,:]  # slice out spatial dimensions. TODO: select axis based on names RA/DEC
+
+    hdu2 = fits.open(fits_path2)[0]
+    wcs2 = wcs.WCS(header=hdu2.header)
+    wcs2s = wcs2[0,0,:,:]  # slice out spatial dimensions. TODO: select axis based on names RA/DEC
+
+    new_im = reproject_interp((hdu2.data.squeeze(), wcs2s), wcs1s, shape_out=wcs1s.array_shape, return_footprint=False)
+    # alternatively use reproject_and_coadd on list of images
+
+    if output_path is not None:
+        fits.PrimaryHDU(np.reshape(new_im, newshape=(1, 1, *new_im.shape)), header=hdu1.header).writeto(output_path)
+        return output_path
+    else:
+        return new_im
+    
+
+@app.task
+def stack_images(fits_list: List[str], output_path: str):
+    """Stacks images in fits_list and writes to output_path.
+
+    Args:
+        fits_list: list of fits files to be stacked
+        output_path: output path (including name)
+    """
+
+    assert len(fits_list) > 1, 'Need at least two images to stack.'
+
+    hdu = fits.open(fits_list[0])[0]
+    stacked_image = hdu.data
+    hdr = hdu.header
+
+    for fits_file in fits_list[1:]:
+        reprojected_image = reproject_fits(fits_list[0], fits_file)
+        stacked_image += reprojected_image
+
+    stacked_image /= len(fits_list)
+    fits.PrimaryHDU(np.reshape(stacked_image, newshape=(1, 1, *stacked_image.shape)), header=hdr).writeto(output_path)
 
 
 @app.task(autoretry_for=(Exception,), max_retries=1)
