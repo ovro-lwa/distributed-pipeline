@@ -1,0 +1,48 @@
+[Unit]
+Description=Celery subband worker on %i
+After=network.target
+
+[Service]
+Type=simple
+User=nkosogor
+Group=modifydata
+WorkingDirectory=/opt/devel/nkosogor/nkosogor/distributed-pipeline
+
+# --- Environment ---
+# Conda activation via shell wrapper (see ExecStart)
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=CELERY_APP=orca.celery
+
+# --- Resource limits ---
+MemoryMax=120G
+MemoryHigh=110G
+
+# --- Logging ---
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=celery-%i
+
+# --- Start / Stop / Restart ---
+# Uses a shell wrapper to activate conda before launching celery.
+# %i is the instance name, e.g. "calim08" from celery-subband-worker@calim08.service
+ExecStart=/bin/bash -lc '\
+    source /opt/devel/pipeline/envs/py38_orca_nkosogor/bin/activate && \
+    cd /opt/devel/nkosogor/nkosogor/distributed-pipeline && \
+    exec celery -A orca.celery worker \
+        -Q %i \
+        --hostname=%i@%%h \
+        -c 45 \
+        --loglevel=INFO \
+        --without-heartbeat \
+        --without-mingle'
+
+# Graceful shutdown: let running tasks finish (up to 30 min)
+TimeoutStopSec=30m
+KillSignal=SIGTERM
+
+# Auto-restart on failure (not on clean stop)
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
