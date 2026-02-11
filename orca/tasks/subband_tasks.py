@@ -48,6 +48,10 @@ import shutil
 import socket
 import logging
 import traceback
+
+# WSClean (linked against OpenBLAS) refuses to start if OpenBLAS multi-
+# threading is enabled.  Setting this early ensures every subprocess inherits it.
+os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 from typing import List, Optional
 
 import numpy as np
