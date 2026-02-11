@@ -100,7 +100,7 @@ Celery admin notes are in [docs/celery_deployment.md](docs/celery_deployment.md)
 
 ## Developer & Testing Guide
 
-For usage examples and how to test the pipeline without Celery, please refer to the [Usage Guide](usage_guide.md)
+For usage examples and how to test the pipeline without Celery, please refer to the [Usage Guide](docs/usage_guide.md)
 
 
 
