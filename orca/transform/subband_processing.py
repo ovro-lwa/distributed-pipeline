@@ -716,16 +716,19 @@ def archive_results(
     work_dir: str,
     archive_base: str,
     cleanup_concat: bool = True,
+    cleanup_workdir: bool = False,
 ) -> str:
     """Copy pipeline products from NVMe work_dir to Lustre archive.
 
     Copies subdirectories I/, V/, snapshots/, QA/ and loose files.
-    Optionally removes the concatenated MS from NVMe.
+    Optionally removes the concatenated MS or the entire work_dir from NVMe.
 
     Args:
         work_dir: NVMe working directory.
         archive_base: Lustre destination directory.
         cleanup_concat: Whether to remove concat MS on NVMe.
+        cleanup_workdir: Whether to remove the entire work_dir after archiving.
+            Supersedes cleanup_concat when True.
 
     Returns:
         The archive_base path.
@@ -746,7 +749,10 @@ def archive_results(
         if os.path.isfile(f):
             shutil.copy(f, archive_base)
 
-    if cleanup_concat:
+    if cleanup_workdir:
+        shutil.rmtree(work_dir)
+        logger.info(f"Cleaned up entire work_dir: {work_dir}")
+    elif cleanup_concat:
         for ms in glob.glob(os.path.join(work_dir, "*_concat.ms")):
             if os.path.exists(ms):
                 shutil.rmtree(ms)

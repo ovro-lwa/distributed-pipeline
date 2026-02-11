@@ -223,6 +223,7 @@ def process_subband_task(
     run_label: str,
     hot_baselines: bool = False,
     skip_cleanup: bool = False,
+    cleanup_nvme: bool = False,
 ) -> str:
     """Phase 2: concatenate, image, and archive one subband.
 
@@ -238,6 +239,7 @@ def process_subband_task(
         run_label: Pipeline run label.
         hot_baselines: Whether to run hot-baseline diagnostics.
         skip_cleanup: If True, keep the concat MS on NVMe.
+        cleanup_nvme: If True, remove the entire NVMe work_dir after archiving.
 
     Returns:
         Path to the Lustre archive directory with final products.
@@ -396,7 +398,11 @@ def process_subband_task(
         LUSTRE_ARCHIVE_DIR,
         lst_label, obs_date, run_label, subband,
     )
-    archive_results(work_dir, archive_base, cleanup_concat=not skip_cleanup)
+    archive_results(
+        work_dir, archive_base,
+        cleanup_concat=not skip_cleanup,
+        cleanup_workdir=cleanup_nvme,
+    )
 
     logger.info(f"[{self.request.id}] Phase 2 COMPLETE: {subband} → {archive_base}")
     return archive_base
@@ -418,6 +424,7 @@ def submit_subband_pipeline(
     peel_rfi: bool = False,
     hot_baselines: bool = False,
     skip_cleanup: bool = False,
+    cleanup_nvme: bool = False,
     nvme_work_dir: Optional[str] = None,
     queue_override: Optional[str] = None,
 ) -> 'celery.result.AsyncResult':
@@ -437,6 +444,7 @@ def submit_subband_pipeline(
         peel_rfi: Peel RFI sources.
         hot_baselines: Run hot-baseline diagnostics.
         skip_cleanup: Keep intermediate files on NVMe.
+        cleanup_nvme: Remove entire NVMe work_dir after archiving to Lustre.
         nvme_work_dir: Override NVMe work directory.
         queue_override: Force routing to this queue instead of the
             default node.  E.g. 'calim08' to run 18MHz on calim08.
@@ -473,6 +481,7 @@ def submit_subband_pipeline(
         run_label=run_label,
         hot_baselines=hot_baselines,
         skip_cleanup=skip_cleanup,
+        cleanup_nvme=cleanup_nvme,
     ).set(queue=queue)
 
     # chord(Phase1)(Phase2) — Phase2 receives list of Phase1 return values

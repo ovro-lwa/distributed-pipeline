@@ -165,6 +165,8 @@ def main():
                         help='Do not split into LST-hour segments')
     parser.add_argument('--skip_cleanup', action='store_true',
                         help='Keep intermediate files on NVMe')
+    parser.add_argument('--cleanup_nvme', action='store_true',
+                        help='Remove entire NVMe work_dir after archiving to Lustre')
     parser.add_argument('--remap', nargs='+', default=None, metavar='SUBBAND=NODE',
                         help='Override node routing, e.g. --remap 18MHz=calim08 23MHz=calim08')
     parser.add_argument('--dry_run', action='store_true',
@@ -247,6 +249,7 @@ def main():
                 peel_rfi=args.peel_rfi,
                 hot_baselines=args.hot_baselines,
                 skip_cleanup=args.skip_cleanup,
+                cleanup_nvme=args.cleanup_nvme,
                 queue_override=queue_override,
             )
             results.append({
