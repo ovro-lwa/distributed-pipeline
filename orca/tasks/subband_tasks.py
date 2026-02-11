@@ -250,7 +250,14 @@ def process_subband_task(
     # Filter out any Nones (from failed Phase 1 tasks that were retried and
     # still returned nothing — shouldn't happen with autoretry, but be safe).
     valid_ms = [p for p in ms_paths if p and os.path.isdir(p)]
-    if not valid_ms:
+
+    # Check if a concat MS already exists from a previous (retried) attempt.
+    # On retry, individual MS files may have been cleaned up, but the concat
+    # MS survives — we can resume from it.
+    existing_concat = os.path.join(work_dir, f"{subband}_concat.ms")
+    have_concat = os.path.isdir(existing_concat)
+
+    if not valid_ms and not have_concat:
         raise RuntimeError(f"No valid MS files for {subband}")
 
     # ------------------------------------------------------------------
@@ -260,18 +267,22 @@ def process_subband_task(
         os.makedirs(os.path.join(work_dir, d), exist_ok=True)
 
     # ------------------------------------------------------------------
-    #  1. Concatenation
+    #  1. Concatenation  (skip if concat MS already exists from prior attempt)
     # ------------------------------------------------------------------
-    logger.info("Concatenating MS files...")
-    concat_ms = concatenate_ms(valid_ms, work_dir, subband)
-    if not concat_ms:
-        raise RuntimeError("Concatenation failed")
+    if have_concat:
+        concat_ms = existing_concat
+        logger.info(f"Resuming from existing concat MS: {concat_ms}")
+    else:
+        logger.info("Concatenating MS files...")
+        concat_ms = concatenate_ms(valid_ms, work_dir, subband)
+        if not concat_ms:
+            raise RuntimeError("Concatenation failed")
 
-    # Clean up individual MS files (they are on NVMe, space is precious)
-    if not skip_cleanup:
-        for ms in valid_ms:
-            if os.path.exists(ms):
-                shutil.rmtree(ms)
+        # Clean up individual MS files (they are on NVMe, space is precious)
+        if not skip_cleanup:
+            for ms in valid_ms:
+                if os.path.exists(ms):
+                    shutil.rmtree(ms)
 
     # ------------------------------------------------------------------
     #  2. Fix FIELD_ID
@@ -289,9 +300,10 @@ def process_subband_task(
     # ------------------------------------------------------------------
     #  4. AOFlagger
     # ------------------------------------------------------------------
+    aoflagger_bin = os.environ.get('AOFLAGGER_BIN', '/opt/bin/aoflagger')
     logger.info(f"Running AOFlagger with strategy {AOFLAGGER_STRATEGY}")
     run_subprocess(
-        ['aoflagger', '-strategy', AOFLAGGER_STRATEGY, concat_ms],
+        [aoflagger_bin, '-strategy', AOFLAGGER_STRATEGY, concat_ms],
         "AOFlagger (Post-Concat)",
     )
 
