@@ -419,6 +419,7 @@ def submit_subband_pipeline(
     hot_baselines: bool = False,
     skip_cleanup: bool = False,
     nvme_work_dir: Optional[str] = None,
+    queue_override: Optional[str] = None,
 ) -> 'celery.result.AsyncResult':
     """Submit the full two-phase subband pipeline as a Celery chord.
 
@@ -437,11 +438,13 @@ def submit_subband_pipeline(
         hot_baselines: Run hot-baseline diagnostics.
         skip_cleanup: Keep intermediate files on NVMe.
         nvme_work_dir: Override NVMe work directory.
+        queue_override: Force routing to this queue instead of the
+            default node.  E.g. 'calim08' to run 18MHz on calim08.
 
     Returns:
         Celery AsyncResult for the chord (Phase 2 result).
     """
-    queue = get_queue_for_subband(subband)
+    queue = queue_override or get_queue_for_subband(subband)
 
     if nvme_work_dir is None:
         nvme_work_dir = os.path.join(

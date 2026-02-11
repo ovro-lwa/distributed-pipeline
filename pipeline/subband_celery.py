@@ -165,9 +165,22 @@ def main():
                         help='Do not split into LST-hour segments')
     parser.add_argument('--skip_cleanup', action='store_true',
                         help='Keep intermediate files on NVMe')
+    parser.add_argument('--remap', nargs='+', default=None, metavar='SUBBAND=NODE',
+                        help='Override node routing, e.g. --remap 18MHz=calim08 23MHz=calim08')
     parser.add_argument('--dry_run', action='store_true',
                         help='Show what would be submitted without actually submitting')
     args = parser.parse_args()
+
+    # Parse node overrides: {subband: queue_name}
+    remap = {}
+    if args.remap:
+        for entry in args.remap:
+            if '=' not in entry:
+                logger.error(f"Invalid --remap format: {entry} (expected SUBBAND=NODE)")
+                sys.exit(1)
+            sb, node = entry.split('=', 1)
+            remap[sb] = node
+            logger.info(f"Remap: {sb} → queue {node}")
 
     run_label = args.run_label or f"Run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     logger.info(f"=== Pipeline Start === Run label: {run_label}")
@@ -194,8 +207,11 @@ def main():
         end_dt = seg['end'].datetime
 
         for subband in subbands:
-            queue = get_queue_for_subband(subband)
+            queue_override = remap.get(subband)
+            queue = queue_override or get_queue_for_subband(subband)
             node = NODE_SUBBAND_MAP[subband]
+            if queue_override:
+                node = f"lwa{queue_override}" 
 
             # Discover MS files
             ms_files = find_archive_files_for_subband(
@@ -231,6 +247,7 @@ def main():
                 peel_rfi=args.peel_rfi,
                 hot_baselines=args.hot_baselines,
                 skip_cleanup=args.skip_cleanup,
+                queue_override=queue_override,
             )
             results.append({
                 'subband': subband,
