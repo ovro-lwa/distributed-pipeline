@@ -62,7 +62,7 @@ def get_queue_for_subband(subband: str) -> str:
 #  Directory layout
 # ---------------------------------------------------------------------------
 NVME_BASE_DIR = '/fast/pipeline'           # Local NVMe on each calim node
-LUSTRE_ARCHIVE_DIR = '/lustre/pipeline'    # Shared Lustre storage
+LUSTRE_ARCHIVE_DIR = '/lustre/pipeline/images'  # Shared Lustre storage
 
 # Where archive MS files live (input)
 LUSTRE_NIGHTTIME_DIR = '/lustre/pipeline/night-time/averaged'
