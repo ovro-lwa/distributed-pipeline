@@ -1,7 +1,5 @@
 # Subband Processing Pipeline — Architecture & File Reference
 
-> **Branch:** `feature/celery-subband-integration`
->
 > This document covers the Celery-based subband processing pipeline for OVRO-LWA.
 > It processes per-subband data through calibration, flagging, peeling, imaging,
 > and archival — all orchestrated by Celery with NVMe-local execution on the calim
@@ -11,7 +9,7 @@
 
 ## Overview
 
-The pipeline replaces the previous Slurm + ThreadPoolExecutor approach with a
+The pipeline uses the following
 **Celery chord pattern**:
 
 ```

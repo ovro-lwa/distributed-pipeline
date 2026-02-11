@@ -10,6 +10,7 @@
 - [Run with celery](#run-with-celery)
 - [Code Structure](#code-structure)
 - [Developer & Testing Guide](#developer--testing-guide)
+- [Subband Pipeline](#subband-pipeline)
 
 ## Installation and Environment Setup
 
@@ -75,6 +76,7 @@ It will not affect functionality unless Celery-based task execution is used.
 
 The configuration file is still required for settings related to telescope layout and executable paths.
 
+
 ## Run with Celery
 Adding a function to orca also requires integrating it with celery. This [example commit](https://github.com/ovro-lwa/distributed-pipeline/commit/e1e577437bef3c19162bdab1cd3973bee2128c04) shows the way to add and integrate a new function. A good way to develop code for celery is to create a function with a unit test An function can be made into a task with the celery application decorator `@app.task` (`app` is imported from the `celery.py` module in this repo). You can call the decorated function like a regular function, test it locally, etc.
 
@@ -89,7 +91,7 @@ The queue and backend are configured in `celery.py` under `orca`. Make sure you 
 
 Now you can submit tasks to the application from another session (e.g., IPython, notebook, etc). A common way to submit a task is to use the `delay` member function, so for your decorated function `do_something(a, b)`, you can run it as `result = do_something.delay(a, b)`.  The object `result` will refer to the task running asynchronously. You can use properties on `result` to see the status and return value of the function.
 
-Celery admin notes are in `celery.md`. The submission session will show some logging, but the celery application process will show more.
+Celery admin notes are in [docs/celery_deployment.md](docs/celery_deployment.md). The submission session will show some logging, but the celery application process will show more.
 
 ## Code Structure
 `orca` is where the wrappers and functions that do single units of work sit.
@@ -105,3 +107,32 @@ For usage examples and how to test the pipeline without Celery, please refer to 
 
 
 
+
+## Subband Pipeline
+
+The Celery-based subband pipeline processes OVRO-LWA data on the calim cluster using node-local NVMe storage. Each subband is pinned to a specific calim node for data locality.
+
+**Documentation:**
+
+| Document | Description |
+|---|---|
+| [docs/subband-pipeline.md](docs/subband-pipeline.md) | Architecture, file reference, and processing flow |
+| [docs/worker-management.md](docs/worker-management.md) | Starting, stopping, deploying workers, and troubleshooting |
+| [docs/celery_deployment.md](docs/celery_deployment.md) | Cluster architecture and Celery infrastructure |
+
+**Quick start** (after initial setup):
+
+```bash
+# Start workers on all available calim nodes (from any calim node):
+./deploy/manage-workers.sh start
+
+# Submit a pipeline run:
+python pipeline/subband_celery.py \
+  --range 04-05 --date 2026-01-31 \
+  --bp_table /path/to/bandpass.B.flagged \
+  --xy_table /path/to/xyphase.Xf \
+  --subbands 73MHz --peel_sky --peel_rfi
+
+# After code changes — deploy to all nodes in one command:
+./deploy/manage-workers.sh deploy
+```
