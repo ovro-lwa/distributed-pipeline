@@ -91,7 +91,6 @@ cmd_start() {
                 --hostname=${node}@\$(hostname) \\
                 -c ${CONCURRENCY} \\
                 --loglevel=${LOGLEVEL} \\
-                --without-heartbeat \\
                 --without-mingle \\
                 --pidfile=${PID_DIR}/${node}.pid \\
                 >> ${LOG_DIR}/${node}.log 2>&1 &
