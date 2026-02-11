@@ -18,7 +18,7 @@ set -euo pipefail
 AVAILABLE_NODES=(calim01 calim05 calim06 calim07 calim08 calim09 calim10)
 
 REPO_DIR="/opt/devel/nkosogor/nkosogor/distributed-pipeline"
-CONDA_ACTIVATE="/opt/devel/pipeline/envs/py38_orca_nkosogor/bin/activate"
+CONDA_ENV="/opt/devel/pipeline/envs/py38_orca_nkosogor"
 CONCURRENCY=45
 LOGLEVEL="INFO"
 
@@ -82,7 +82,8 @@ cmd_start() {
         echo "Starting worker on ${node}..."
         ssh_cmd "$node" "mkdir -p ${PID_DIR} ${LOG_DIR}"
         ssh_cmd "$node" bash <<EOF
-            source ${CONDA_ACTIVATE}
+            eval "\$(conda shell.bash hook)"
+            conda activate ${CONDA_ENV}
             cd ${REPO_DIR}
             export OPENBLAS_NUM_THREADS=1
             nohup celery -A orca.celery worker \\
