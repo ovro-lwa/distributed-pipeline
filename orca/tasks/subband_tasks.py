@@ -321,7 +321,7 @@ def process_subband_task(
     pilot_name = f"{subband}-{SNAPSHOT_PARAMS['suffix']}"
     pilot_path = os.path.join(work_dir, "snapshots", pilot_name)
 
-    wsclean_bin = os.environ.get('WSCLEAN_BIN', 'wsclean')
+    wsclean_bin = os.environ.get('WSCLEAN_BIN', '/opt/bin/wsclean')
     _, _, wsclean_j = get_image_resources(subband)
     cmd_pilot = (
         [wsclean_bin]
