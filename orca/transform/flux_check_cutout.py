@@ -134,13 +134,21 @@ def run_flux_check(run_dir, logger=None):
 
     images = sorted(glob.glob(os.path.join(
         run_dir, "*MHz", "I", "deep",
-        "*I-Deep-Taper-Robust-0.75*pbcorr_dewarped.fits")))
+        "*I-Deep-Taper-Robust-0.75*pbcorr_dewarped*.fits")))
 
     if not images:
         # Fallback: try non-dewarped pbcorr
         images = sorted(glob.glob(os.path.join(
             run_dir, "*MHz", "I", "deep",
-            "*I-Deep-Taper-Robust-0.75*pbcorr.fits")))
+            "*I-Deep-Taper-Robust-0.75*pbcorr*.fits")))
+        images = [f for f in images if "dewarped" not in f]
+
+    if not images:
+        # Fallback: raw images (no PB correction available)
+        images = sorted(glob.glob(os.path.join(
+            run_dir, "*MHz", "I", "deep",
+            "*I-Deep-Taper-Robust-0.75*image*.fits")))
+        images = [f for f in images if "pbcorr" not in f and "dewarped" not in f]
 
     if not images:
         log("No matching images found for flux check.")

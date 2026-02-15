@@ -737,14 +737,17 @@ def find_deep_image(
         Path to the best deep image, or None.
     """
     pat_root = os.path.join(run_dir, f"{int(freq_mhz)}MHz", pol, "deep",
-                            "*Taper*pbcorr.fits")
-    pat_local = os.path.join(run_dir, pol, "deep", "*Taper*pbcorr.fits")
+                            "*Taper*pbcorr*.fits")
+    pat_local = os.path.join(run_dir, pol, "deep", "*Taper*pbcorr*.fits")
     candidates = glob.glob(pat_root) + glob.glob(pat_local)
+    # Exclude dewarped variants so we don't double-count
+    candidates = [c for c in candidates if "_dewarped" not in c]
     if not candidates:
         pat_root_raw = os.path.join(run_dir, f"{int(freq_mhz)}MHz", pol, "deep",
-                                    "*Taper*image.fits")
-        pat_local_raw = os.path.join(run_dir, pol, "deep", "*Taper*image.fits")
+                                    "*Taper*image*.fits")
+        pat_local_raw = os.path.join(run_dir, pol, "deep", "*Taper*image*.fits")
         candidates = glob.glob(pat_root_raw) + glob.glob(pat_local_raw)
+        candidates = [c for c in candidates if "pbcorr" not in c]
     candidates = [c for c in candidates if "NoTaper" not in c]
     if candidates:
         return sorted(candidates)[0]

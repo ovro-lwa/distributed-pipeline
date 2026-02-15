@@ -26,12 +26,11 @@ def _get_beam():
     global _beam_model
     if _beam_model is None:
         try:
-            from extractor_pb_75 import BeamModel, BEAM_PATH
+            from orca.transform.extractor_pb_75 import BeamModel, BEAM_PATH
             _beam_model = BeamModel(BEAM_PATH)
-        except ImportError:
+        except Exception as e:
             logger.warning(
-                "extractor_pb_75 not available — PB correction disabled.  "
-                "Install it on the cluster or add it to PYTHONPATH."
+                f"Failed to load beam model — PB correction disabled: {e}"
             )
             return None
     return _beam_model

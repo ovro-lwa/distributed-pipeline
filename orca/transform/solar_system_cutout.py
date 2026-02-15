@@ -118,21 +118,25 @@ def find_solar_system_images(run_dir, fallback_dir=None):
     """
 
     def _find_best(directory, pattern, fallback=None):
-        hits = glob.glob(os.path.join(directory, f"*{pattern}*pbcorr_dewarped.fits"))
-        if hits:
-            return sorted(hits), "dewarped_pbcorr"
-        hits = [f for f in glob.glob(os.path.join(directory, f"*{pattern}*pbcorr.fits"))
-                if "dewarped" not in f]
-        if hits:
-            return sorted(hits), "pbcorr"
-        if fallback and fallback != directory:
-            hits = glob.glob(os.path.join(fallback, f"*{pattern}*pbcorr_dewarped.fits"))
+        for search_dir in [directory, fallback]:
+            if search_dir is None or (search_dir == directory and search_dir != directory):
+                continue
+            if not os.path.isdir(search_dir):
+                continue
+            hits = glob.glob(os.path.join(search_dir, f"*{pattern}*pbcorr_dewarped*.fits"))
             if hits:
-                return sorted(hits), "dewarped_pbcorr(fallback)"
-            hits = [f for f in glob.glob(os.path.join(fallback, f"*{pattern}*pbcorr.fits"))
+                sfx = "(fallback)" if search_dir != directory else ""
+                return sorted(hits), f"dewarped_pbcorr{sfx}"
+            hits = [f for f in glob.glob(os.path.join(search_dir, f"*{pattern}*pbcorr*.fits"))
                     if "dewarped" not in f]
             if hits:
-                return sorted(hits), "pbcorr(fallback)"
+                sfx = "(fallback)" if search_dir != directory else ""
+                return sorted(hits), f"pbcorr{sfx}"
+            hits = [f for f in glob.glob(os.path.join(search_dir, f"*{pattern}*image*.fits"))
+                    if "pbcorr" not in f and "dewarped" not in f]
+            if hits:
+                sfx = "(fallback)" if search_dir != directory else ""
+                return sorted(hits), f"raw{sfx}"
         return [], "none"
 
     pairs = []

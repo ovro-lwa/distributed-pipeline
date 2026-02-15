@@ -378,7 +378,7 @@ def process_subband_task(
     )
 
     pilot_v = sorted(glob.glob(
-        os.path.join(work_dir, "snapshots", f"{pilot_name}*-V-image.fits")
+        os.path.join(work_dir, "snapshots", f"{pilot_name}*-V-image*.fits")
     ))
     bad_idx, stats = analyze_snapshot_quality(pilot_v)
     plot_snapshot_diagnostics(stats, bad_idx, work_dir, subband)
@@ -454,8 +454,9 @@ def process_subband_task(
         vlssr = load_ref_catalog(VLSSR_CATALOG, "VLSSr")
         # Find all PB-corrected AND raw images to dewarp
         files_to_warp = glob.glob(
-            os.path.join(work_dir, "*", "*", "*pbcorr.fits"))
-        files_to_warp = [f for f in files_to_warp if "_dewarped" not in f]
+            os.path.join(work_dir, "*", "*", "*pbcorr*.fits"))
+        files_to_warp = [f for f in files_to_warp
+                         if "_dewarped" not in f]
         raw_images = glob.glob(
             os.path.join(work_dir, "*", "*", "*image*.fits"))
         raw_images = [f for f in raw_images

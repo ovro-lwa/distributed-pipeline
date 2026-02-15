@@ -198,22 +198,24 @@ def robust_measure_flux(data, cutout_wcs, sky_coord, beam_arcsec, freq_mhz,
 
 
 def _find_best_image(pol_dir, stokes_pattern, fallback_pol_dir=None):
-    """Find best available image: dewarped pbcorr first, then raw pbcorr."""
-    hits = glob.glob(os.path.join(pol_dir, f"*{stokes_pattern}*pbcorr_dewarped.fits"))
-    if hits:
-        return hits[0], "dewarped_pbcorr"
-    hits = [f for f in glob.glob(os.path.join(pol_dir, f"*{stokes_pattern}*pbcorr.fits"))
-            if "dewarped" not in f]
-    if hits:
-        return hits[0], "pbcorr"
-    if fallback_pol_dir and fallback_pol_dir != pol_dir:
-        hits = glob.glob(os.path.join(fallback_pol_dir, f"*{stokes_pattern}*pbcorr_dewarped.fits"))
+    """Find best available image: dewarped pbcorr → pbcorr → raw image."""
+    for search_dir, suffix in [(pol_dir, ""), (fallback_pol_dir, "(fallback)")]:
+        if search_dir is None or (suffix and search_dir == pol_dir):
+            continue
+        # 1. dewarped pbcorr
+        hits = glob.glob(os.path.join(search_dir, f"*{stokes_pattern}*pbcorr_dewarped*.fits"))
         if hits:
-            return hits[0], "dewarped_pbcorr(fallback)"
-        hits = [f for f in glob.glob(os.path.join(fallback_pol_dir, f"*{stokes_pattern}*pbcorr.fits"))
+            return sorted(hits)[0], f"dewarped_pbcorr{suffix}"
+        # 2. pbcorr (non-dewarped)
+        hits = [f for f in glob.glob(os.path.join(search_dir, f"*{stokes_pattern}*pbcorr*.fits"))
                 if "dewarped" not in f]
         if hits:
-            return hits[0], "pbcorr(fallback)"
+            return sorted(hits)[0], f"pbcorr{suffix}"
+        # 3. raw image (no pbcorr)
+        hits = [f for f in glob.glob(os.path.join(search_dir, f"*{stokes_pattern}*image*.fits"))
+                if "pbcorr" not in f and "dewarped" not in f]
+        if hits:
+            return sorted(hits)[0], f"raw{suffix}"
     return None, "none"
 
 
@@ -269,10 +271,13 @@ def find_all_images(run_dir, fallback_dir=None):
         if not os.path.isdir(i_10min_dir):
             continue
 
-        i_snaps = glob.glob(os.path.join(i_10min_dir, "*Taper*10min*pbcorr_dewarped.fits"))
+        i_snaps = glob.glob(os.path.join(i_10min_dir, "*Taper*10min*pbcorr_dewarped*.fits"))
         if not i_snaps:
-            i_snaps = [f for f in glob.glob(os.path.join(i_10min_dir, "*Taper*10min*pbcorr.fits"))
+            i_snaps = [f for f in glob.glob(os.path.join(i_10min_dir, "*Taper*10min*pbcorr*.fits"))
                        if "dewarped" not in f]
+        if not i_snaps:
+            i_snaps = [f for f in glob.glob(os.path.join(i_10min_dir, "*Taper*10min*image*.fits"))
+                       if "pbcorr" not in f and "dewarped" not in f]
         if not i_snaps:
             continue
 
@@ -283,10 +288,13 @@ def find_all_images(run_dir, fallback_dir=None):
             if int_tag is None:
                 continue
 
-            v_snaps = glob.glob(os.path.join(v_10min_dir, f"*Taper*10min*{int_tag}*pbcorr_dewarped.fits"))
+            v_snaps = glob.glob(os.path.join(v_10min_dir, f"*Taper*10min*{int_tag}*pbcorr_dewarped*.fits"))
             if not v_snaps:
-                v_snaps = [f for f in glob.glob(os.path.join(v_10min_dir, f"*Taper*10min*{int_tag}*pbcorr.fits"))
+                v_snaps = [f for f in glob.glob(os.path.join(v_10min_dir, f"*Taper*10min*{int_tag}*pbcorr*.fits"))
                            if "dewarped" not in f]
+            if not v_snaps:
+                v_snaps = [f for f in glob.glob(os.path.join(v_10min_dir, f"*Taper*10min*{int_tag}*image*.fits"))
+                           if "pbcorr" not in f and "dewarped" not in f]
             if v_snaps:
                 result['snapshots_10min'].append((i_snap, v_snaps[0], int_tag))
 
