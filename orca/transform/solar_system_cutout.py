@@ -415,3 +415,256 @@ def process_solar_system(run_dir, out_dir, detections_dir,
             shutil.copy(csv_path, os.path.join(det_ss_dir, "SolarSystem_photometry.csv"))
     else:
         log("  No solar system measurements produced.")
+
+
+# ---------------------------------------------------------------------------
+#  Wideband solar system photometry (Phase 3)
+# ---------------------------------------------------------------------------
+
+def process_wideband_solar_system(run_dir, logger=None):
+    """Extract solar system cutouts from wideband stacked images.
+
+    Called from :func:`orca.transform.post_process_science.run_post_processing`
+    after wideband stacking is complete.
+
+    Looks for ``Wideband_*_I_deep_*.fits`` and matching V files in *run_dir*.
+    """
+    log = logger.info if logger else print
+    log_warn = logger.warning if logger else print
+
+    if robust_measure_flux is None:
+        if logger:
+            logger.error("cutout.robust_measure_flux not available.")
+        return
+
+    log("--- Wideband Solar System Photometry ---")
+
+    wb_dir = os.path.join(run_dir, "Wideband")
+    out_dir = os.path.join(run_dir, "samples")
+    det_dir = os.path.join(run_dir, "detections")
+    os.makedirs(out_dir, exist_ok=True)
+    os.makedirs(det_dir, exist_ok=True)
+
+    # Find wideband image pairs: I + V for each colour band / category
+    pairs = []
+    freq_label = {'Red': 30.0, 'Green': 52.0, 'Blue': 74.0}
+
+    for band in ['Red', 'Green', 'Blue']:
+        for cat in ['deep', '10min']:
+            i_matches = glob.glob(
+                os.path.join(wb_dir, f"Wideband_{band}_I_{cat}_*.fits"))
+            v_matches = glob.glob(
+                os.path.join(wb_dir, f"Wideband_{band}_V_{cat}_*.fits"))
+
+            if i_matches and v_matches:
+                # Prefer Taper versions for cutouts
+                i_taper = [f for f in i_matches
+                           if 'Taper' in os.path.basename(f)
+                           and 'NoTaper' not in os.path.basename(f)]
+                i_pick = i_taper[0] if i_taper else i_matches[0]
+                v_pick = v_matches[0]
+                pairs.append((freq_label.get(band, 0), cat, i_pick, v_pick))
+
+    if not pairs:
+        log_warn("No wideband image pairs found for solar system cutouts.")
+        return
+
+    log(f"  Found {len(pairs)} wideband image pairs")
+
+    all_summary = []
+
+    for body_name in SOLAR_SYSTEM_BODIES:
+        display_name = body_name.capitalize()
+        safe_name = display_name
+        body_out = os.path.join(out_dir, SAMPLE_NAME, safe_name)
+        os.makedirs(body_out, exist_ok=True)
+
+        for freq, category, i_path, v_path in pairs:
+            try:
+                with fits.open(i_path) as h_i:
+                    data_i = h_i[0].data.squeeze()
+                    head_i = h_i[0].header
+                    wcs_i = WCS(head_i).celestial
+                    beam_arcsec = get_beam_size_arcsec(head_i)
+
+                obs_mid = get_obs_midpoint(head_i)
+                ts_str = get_timestamp_from_header(head_i)
+
+                coord, elevation, dist_au = get_body_position(
+                    body_name, obs_mid, OVRO_LOC)
+                if coord is None or elevation < MIN_ELEVATION:
+                    continue
+
+                ang_diam = _apparent_diameter_arcsec(body_name, dist_au)
+
+                # Band tag for labelling
+                basename = os.path.basename(i_path)
+                band_tag = "WB"
+                for bn in ['Red', 'Green', 'Blue']:
+                    if bn in basename:
+                        band_tag = f"WB-{bn}"
+                        break
+
+                log(f"  {display_name} @ {band_tag} {category} {ts_str}: "
+                    f"el={elevation:.1f}° dist={dist_au:.4f}AU")
+
+                with fits.open(v_path) as h_v:
+                    data_v = h_v[0].data.squeeze()
+                    head_v = h_v[0].header
+
+                try:
+                    cut_i = Cutout2D(data_i, coord,
+                                     (CUTOUT_SIZE, CUTOUT_SIZE),
+                                     wcs=wcs_i, mode='trim')
+                    cut_v = Cutout2D(data_v, coord,
+                                     (CUTOUT_SIZE, CUTOUT_SIZE),
+                                     wcs=wcs_i, mode='trim')
+                except Exception:
+                    continue
+
+                def _make_cutout_header(orig, cut_wcs):
+                    h = orig.copy()
+                    for key in list(h.keys()):
+                        if any(key.endswith(str(n)) for n in [3, 4]) and \
+                                key[:5] in ('NAXIS', 'CTYPE', 'CRPIX',
+                                            'CRVAL', 'CDELT', 'CUNIT',
+                                            'CROTA'):
+                            del h[key]
+                    h['NAXIS'] = 2
+                    h.update(cut_wcs.to_header())
+                    return h
+
+                head_cut_i = _make_cutout_header(head_i, cut_i.wcs)
+                head_cut_v = _make_cutout_header(head_v, cut_v.wcs)
+                for h in [head_cut_i, head_cut_v]:
+                    h['OBJECT'] = display_name
+                    h['EPH_RA'] = (coord.ra.deg,
+                                   '[deg] Ephemeris RA (ICRS)')
+                    h['EPH_DEC'] = (coord.dec.deg,
+                                    '[deg] Ephemeris Dec (ICRS)')
+                    h['EPH_EL'] = (elevation,
+                                   '[deg] Elevation at obs midpoint')
+                    h['EPH_DIST'] = (dist_au,
+                                     '[AU] Geocentric distance')
+                    h['EPH_DIAM'] = (ang_diam,
+                                     '[arcsec] Apparent angular diameter')
+                    h['EPH_TIME'] = (obs_mid.isot,
+                                     'UTC time of ephemeris evaluation')
+                    h['FREQ_MHZ'] = (freq,
+                                     '[MHz] Nominal band center frequency')
+                    h['CATEGORY'] = (category,
+                                     'Image category (deep/10min)')
+                    h['WB_BAND'] = (band_tag,
+                                    'Wideband color band')
+                    h['CUTSIZE'] = (CUTOUT_SIZE.value,
+                                    '[deg] Cutout angular size')
+
+                fname_i = (f"{safe_name}_{band_tag}_{category}_"
+                           f"{ts_str}_I.fits")
+                fname_v = (f"{safe_name}_{band_tag}_{category}_"
+                           f"{ts_str}_V.fits")
+                fits.writeto(os.path.join(body_out, fname_i),
+                             cut_i.data, head_cut_i, overwrite=True)
+                fits.writeto(os.path.join(body_out, fname_v),
+                             cut_v.data, head_cut_v, overwrite=True)
+
+                i_res = robust_measure_flux(
+                    cut_i.data, cut_i.wcs, coord, beam_arcsec, freq,
+                    fits_path=os.path.join(body_out, fname_i))
+                v_res = robust_measure_flux(
+                    cut_v.data, cut_v.wcs, coord, beam_arcsec, freq,
+                    fits_path=os.path.join(body_out, fname_v))
+
+                # --- Diagnostic PNG ---
+                fig = plt.figure(figsize=(12, 6))
+                for panel_idx, (cut, res, stokes) in enumerate([
+                    (cut_i, i_res, 'I'), (cut_v, v_res, 'V'),
+                ]):
+                    ax = fig.add_subplot(1, 2, panel_idx + 1,
+                                         projection=cut.wcs)
+                    vmin, vmax = np.nanpercentile(cut.data, [1, 99.5])
+                    ax.imshow(cut.data, origin='lower', cmap='inferno',
+                              vmin=vmin, vmax=vmax)
+                    ax.plot_coord(coord, '+', color='cyan', ms=20,
+                                  markeredgewidth=2)
+                    if res['peak_coord'] is not None:
+                        ax.plot_coord(res['peak_coord'], 'D',
+                                      color='yellow', ms=10,
+                                      markeredgewidth=1.5,
+                                      fillstyle='none')
+                    ax.set_title(f"{display_name} — Stokes {stokes} "
+                                 f"({band_tag}, {category})")
+
+                    lines = [
+                        f"Src:  {res['src_flux'] * 1000:.1f} mJy",
+                        f"Peak: {res['peak_flux'] * 1000:.1f} mJy",
+                        f"RMS:  {res['rms'] * 1000:.1f} mJy",
+                    ]
+                    if res['fit_flux'] is not None:
+                        lines.append(
+                            f"Fit: {res['fit_flux'] * 1000:.1f} "
+                            f"± {res['fit_err'] * 1000:.1f} mJy")
+                    lines.append(f"Offset: {res['offset_arcmin']:.1f}'")
+                    lines.append(f"El: {elevation:.1f}°")
+                    ax.text(0.05, 0.95, "\n".join(lines),
+                            transform=ax.transAxes, color='white',
+                            fontsize=9, verticalalignment='top',
+                            fontfamily='monospace',
+                            bbox=dict(facecolor='black', alpha=0.6))
+
+                png_name = (f"{safe_name}_{band_tag}_{category}_"
+                            f"{ts_str}_Diagnostic.png")
+                plt.tight_layout()
+                plt.savefig(os.path.join(body_out, png_name), dpi=100)
+                plt.close()
+
+                is_det = False
+                snr = (i_res['peak_flux'] / i_res['rms']
+                       if i_res['rms'] > 0
+                       and np.isfinite(i_res['rms']) else 0)
+                if snr > DETECTION_SIGMA:
+                    is_det = True
+                    det_body = os.path.join(det_dir, SAMPLE_NAME,
+                                            safe_name)
+                    os.makedirs(det_body, exist_ok=True)
+                    shutil.copy(os.path.join(body_out, png_name),
+                                os.path.join(det_body, png_name))
+
+                all_summary.append({
+                    'Body': display_name, 'Band': band_tag,
+                    'Freq_MHz': freq, 'Category': category,
+                    'Date': ts_str,
+                    'RA_deg': coord.ra.deg, 'Dec_deg': coord.dec.deg,
+                    'Elevation_deg': elevation,
+                    'Distance_AU': dist_au,
+                    'AngDiam_arcsec': ang_diam,
+                    'I_Src_Jy': i_res['src_flux'],
+                    'I_Peak_Jy': i_res['peak_flux'],
+                    'I_RMS_Jy': i_res['rms'],
+                    'I_Offset_arcmin': i_res['offset_arcmin'],
+                    'I_Fit_Jy': i_res['fit_flux'],
+                    'I_FitErr_Jy': i_res['fit_err'],
+                    'I_Method': i_res['method'],
+                    'V_Src_Jy': v_res['src_flux'],
+                    'V_Peak_Jy': v_res['peak_flux'],
+                    'V_RMS_Jy': v_res['rms'],
+                    'V_Offset_arcmin': v_res['offset_arcmin'],
+                    'V_Fit_Jy': v_res['fit_flux'],
+                    'V_FitErr_Jy': v_res['fit_err'],
+                    'V_Method': v_res['method'],
+                    'Detection': is_det,
+                })
+
+            except Exception as e:
+                plt.close('all')
+                if logger:
+                    logger.error(f"  WB {display_name}: {e}")
+                traceback.print_exc()
+
+    if all_summary:
+        csv_path = os.path.join(out_dir, SAMPLE_NAME,
+                                "SolarSystem_wideband_photometry.csv")
+        pd.DataFrame(all_summary).to_csv(csv_path, index=False)
+        log(f"  Saved wideband solar system photometry: {csv_path}")
+    else:
+        log("  No wideband solar system measurements produced.")
