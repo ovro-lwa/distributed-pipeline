@@ -25,6 +25,14 @@ from astropy.time import Time
 from astropy.io import fits
 from astropy.stats import mad_std
 
+try:
+    import bdsf
+    BDSF_AVAILABLE = True
+except ImportError:
+    BDSF_AVAILABLE = False
+
+import pandas as pd
+
 logger = logging.getLogger(__name__)
 
 
@@ -710,22 +718,105 @@ def run_subprocess(cmd: List[str], description: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+#  Deep image finder + BDSF source extraction (from ExoPipe pipeline_utils.py)
+# ---------------------------------------------------------------------------
+def find_deep_image(
+    run_dir: str, freq_mhz: float, pol: str = 'I',
+) -> Optional[str]:
+    """Find the best deep tapered image for a subband.
+
+    Searches ``<run_dir>/<freq>MHz/<pol>/deep/`` and falls back to
+    ``<run_dir>/<pol>/deep/`` for PB-corrected tapered images.
+
+    Args:
+        run_dir: Working directory (NVMe or archive).
+        freq_mhz: Subband centre frequency in MHz.
+        pol: Stokes parameter ('I' or 'V').
+
+    Returns:
+        Path to the best deep image, or None.
+    """
+    pat_root = os.path.join(run_dir, f"{int(freq_mhz)}MHz", pol, "deep",
+                            "*Taper*pbcorr.fits")
+    pat_local = os.path.join(run_dir, pol, "deep", "*Taper*pbcorr.fits")
+    candidates = glob.glob(pat_root) + glob.glob(pat_local)
+    if not candidates:
+        pat_root_raw = os.path.join(run_dir, f"{int(freq_mhz)}MHz", pol, "deep",
+                                    "*Taper*image.fits")
+        pat_local_raw = os.path.join(run_dir, pol, "deep", "*Taper*image.fits")
+        candidates = glob.glob(pat_root_raw) + glob.glob(pat_local_raw)
+    candidates = [c for c in candidates if "NoTaper" not in c]
+    if candidates:
+        return sorted(candidates)[0]
+    return None
+
+
+def extract_sources_to_df(
+    filename: str, thresh_pix: float = 10.0,
+) -> 'pd.DataFrame':
+    """Extract sources from a FITS image using PyBDSF.
+
+    Args:
+        filename: Path to FITS image.
+        thresh_pix: Detection threshold in pixels.
+
+    Returns:
+        DataFrame with columns ra, dec, flux_peak_I_app, maj, min.
+        Empty DataFrame on failure.
+    """
+    if not BDSF_AVAILABLE:
+        logger.warning("bdsf not available — cannot extract sources")
+        return pd.DataFrame()
+    try:
+        logger.info(
+            f"Extracting sources from {os.path.basename(filename)} "
+            f"(thresh_pix={thresh_pix:.0f})..."
+        )
+        img = bdsf.process_image(
+            filename, thresh_pix=thresh_pix, thresh_isl=5.0,
+            adaptive_rms_box=True, quiet=True,
+        )
+        sources_raw = []
+        for s in img.sources:
+            if not np.isnan(s.posn_sky_max[0]):
+                sources_raw.append({
+                    'ra': s.posn_sky_max[0],
+                    'dec': s.posn_sky_max[1],
+                    'flux_peak_I_app': s.peak_flux_max,
+                    'maj': getattr(s, 'maj_axis', 0.0),
+                    'min': getattr(s, 'min_axis', 0.0),
+                })
+        if not sources_raw:
+            logger.warning(f"No sources found in {filename}")
+            return pd.DataFrame()
+        return pd.DataFrame(sources_raw)
+    except Exception as e:
+        logger.error(f"BDSF extraction failed for {filename}: {e}")
+        return pd.DataFrame()
+
+
+# ---------------------------------------------------------------------------
 #  Archive results to Lustre
 # ---------------------------------------------------------------------------
 def archive_results(
     work_dir: str,
     archive_base: str,
+    subband: str = '',
     cleanup_concat: bool = True,
     cleanup_workdir: bool = False,
 ) -> str:
     """Copy pipeline products from NVMe work_dir to Lustre archive.
 
-    Copies subdirectories I/, V/, snapshots/, QA/ and loose files.
-    Optionally removes the concatenated MS or the entire work_dir from NVMe.
+    Copies subdirectories I/, V/, snapshots/, QA/, samples/, detections/,
+    Movies/, Dewarp_Diagnostics/ and loose files.
+    Also writes to the centralised ``samples/`` and ``detections/`` trees
+    under ``LUSTRE_ARCHIVE_DIR`` so that products from many runs are
+    aggregated in one place.
 
     Args:
         work_dir: NVMe working directory.
         archive_base: Lustre destination directory.
+        subband: Subband label (e.g. '73MHz') — used for centralized archive paths.
         cleanup_concat: Whether to remove concat MS on NVMe.
         cleanup_workdir: Whether to remove the entire work_dir after archiving.
             Supersedes cleanup_concat when True.
@@ -736,7 +827,8 @@ def archive_results(
     os.makedirs(archive_base, exist_ok=True)
     logger.info(f"Archiving results → {archive_base}")
 
-    for top_level in ['I', 'V', 'snapshots', 'QA', 'samples', 'detections', 'Movies']:
+    for top_level in ['I', 'V', 'snapshots', 'QA', 'samples', 'detections',
+                      'Movies', 'Dewarp_Diagnostics']:
         src = os.path.join(work_dir, top_level)
         dest = os.path.join(archive_base, top_level)
         if os.path.exists(src):
@@ -748,6 +840,107 @@ def archive_results(
     for f in glob.glob(os.path.join(work_dir, "*")):
         if os.path.isfile(f):
             shutil.copy(f, archive_base)
+
+    # --- Centralized samples archive ---
+    # /lustre/pipeline/images/samples/{sample_name}/{target_name}/{subband}/
+    samples_src = os.path.join(work_dir, "samples")
+    if os.path.exists(samples_src) and subband:
+        lustre_archive_dir = os.path.dirname(
+            os.path.dirname(os.path.dirname(archive_base)))
+        lustre_samples_root = os.path.join(lustre_archive_dir, "samples")
+        for sample_dir in glob.glob(os.path.join(samples_src, "*")):
+            if not os.path.isdir(sample_dir):
+                continue
+            sample_name = os.path.basename(sample_dir)
+            for target_dir in glob.glob(os.path.join(sample_dir, "*")):
+                if not os.path.isdir(target_dir):
+                    # Loose file (e.g. photometry CSV) at sample level
+                    dest_dir = os.path.join(
+                        lustre_samples_root, sample_name, subband)
+                    os.makedirs(dest_dir, exist_ok=True)
+                    shutil.copy(target_dir, dest_dir)
+                    continue
+                target_name = os.path.basename(target_dir)
+                dest_dir = os.path.join(
+                    lustre_samples_root, sample_name, target_name, subband)
+                os.makedirs(dest_dir, exist_ok=True)
+                for f in glob.glob(os.path.join(target_dir, "*")):
+                    if os.path.isfile(f):
+                        shutil.copy(f, dest_dir)
+                    elif os.path.isdir(f):
+                        dest_sub = os.path.join(dest_dir, os.path.basename(f))
+                        if os.path.exists(dest_sub):
+                            shutil.rmtree(dest_sub)
+                        shutil.copytree(f, dest_sub)
+        logger.info(f"Samples archived to {lustre_samples_root}")
+
+    # --- Centralized detections archive ---
+    # Transients:    .../detections/transients/{I,V}/{J-name}/{subband}/
+    # SolarSystem:   .../detections/SolarSystem/{Body}/{subband}/
+    # Target dets:   .../detections/{sample_name}/{target_name}/{subband}/
+    detections_src = os.path.join(work_dir, "detections")
+    if os.path.exists(detections_src) and subband:
+        lustre_archive_dir = os.path.dirname(
+            os.path.dirname(os.path.dirname(archive_base)))
+        lustre_det_root = os.path.join(lustre_archive_dir, "detections")
+
+        # Transients
+        for stokes in ['I', 'V']:
+            trans_src = os.path.join(detections_src, "transients", stokes)
+            if not os.path.exists(trans_src):
+                continue
+            for jdir in glob.glob(os.path.join(trans_src, "*")):
+                if not os.path.isdir(jdir):
+                    continue
+                jname = os.path.basename(jdir)
+                dest_dir = os.path.join(
+                    lustre_det_root, "transients", stokes, jname, subband)
+                os.makedirs(dest_dir, exist_ok=True)
+                for f in glob.glob(os.path.join(jdir, "*")):
+                    if os.path.isfile(f):
+                        shutil.copy(f, dest_dir)
+
+        # Transient debug files
+        debug_src = os.path.join(detections_src, "transients", "debug")
+        if os.path.exists(debug_src):
+            dest_dir = os.path.join(
+                lustre_det_root, "transients", "debug", subband)
+            os.makedirs(dest_dir, exist_ok=True)
+            for f in glob.glob(os.path.join(debug_src, "*")):
+                if os.path.isfile(f):
+                    shutil.copy(f, dest_dir)
+
+        # Solar System
+        ss_src = os.path.join(detections_src, "SolarSystem")
+        if os.path.exists(ss_src):
+            for body_dir in glob.glob(os.path.join(ss_src, "*")):
+                if not os.path.isdir(body_dir):
+                    continue
+                body = os.path.basename(body_dir)
+                dest_dir = os.path.join(
+                    lustre_det_root, "SolarSystem", body, subband)
+                os.makedirs(dest_dir, exist_ok=True)
+                for f in glob.glob(os.path.join(body_dir, "*")):
+                    if os.path.isfile(f):
+                        shutil.copy(f, dest_dir)
+
+        # Target-based detections (sample_name/target_name subdirs)
+        for item in glob.glob(os.path.join(detections_src, "*")):
+            bn = os.path.basename(item)
+            if bn in ('transients', 'SolarSystem', 'debug'):
+                continue
+            if os.path.isdir(item):
+                for target_dir_path in glob.glob(os.path.join(item, "*")):
+                    if os.path.isdir(target_dir_path):
+                        target_name = os.path.basename(target_dir_path)
+                        dest_dir = os.path.join(
+                            lustre_det_root, bn, target_name, subband)
+                        os.makedirs(dest_dir, exist_ok=True)
+                        for f in glob.glob(os.path.join(target_dir_path, "*")):
+                            if os.path.isfile(f):
+                                shutil.copy(f, dest_dir)
+
+        logger.info(f"Detections archived to {lustre_det_root}")
 
     if cleanup_workdir:
         shutil.rmtree(work_dir)

@@ -167,6 +167,12 @@ def main():
                         help='Keep intermediate files on NVMe')
     parser.add_argument('--cleanup_nvme', action='store_true',
                         help='Remove entire NVMe work_dir after archiving to Lustre')
+    parser.add_argument('--targets', nargs='+', default=None,
+                        help='Target list files for photometry (one or more paths)')
+    parser.add_argument('--catalog', default=None,
+                        help='BDSF catalog file for transient search masking')
+    parser.add_argument('--snapshot_clean', action='store_true',
+                        help='Use CLEAN (niter=50000) for pilot snapshots instead of dirty')
     parser.add_argument('--remap', nargs='+', default=None, metavar='SUBBAND=NODE',
                         help='Override node routing, e.g. --remap 18MHz=calim08 23MHz=calim08')
     parser.add_argument('--dry_run', action='store_true',
@@ -251,6 +257,9 @@ def main():
                 skip_cleanup=args.skip_cleanup,
                 cleanup_nvme=args.cleanup_nvme,
                 queue_override=queue_override,
+                targets=args.targets,
+                catalog=args.catalog,
+                snapshot_clean=args.snapshot_clean,
             )
             results.append({
                 'subband': subband,
