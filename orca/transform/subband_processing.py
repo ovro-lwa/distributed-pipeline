@@ -778,6 +778,7 @@ def extract_sources_to_df(
         img = bdsf.process_image(
             filename, thresh_pix=thresh_pix, thresh_isl=5.0,
             adaptive_rms_box=True, quiet=True,
+            ncores=1,  # Celery workers are daemonic — cannot spawn children
         )
         sources_raw = []
         for s in img.sources:

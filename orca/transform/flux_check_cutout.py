@@ -133,20 +133,20 @@ def run_flux_check(run_dir, logger=None):
     os.makedirs(temp_dir, exist_ok=True)
 
     images = sorted(glob.glob(os.path.join(
-        run_dir, "*MHz", "I", "deep",
+        run_dir, "I", "deep",
         "*I-Deep-Taper-Robust-0.75*pbcorr_dewarped*.fits")))
 
     if not images:
         # Fallback: try non-dewarped pbcorr
         images = sorted(glob.glob(os.path.join(
-            run_dir, "*MHz", "I", "deep",
+            run_dir, "I", "deep",
             "*I-Deep-Taper-Robust-0.75*pbcorr*.fits")))
         images = [f for f in images if "dewarped" not in f]
 
     if not images:
         # Fallback: raw images (no PB correction available)
         images = sorted(glob.glob(os.path.join(
-            run_dir, "*MHz", "I", "deep",
+            run_dir, "I", "deep",
             "*I-Deep-Taper-Robust-0.75*image*.fits")))
         images = [f for f in images if "pbcorr" not in f and "dewarped" not in f]
 
@@ -159,7 +159,9 @@ def run_flux_check(run_dir, logger=None):
     results = []
     for img in images:
         try:
-            freq = float(img.split('/')[-4].replace('MHz', ''))
+            # Extract freq from the subband dir name (e.g. .../55MHz/I/deep/...)
+            # run_dir is the subband dir itself, so its basename has the freq
+            freq = float(os.path.basename(run_dir).replace('MHz', ''))
         except Exception:
             continue
 

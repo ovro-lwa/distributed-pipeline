@@ -179,6 +179,20 @@ def main():
                         help='Show what would be submitted without actually submitting')
     args = parser.parse_args()
 
+    # Resolve target/catalog paths to absolute so they work on remote workers.
+    # Paths under orca/resources/ are resolved relative to the orca package
+    # install location (which differs between submission host and workers).
+    # Use Lustre paths or other shared-filesystem paths for portability.
+    if args.targets:
+        args.targets = [os.path.abspath(t) for t in args.targets]
+        for t in args.targets:
+            if not os.path.exists(t):
+                print(f"WARNING: target file not found locally: {t}")
+    if args.catalog:
+        args.catalog = os.path.abspath(args.catalog)
+        if not os.path.exists(args.catalog):
+            print(f"WARNING: catalog file not found locally: {args.catalog}")
+
     # Parse node overrides: {subband: queue_name}
     remap = {}
     if args.remap:
