@@ -759,6 +759,11 @@ def extract_sources_to_df(
 ) -> 'pd.DataFrame':
     """Extract sources from a FITS image using PyBDSF.
 
+    Runs BDSF in a **subprocess** because Celery ForkPoolWorker processes
+    are daemonic and Python forbids daemon processes from spawning children.
+    BDSF internally uses multiprocessing (even with ncores=1 for some code
+    paths), so isolating it in a fresh subprocess is the only reliable fix.
+
     Args:
         filename: Path to FITS image.
         thresh_pix: Detection threshold in pixels.
@@ -767,33 +772,76 @@ def extract_sources_to_df(
         DataFrame with columns ra, dec, flux_peak_I_app, maj, min.
         Empty DataFrame on failure.
     """
-    if not BDSF_AVAILABLE:
-        logger.warning("bdsf not available — cannot extract sources")
-        return pd.DataFrame()
+    logger.info(
+        f"Extracting sources from {os.path.basename(filename)} "
+        f"(thresh_pix={thresh_pix:.0f}) [subprocess]..."
+    )
+
+    # Write a small helper script that runs BDSF and dumps results as JSON
+    import tempfile
+    script = f"""
+import sys, json, numpy as np
+try:
+    import bdsf
+except ImportError:
+    print(json.dumps({{"error": "bdsf not importable"}}))
+    sys.exit(0)
+try:
+    img = bdsf.process_image(
+        '{filename}',
+        thresh_pix={thresh_pix},
+        thresh_isl=5.0,
+        adaptive_rms_box=True,
+        quiet=True,
+        ncores=1,
+    )
+    sources = []
+    for s in img.sources:
+        if not np.isnan(s.posn_sky_max[0]):
+            sources.append({{
+                'ra': float(s.posn_sky_max[0]),
+                'dec': float(s.posn_sky_max[1]),
+                'flux_peak_I_app': float(s.peak_flux_max),
+                'maj': float(getattr(s, 'maj_axis', 0.0)),
+                'min': float(getattr(s, 'min_axis', 0.0)),
+            }})
+    print(json.dumps({{"sources": sources}}))
+except Exception as e:
+    print(json.dumps({{"error": str(e)}}))
+"""
     try:
-        logger.info(
-            f"Extracting sources from {os.path.basename(filename)} "
-            f"(thresh_pix={thresh_pix:.0f})..."
+        result = subprocess.run(
+            [sys.executable, '-c', script],
+            capture_output=True, text=True, timeout=600,
         )
-        img = bdsf.process_image(
-            filename, thresh_pix=thresh_pix, thresh_isl=5.0,
-            adaptive_rms_box=True, quiet=True,
-            ncores=1,  # Celery workers are daemonic — cannot spawn children
-        )
-        sources_raw = []
-        for s in img.sources:
-            if not np.isnan(s.posn_sky_max[0]):
-                sources_raw.append({
-                    'ra': s.posn_sky_max[0],
-                    'dec': s.posn_sky_max[1],
-                    'flux_peak_I_app': s.peak_flux_max,
-                    'maj': getattr(s, 'maj_axis', 0.0),
-                    'min': getattr(s, 'min_axis', 0.0),
-                })
-        if not sources_raw:
+        if result.returncode != 0:
+            logger.error(f"BDSF subprocess failed (exit {result.returncode}): "
+                         f"{result.stderr.strip()[-500:]}")
+            return pd.DataFrame()
+
+        # Parse JSON from stdout (last non-empty line to skip BDSF banner output)
+        stdout_lines = [l for l in result.stdout.strip().split('\n') if l.strip()]
+        if not stdout_lines:
+            logger.error("BDSF subprocess produced no output")
+            return pd.DataFrame()
+
+        data = json.loads(stdout_lines[-1])
+        if 'error' in data:
+            logger.error(f"BDSF subprocess error: {data['error']}")
+            return pd.DataFrame()
+
+        sources = data.get('sources', [])
+        if not sources:
             logger.warning(f"No sources found in {filename}")
             return pd.DataFrame()
-        return pd.DataFrame(sources_raw)
+
+        logger.info(f"BDSF extracted {len(sources)} sources from "
+                    f"{os.path.basename(filename)}")
+        return pd.DataFrame(sources)
+
+    except subprocess.TimeoutExpired:
+        logger.error(f"BDSF subprocess timed out (600s) for {filename}")
+        return pd.DataFrame()
     except Exception as e:
         logger.error(f"BDSF extraction failed for {filename}: {e}")
         return pd.DataFrame()
