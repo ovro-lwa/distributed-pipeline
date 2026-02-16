@@ -157,13 +157,13 @@ SNAPSHOT_CLEAN_PARAMS = {
     'args': [
         '-log-time',
         '-pol', 'IV',
-        '-multiscale', '-multiscale-scale-bias', '0.8',
         '-niter', '50000',
         '-mgain', '0.95',
-        '-auto-threshold', '0.5',
-        '-auto-mask', '3',
+        '-horizon-mask', '10deg',
+        '-mem', '50',
+        '-auto-threshold', '1',
+        '-auto-mask', '5',
         '-local-rms',
-        '-mem', '20',
         '-size', '4096', '4096',
         '-scale', '0.03125',
         '-taper-inner-tukey', '30',
@@ -278,5 +278,5 @@ def get_image_resources(subband: str):
     """
     node = NODE_SUBBAND_MAP.get(subband)
     if node in _DUAL_SUBBAND_NODES:
-        return 16, 60, 12
-    return 32, 120, 24
+        return 22, 60, 22
+    return 44, 120, 44
