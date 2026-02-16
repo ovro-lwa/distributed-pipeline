@@ -26,6 +26,7 @@ Process all subbands for a full observation::
 """
 import argparse
 import logging
+import os
 import sys
 from datetime import datetime
 
