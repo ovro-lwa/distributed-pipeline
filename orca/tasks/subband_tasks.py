@@ -404,7 +404,7 @@ def process_subband_task(
     # ------------------------------------------------------------------
     _t_imaging_all = time.time()
     logger.info(f"Starting Science Imaging for {subband}...")
-    logger.info(f"wsclean thread limit: -j {wsclean_j}")
+    logger.info(f"wsclean binary: {wsclean_bin}, thread limit: -j {wsclean_j}")
 
     for step in IMAGING_STEPS:
         _t_step = time.time()

@@ -709,6 +709,7 @@ def run_subprocess(cmd: List[str], description: str) -> None:
         subprocess.CalledProcessError on non-zero exit.
     """
     logger.info(f"START: {description}")
+    logger.info(f"CMD: {' '.join(cmd)}")
     try:
         subprocess.run(cmd, check=True)
         logger.info(f"DONE: {description}")
