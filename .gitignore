@@ -107,3 +107,4 @@ venv.bak/
 
 preliminary_pipeline
 scripts
+.DS_Store
