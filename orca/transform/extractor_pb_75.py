@@ -368,7 +368,9 @@ def generate_warp_screens(img_sources, cat_data, wcs, shape, freq_mhz, cat_freq_
         scales = wcs.proj_plane_pixel_scales()
         scale_deg = np.mean([scales[0].value, scales[1].value])
         shift_mag = np.sqrt(screen_x**2 + screen_y**2) * scale_deg * 60.0
-        plot_out = os.path.join(diag_dir, f"distortion_map_raw_{base_name}.png")
+        # Use only the filename portion of base_name (it may be an absolute path)
+        base_short = os.path.basename(base_name) if base_name else "warp"
+        plot_out = os.path.join(diag_dir, f"distortion_map_raw_{base_short}.png")
         plot_distortion_map(shift_mag, screen_x, screen_y, nx, "Raw", plot_out)
     except Exception:
         pass
