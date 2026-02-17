@@ -228,8 +228,8 @@ def prepare_one_ms_task(
     retry_backoff=True,
     retry_kwargs={'max_retries': 1},
     acks_late=True,
-    time_limit=14400,       # 4 hours hard limit
-    soft_time_limit=13800,  # 3h50m soft limit
+    time_limit=28800,       # 8 hours hard limit
+    soft_time_limit=27000,  # 7h30m soft limit
 )
 def process_subband_task(
     self,
