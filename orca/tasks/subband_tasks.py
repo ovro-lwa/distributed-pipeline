@@ -87,6 +87,7 @@ from orca.resources.subband_config import (
     SNAPSHOT_PARAMS,
     SNAPSHOT_CLEAN_PARAMS,
     IMAGING_STEPS,
+    get_pixel_size,
     NVME_BASE_DIR,
     LUSTRE_ARCHIVE_DIR,
     VLSSR_CATALOG,
@@ -95,6 +96,18 @@ from orca.resources.subband_config import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _patch_size_args(args: list, npix: int) -> list:
+    """Return a copy of *args* with ``-size W H`` replaced by *npix npix*."""
+    args = list(args)  # don't mutate the config
+    try:
+        idx = args.index('-size')
+        args[idx + 1] = str(npix)
+        args[idx + 2] = str(npix)
+    except (ValueError, IndexError):
+        pass
+    return args
 
 
 # ============================================================================
@@ -245,6 +258,7 @@ def process_subband_task(
     targets: Optional[List[str]] = None,
     catalog: Optional[str] = None,
     snapshot_clean: bool = False,
+    reduced_pixels: bool = False,
 ) -> str:
     """Phase 2: concatenate, image, run science, and archive one subband.
 
@@ -365,10 +379,12 @@ def process_subband_task(
     snapshot_cfg = SNAPSHOT_CLEAN_PARAMS if snapshot_clean else SNAPSHOT_PARAMS
     wsclean_bin = os.environ.get('WSCLEAN_BIN', '/opt/bin/wsclean')
     _, _, wsclean_j = get_image_resources(subband)
+    npix = get_pixel_size(subband) if reduced_pixels else 4096
+    logger.info(f"Pixel size for {subband}: {npix}x{npix} (reduced_pixels={reduced_pixels})")
     cmd_pilot = (
         [wsclean_bin]
         + ['-j', str(wsclean_j)]
-        + snapshot_cfg['args']
+        + _patch_size_args(snapshot_cfg['args'], npix)
         + ['-name', pilot_path, '-intervals-out', str(n_ints), concat_ms]
     )
     run_subprocess(cmd_pilot, "Pilot snapshot imaging")
@@ -412,7 +428,7 @@ def process_subband_task(
         base = f"{subband}-{step['suffix']}"
         full_path = os.path.join(target_dir, base)
 
-        cmd = [wsclean_bin] + ['-j', str(wsclean_j)] + step['args'] + ['-name', full_path]
+        cmd = [wsclean_bin] + ['-j', str(wsclean_j)] + _patch_size_args(step['args'], npix) + ['-name', full_path]
 
         if step.get('per_integration'):
             n_out = n_ints
@@ -735,6 +751,7 @@ def submit_subband_pipeline(
     targets: Optional[List[str]] = None,
     catalog: Optional[str] = None,
     snapshot_clean: bool = False,
+    reduced_pixels: bool = False,
 ) -> 'celery.result.AsyncResult':
     """Submit the full two-phase subband pipeline as a Celery chord.
 
@@ -759,6 +776,7 @@ def submit_subband_pipeline(
         targets: List of target-list file paths for photometry.
         catalog: Path to BDSF catalog for transient search masking.
         snapshot_clean: If True, use CLEAN imaging for pilot snapshots.
+        reduced_pixels: If True, scale pixel count by subband frequency.
 
     Returns:
         Celery AsyncResult for the chord (Phase 2 result).
@@ -796,6 +814,7 @@ def submit_subband_pipeline(
         targets=targets,
         catalog=catalog,
         snapshot_clean=snapshot_clean,
+        reduced_pixels=reduced_pixels,
     ).set(queue=queue)
 
     # chord(Phase1)(Phase2) — Phase2 receives list of Phase1 return values

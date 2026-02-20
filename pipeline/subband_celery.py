@@ -174,6 +174,8 @@ def main():
                         help='BDSF catalog file for transient search masking')
     parser.add_argument('--snapshot_clean', action='store_true',
                         help='Use CLEAN (niter=50000) for pilot snapshots instead of dirty')
+    parser.add_argument('--reduced_pixels', action='store_true',
+                        help='Scale image pixels by subband: 1024 (18-36MHz), 2048 (41-59MHz), 4096 (64-82MHz)')
     parser.add_argument('--remap', nargs='+', default=None, metavar='SUBBAND=NODE',
                         help='Override node routing, e.g. --remap 18MHz=calim08 23MHz=calim08')
     parser.add_argument('--dry_run', action='store_true',
@@ -275,6 +277,7 @@ def main():
                 targets=args.targets,
                 catalog=args.catalog,
                 snapshot_clean=args.snapshot_clean,
+                reduced_pixels=args.reduced_pixels,
             )
             results.append({
                 'subband': subband,

@@ -264,6 +264,34 @@ _DUAL_SUBBAND_NODES = {
     n for n, subs in SUBBAND_NODE_MAP.items() if len(subs) > 1
 }
 
+# ---------------------------------------------------------------------------
+#  Per-subband pixel scaling
+#  Lower-frequency subbands have wider beams → fewer pixels needed.
+#  This speeds up imaging significantly for the lowest bands.
+# ---------------------------------------------------------------------------
+_SUBBAND_PIXEL_SIZE = {
+    '18MHz': 1024, '23MHz': 1024, '27MHz': 1024, '32MHz': 1024, '36MHz': 1024,
+    '41MHz': 2048, '46MHz': 2048, '50MHz': 2048, '55MHz': 2048, '59MHz': 2048,
+    '64MHz': 4096, '69MHz': 4096, '73MHz': 4096, '78MHz': 4096, '82MHz': 4096,
+}
+
+def get_pixel_size(subband: str) -> int:
+    """Return the image pixel dimension for a given subband.
+
+    Lower subbands use fewer pixels (wider beam → coarser resolution):
+      18-36 MHz  →  1024  (4096/4)
+      41-59 MHz  →  2048  (4096/2)
+      64-82 MHz  →  4096
+
+    Args:
+        subband: e.g. '55MHz'
+
+    Returns:
+        Pixel dimension (square images: NxN).
+    """
+    return _SUBBAND_PIXEL_SIZE.get(subband, 4096)
+
+
 def get_image_resources(subband: str):
     """Return (cpus, mem_gb, wsclean_j) for a given subband.
 
