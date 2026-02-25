@@ -260,11 +260,16 @@ def process_subband_task(
     snapshot_clean: bool = False,
     reduced_pixels: bool = False,
     skip_science: bool = False,
+    remaining_hours: Optional[List[dict]] = None,
 ) -> str:
     """Phase 2: concatenate, image, run science, and archive one subband.
 
     This task is used as the callback in a ``chord``: it receives the list
     of NVMe MS paths returned by the Phase 1 tasks.
+
+    When *remaining_hours* is provided (by ``submit_subband_pipeline_chained``),
+    this task will submit the next hour's chord upon successful completion,
+    ensuring hours are processed **sequentially** on the same node.
 
     Args:
         ms_paths: NVMe paths returned by prepare_one_ms_task (via chord).
@@ -282,6 +287,10 @@ def process_subband_task(
         skip_science: If True, skip all science phases (dewarping, photometry,
             transient search, flux check) after PB correction. Products
             are still archived to Lustre.
+        remaining_hours: List of kwarg dicts for subsequent hours.
+            Each dict contains the arguments for ``submit_subband_pipeline``.
+            The first entry is submitted after this hour completes, with
+            the rest forwarded as its own ``remaining_hours``.
 
     Returns:
         Path to the Lustre archive directory with final products.
@@ -736,6 +745,23 @@ def process_subband_task(
     )
     logger.info(f"[TIMER] archive_to_lustre: {time.time() - _t:.1f}s")
 
+    # ------------------------------------------------------------------
+    #  9. Trigger next hour (sequential chaining)
+    # ------------------------------------------------------------------
+    if remaining_hours:
+        next_hour = remaining_hours[0]
+        rest = remaining_hours[1:] or None
+        next_label = next_hour.get('lst_label', '?')
+        logger.info(
+            f"Chain → submitting next hour {next_label} for {subband} "
+            f"({len(remaining_hours) - 1} hours remaining after)"
+        )
+        try:
+            submit_subband_pipeline(remaining_hours=rest, **next_hour)
+        except Exception as e:
+            logger.error(f"Failed to trigger next hour {next_label}: {e}")
+            traceback.print_exc()
+
     logger.info(f"[TIMER] phase2_total: {time.time() - _p2_t0:.1f}s")
     logger.info(f"[{self.request.id}] Phase 2 COMPLETE: {subband} → {archive_base}")
     return archive_base
@@ -765,6 +791,7 @@ def submit_subband_pipeline(
     snapshot_clean: bool = False,
     reduced_pixels: bool = False,
     skip_science: bool = False,
+    remaining_hours: Optional[List[dict]] = None,
 ) -> 'celery.result.AsyncResult':
     """Submit the full two-phase subband pipeline as a Celery chord.
 
@@ -830,6 +857,7 @@ def submit_subband_pipeline(
         snapshot_clean=snapshot_clean,
         reduced_pixels=reduced_pixels,
         skip_science=skip_science,
+        remaining_hours=remaining_hours,
     ).set(queue=queue)
 
     # chord(Phase1)(Phase2) — Phase2 receives list of Phase1 return values
@@ -880,3 +908,107 @@ def _run_hot_baseline_diagnostics(concat_ms: str, work_dir: str) -> None:
         hot_baselines.run_diagnostics(HotArgs, logger)
     finally:
         os.chdir(cwd)
+
+
+# ============================================================================
+#  Sequential chaining: process multiple hours one at a time per subband
+# ============================================================================
+
+def submit_subband_pipeline_chained(
+    hour_specs: List[dict],
+    subband: str,
+    bp_table: str,
+    xy_table: str,
+    run_label: str,
+    peel_sky: bool = False,
+    peel_rfi: bool = False,
+    hot_baselines: bool = False,
+    skip_cleanup: bool = False,
+    cleanup_nvme: bool = False,
+    queue_override: Optional[str] = None,
+    targets: Optional[List[str]] = None,
+    catalog: Optional[str] = None,
+    snapshot_clean: bool = False,
+    reduced_pixels: bool = False,
+    skip_science: bool = False,
+) -> 'celery.result.AsyncResult':
+    """Submit multiple LST-hours for one subband as a sequential chain.
+
+    Instead of submitting all hours simultaneously (which floods the worker
+    with Phase 1 tasks and starves Phase 2), this function submits only the
+    **first hour** immediately.  Phase 2 of each hour triggers the next
+    hour's chord upon completion, ensuring:
+
+    - Phase 2 (imaging) runs on an idle node with full CPU/memory
+    - NVMe space is freed before the next hour's data arrives
+    - No resource contention between hours on the same node
+
+    Different subbands still run in **parallel** on different nodes.
+
+    Args:
+        hour_specs: List of dicts, each with keys:
+            - ``ms_files``: List of source MS paths for that hour.
+            - ``lst_label``: e.g. '14h'.
+            - ``obs_date``: e.g. '2025-06-15'.
+        subband: Frequency label, e.g. '73MHz'.
+        bp_table: Bandpass calibration table.
+        xy_table: XY-phase calibration table.
+        run_label: Human-readable run identifier.
+        peel_sky: Peel astronomical sky sources.
+        peel_rfi: Peel RFI sources.
+        hot_baselines: Run hot-baseline diagnostics.
+        skip_cleanup: Keep intermediate files on NVMe.
+        cleanup_nvme: Remove entire NVMe work_dir after archiving.
+        queue_override: Force routing to this queue.
+        targets: Target-list file paths for photometry.
+        catalog: BDSF catalog for transient search masking.
+        snapshot_clean: Use CLEAN imaging for pilot snapshots.
+        reduced_pixels: Scale pixel count by subband frequency.
+        skip_science: Skip science phases after PB correction.
+
+    Returns:
+        Celery AsyncResult for the first hour's chord (only the first
+        hour is submitted immediately; subsequent hours are triggered
+        by Phase 2 callbacks).
+    """
+    if not hour_specs:
+        raise ValueError("hour_specs must not be empty")
+
+    # Build the kwargs dict for each hour's submit_subband_pipeline() call.
+    # Common params are the same; only ms_files/lst_label/obs_date vary.
+    all_hour_kwargs = []
+    for spec in hour_specs:
+        kwargs = dict(
+            ms_files=spec['ms_files'],
+            subband=subband,
+            bp_table=bp_table,
+            xy_table=xy_table,
+            lst_label=spec['lst_label'],
+            obs_date=spec['obs_date'],
+            run_label=run_label,
+            peel_sky=peel_sky,
+            peel_rfi=peel_rfi,
+            hot_baselines=hot_baselines,
+            skip_cleanup=skip_cleanup,
+            cleanup_nvme=cleanup_nvme,
+            queue_override=queue_override,
+            targets=targets,
+            catalog=catalog,
+            snapshot_clean=snapshot_clean,
+            reduced_pixels=reduced_pixels,
+            skip_science=skip_science,
+        )
+        all_hour_kwargs.append(kwargs)
+
+    # Submit only the first hour now; pass remaining hours through so
+    # Phase 2 can trigger the next one upon completion.
+    first_hour = all_hour_kwargs[0]
+    remaining = all_hour_kwargs[1:] or None
+
+    labels = [s['lst_label'] for s in hour_specs]
+    logger.info(
+        f"Chained submission for {subband}: "
+        f"{' → '.join(labels)} ({len(hour_specs)} hours)"
+    )
+
+    return submit_subband_pipeline(remaining_hours=remaining, **first_hour)

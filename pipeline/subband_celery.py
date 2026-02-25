@@ -35,7 +35,10 @@ from astropy.time import Time
 from astropy.coordinates import EarthLocation
 import astropy.units as u
 
-from orca.tasks.subband_tasks import submit_subband_pipeline
+from orca.tasks.subband_tasks import (
+    submit_subband_pipeline,
+    submit_subband_pipeline_chained,
+)
 from orca.transform.subband_processing import find_archive_files_for_subband
 from orca.resources.subband_config import (
     NODE_SUBBAND_MAP,
@@ -229,18 +232,19 @@ def main():
 
     results = []
 
-    for seg in segments:
-        obs_date = seg['start'].datetime.strftime('%Y-%m-%d')
-        lst_label = seg['lst_label']
-        start_dt = seg['start'].datetime
-        end_dt = seg['end'].datetime
+    for subband in subbands:
+        queue_override = remap.get(subband)
+        queue = queue_override or get_queue_for_subband(subband)
+        node = NODE_SUBBAND_MAP[subband]
+        if queue_override:
+            node = f"lwa{queue_override}"
 
-        for subband in subbands:
-            queue_override = remap.get(subband)
-            queue = queue_override or get_queue_for_subband(subband)
-            node = NODE_SUBBAND_MAP[subband]
-            if queue_override:
-                node = f"lwa{queue_override}" 
+        hour_specs = []
+        for seg in segments:
+            obs_date = seg['start'].datetime.strftime('%Y-%m-%d')
+            lst_label = seg['lst_label']
+            start_dt = seg['start'].datetime
+            end_dt = seg['end'].datetime
 
             # Discover MS files
             ms_files = find_archive_files_for_subband(
@@ -255,49 +259,63 @@ def main():
                 continue
 
             logger.info(
-                f"Submitting {subband} | {lst_label} | {len(ms_files)} files "
+                f"  {subband} | {lst_label} | {len(ms_files)} files "
                 f"→ {node} (queue={queue})"
             )
 
             if args.dry_run:
                 for ms in ms_files:
-                    logger.info(f"  [DRY RUN] {ms}")
-                continue
+                    logger.info(f"    [DRY RUN] {ms}")
 
-            result = submit_subband_pipeline(
-                ms_files=ms_files,
-                subband=subband,
-                bp_table=args.bp_table,
-                xy_table=args.xy_table,
-                lst_label=lst_label,
-                obs_date=obs_date,
-                run_label=run_label,
-                peel_sky=args.peel_sky,
-                peel_rfi=args.peel_rfi,
-                hot_baselines=args.hot_baselines,
-                skip_cleanup=args.skip_cleanup,
-                cleanup_nvme=args.cleanup_nvme,
-                queue_override=queue_override,
-                targets=args.targets,
-                catalog=args.catalog,
-                snapshot_clean=args.snapshot_clean,
-                reduced_pixels=args.reduced_pixels,
-                skip_science=args.skip_science,
-            )
-            results.append({
-                'subband': subband,
+            hour_specs.append({
+                'ms_files': ms_files,
                 'lst_label': lst_label,
-                'node': node,
-                'n_files': len(ms_files),
-                'result': result,
+                'obs_date': obs_date,
             })
 
+        if not hour_specs:
+            continue
+
+        if args.dry_run:
+            labels = [h['lst_label'] for h in hour_specs]
+            logger.info(
+                f"[DRY RUN] {subband}: {len(hour_specs)} hours chained "
+                f"sequentially → {' → '.join(labels)}"
+            )
+            continue
+
+        result = submit_subband_pipeline_chained(
+            hour_specs=hour_specs,
+            subband=subband,
+            bp_table=args.bp_table,
+            xy_table=args.xy_table,
+            run_label=run_label,
+            peel_sky=args.peel_sky,
+            peel_rfi=args.peel_rfi,
+            hot_baselines=args.hot_baselines,
+            skip_cleanup=args.skip_cleanup,
+            cleanup_nvme=args.cleanup_nvme,
+            queue_override=queue_override,
+            targets=args.targets,
+            catalog=args.catalog,
+            snapshot_clean=args.snapshot_clean,
+            reduced_pixels=args.reduced_pixels,
+            skip_science=args.skip_science,
+        )
+        results.append({
+            'subband': subband,
+            'node': node,
+            'n_hours': len(hour_specs),
+            'total_files': sum(len(h['ms_files']) for h in hour_specs),
+            'result': result,
+        })
+
     # Summary
-    logger.info(f"=== Submitted {len(results)} subband jobs ===")
+    logger.info(f"=== Submitted {len(results)} subband chains ===")
     for r in results:
         logger.info(
-            f"  {r['subband']:>6s} | {r['lst_label']} | "
-            f"{r['n_files']:3d} files → {r['node']}"
+            f"  {r['subband']:>6s} | {r['n_hours']} hours chained | "
+            f"{r['total_files']:3d} total files → {r['node']}"
         )
 
     if results and not args.dry_run:
