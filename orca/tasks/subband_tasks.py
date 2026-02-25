@@ -259,6 +259,7 @@ def process_subband_task(
     catalog: Optional[str] = None,
     snapshot_clean: bool = False,
     reduced_pixels: bool = False,
+    skip_science: bool = False,
 ) -> str:
     """Phase 2: concatenate, image, run science, and archive one subband.
 
@@ -278,6 +279,9 @@ def process_subband_task(
         targets: List of target-list file paths for photometry.
         catalog: Path to BDSF catalog for transient search masking.
         snapshot_clean: If True, use CLEAN imaging for pilot snapshots.
+        skip_science: If True, skip all science phases (dewarping, photometry,
+            transient search, flux check) after PB correction. Products
+            are still archived to Lustre.
 
     Returns:
         Path to the Lustre archive directory with final products.
@@ -453,6 +457,9 @@ def process_subband_task(
     # ------------------------------------------------------------------
     #  7b. SCIENCE PHASES (all on NVMe)
     # ------------------------------------------------------------------
+    if skip_science:
+        logger.info("--skip_science: skipping dewarping, photometry, transients, flux check")
+
     try:
         freq_mhz = float(subband.replace('MHz', ''))
     except Exception:
@@ -460,252 +467,257 @@ def process_subband_task(
 
     # --- A. Ionospheric Dewarping (VLSSr cross-match) ---
     _t = time.time()
-    logger.info("--- Science A: Ionospheric Dewarping (VLSSr) ---")
-    try:
-        from orca.transform.ionospheric_dewarping import (
-            load_ref_catalog, generate_warp_screens, apply_warp,
-        )
-        from astropy.wcs import WCS as _WCS
+    if not skip_science:
+        logger.info("--- Science A: Ionospheric Dewarping (VLSSr) ---")
+        try:
+            from orca.transform.ionospheric_dewarping import (
+                load_ref_catalog, generate_warp_screens, apply_warp,
+            )
+            from astropy.wcs import WCS as _WCS
 
-        vlssr = load_ref_catalog(VLSSR_CATALOG, "VLSSr")
-        # Find all PB-corrected AND raw images to dewarp
-        files_to_warp = glob.glob(
-            os.path.join(work_dir, "*", "*", "*pbcorr*.fits"))
-        files_to_warp = [f for f in files_to_warp
-                         if "_dewarped" not in f]
-        raw_images = glob.glob(
-            os.path.join(work_dir, "*", "*", "*image*.fits"))
-        raw_images = [f for f in raw_images
-                      if "pbcorr" not in f and "_dewarped" not in f]
-        files_to_warp.extend(raw_images)
+            vlssr = load_ref_catalog(VLSSR_CATALOG, "VLSSr")
+            # Find all PB-corrected AND raw images to dewarp
+            files_to_warp = glob.glob(
+                os.path.join(work_dir, "*", "*", "*pbcorr*.fits"))
+            files_to_warp = [f for f in files_to_warp
+                             if "_dewarped" not in f]
+            raw_images = glob.glob(
+                os.path.join(work_dir, "*", "*", "*image*.fits"))
+            raw_images = [f for f in raw_images
+                          if "pbcorr" not in f and "_dewarped" not in f]
+            files_to_warp.extend(raw_images)
 
-        calc_img = find_deep_image(work_dir, freq_mhz, 'I')
+            calc_img = find_deep_image(work_dir, freq_mhz, 'I')
 
-        if calc_img and vlssr:
-            df = extract_sources_to_df(calc_img)
-            if not df.empty:
-                with fits.open(calc_img) as h:
-                    wcs_calc = _WCS(h[0].header).celestial
-                    calc_shape = h[0].data.squeeze().shape
-                    bmaj_deg = h[0].header.get('BMAJ', 5.0 / 60.0)
+            if calc_img and vlssr:
+                df = extract_sources_to_df(calc_img)
+                if not df.empty:
+                    with fits.open(calc_img) as h:
+                        wcs_calc = _WCS(h[0].header).celestial
+                        calc_shape = h[0].data.squeeze().shape
+                        bmaj_deg = h[0].header.get('BMAJ', 5.0 / 60.0)
 
-                diag_dir = os.path.join(work_dir, "Dewarp_Diagnostics")
-                os.makedirs(diag_dir, exist_ok=True)
-                warp_base = os.path.join(diag_dir, f"{subband}_warp")
+                    diag_dir = os.path.join(work_dir, "Dewarp_Diagnostics")
+                    os.makedirs(diag_dir, exist_ok=True)
+                    warp_base = os.path.join(diag_dir, f"{subband}_warp")
 
-                prev_cwd = os.getcwd()
-                os.chdir(diag_dir)
-                try:
-                    sx, sy, _, _ = generate_warp_screens(
-                        df, vlssr, wcs_calc, calc_shape,
-                        freq_mhz, 74.0,
-                        bmaj_deg, 5.0, base_name=warp_base,
-                    )
-                finally:
-                    os.chdir(prev_cwd)
+                    prev_cwd = os.getcwd()
+                    os.chdir(diag_dir)
+                    try:
+                        sx, sy, _, _ = generate_warp_screens(
+                            df, vlssr, wcs_calc, calc_shape,
+                            freq_mhz, 74.0,
+                            bmaj_deg, 5.0, base_name=warp_base,
+                        )
+                    finally:
+                        os.chdir(prev_cwd)
 
-                if sx is not None:
-                    n_warped = 0
-                    for f in files_to_warp:
-                        out = f.replace('.fits', '_dewarped.fits')
-                        if os.path.exists(out):
-                            continue
-                        try:
-                            with fits.open(f) as hf:
-                                fdata = hf[0].data.squeeze()
-                                if fdata.shape == sx.shape:
-                                    warped = apply_warp(fdata, sx, sy)
-                                    if warped is not None:
-                                        fits.writeto(
-                                            out, warped, hf[0].header,
-                                            overwrite=True)
-                                        n_warped += 1
-                        except Exception:
-                            pass
-                    logger.info(f"Dewarped {n_warped}/{len(files_to_warp)} images")
+                    if sx is not None:
+                        n_warped = 0
+                        for f in files_to_warp:
+                            out = f.replace('.fits', '_dewarped.fits')
+                            if os.path.exists(out):
+                                continue
+                            try:
+                                with fits.open(f) as hf:
+                                    fdata = hf[0].data.squeeze()
+                                    if fdata.shape == sx.shape:
+                                        warped = apply_warp(fdata, sx, sy)
+                                        if warped is not None:
+                                            fits.writeto(
+                                                out, warped, hf[0].header,
+                                                overwrite=True)
+                                            n_warped += 1
+                            except Exception:
+                                pass
+                        logger.info(f"Dewarped {n_warped}/{len(files_to_warp)} images")
+                    else:
+                        logger.warning("Warp screen generation failed — skipping dewarping.")
                 else:
-                    logger.warning("Warp screen generation failed — skipping dewarping.")
+                    logger.warning("No sources extracted for dewarping.")
             else:
-                logger.warning("No sources extracted for dewarping.")
-        else:
-            logger.warning("No deep I image or VLSSr catalog — skipping dewarping.")
-    except ImportError as e:
-        logger.warning(f"Dewarping modules not available — skipping: {e}")
-    except Exception as e:
-        logger.error(f"Dewarping failed: {e}")
-        traceback.print_exc()
+                logger.warning("No deep I image or VLSSr catalog — skipping dewarping.")
+        except ImportError as e:
+            logger.warning(f"Dewarping modules not available — skipping: {e}")
+        except Exception as e:
+            logger.error(f"Dewarping failed: {e}")
+            traceback.print_exc()
     logger.info(f"[TIMER] science_dewarping: {time.time() - _t:.1f}s")
 
     # --- B. Target Photometry ---
     _t = time.time()
-    logger.info("--- Science B: Target Photometry ---")
-    if targets:
-        try:
-            from orca.transform.cutout import (
-                load_targets as _load_targets,
-                process_target as _process_target,
-            )
-            local_samples = os.path.join(work_dir, "samples")
-            local_detects = os.path.join(work_dir, "detections")
-            os.makedirs(local_samples, exist_ok=True)
-            os.makedirs(local_detects, exist_ok=True)
+    if not skip_science:
+        logger.info("--- Science B: Target Photometry ---")
+        if targets:
+            try:
+                from orca.transform.cutout import (
+                    load_targets as _load_targets,
+                    process_target as _process_target,
+                )
+                local_samples = os.path.join(work_dir, "samples")
+                local_detects = os.path.join(work_dir, "detections")
+                os.makedirs(local_samples, exist_ok=True)
+                os.makedirs(local_detects, exist_ok=True)
 
-            for t_file in targets:
-                if not os.path.exists(t_file):
-                    logger.warning(f"Target file not found: {t_file}")
-                    continue
-                logger.info(f"Processing target file: {t_file}")
-                try:
-                    s_name = os.path.splitext(os.path.basename(t_file))[0]
-                    target_list = _load_targets(t_file)
-                    logger.info(
-                        f"  Loaded {len(target_list)} targets from "
-                        f"{os.path.basename(t_file)}")
-                    for nm, crd, det_stokes, confusing_sources in target_list:
-                        try:
-                            _process_target(
-                                work_dir, nm, crd, s_name,
-                                local_samples, local_detects,
-                                fallback_dir=work_dir,
-                                detection_stokes=det_stokes,
-                                confusing_sources=confusing_sources,
-                            )
-                        except Exception as e:
-                            logger.error(f"  Target '{nm}' failed: {e}")
-                except Exception as e:
-                    logger.error(f"Failed to process target file {t_file}: {e}")
-                    traceback.print_exc()
-        except ImportError as e:
-            logger.warning(f"cutout module not available — skipping target photometry: {e}")
-    else:
-        logger.info("No target files specified — skipping target photometry.")
+                for t_file in targets:
+                    if not os.path.exists(t_file):
+                        logger.warning(f"Target file not found: {t_file}")
+                        continue
+                    logger.info(f"Processing target file: {t_file}")
+                    try:
+                        s_name = os.path.splitext(os.path.basename(t_file))[0]
+                        target_list = _load_targets(t_file)
+                        logger.info(
+                            f"  Loaded {len(target_list)} targets from "
+                            f"{os.path.basename(t_file)}")
+                        for nm, crd, det_stokes, confusing_sources in target_list:
+                            try:
+                                _process_target(
+                                    work_dir, nm, crd, s_name,
+                                    local_samples, local_detects,
+                                    fallback_dir=work_dir,
+                                    detection_stokes=det_stokes,
+                                    confusing_sources=confusing_sources,
+                                )
+                            except Exception as e:
+                                logger.error(f"  Target '{nm}' failed: {e}")
+                    except Exception as e:
+                        logger.error(f"Failed to process target file {t_file}: {e}")
+                        traceback.print_exc()
+            except ImportError as e:
+                logger.warning(f"cutout module not available — skipping target photometry: {e}")
+        else:
+            logger.info("No target files specified — skipping target photometry.")
     logger.info(f"[TIMER] science_target_photometry: {time.time() - _t:.1f}s")
 
     # --- B2. Solar System Body Photometry ---
     _t = time.time()
-    logger.info("--- Science B2: Solar System Photometry ---")
-    try:
-        from orca.transform.solar_system_cutout import process_solar_system
-        local_samples = os.path.join(work_dir, "samples")
-        local_detects = os.path.join(work_dir, "detections")
-        os.makedirs(local_samples, exist_ok=True)
-        os.makedirs(local_detects, exist_ok=True)
-        process_solar_system(
-            work_dir, local_samples, local_detects,
-            fallback_dir=work_dir, logger=logger,
-        )
-    except ImportError as e:
-        logger.warning(f"solar_system_cutout not available — skipping: {e}")
-    except Exception as e:
-        logger.error(f"Solar system photometry failed: {e}")
-        traceback.print_exc()
+    if not skip_science:
+        logger.info("--- Science B2: Solar System Photometry ---")
+        try:
+            from orca.transform.solar_system_cutout import process_solar_system
+            local_samples = os.path.join(work_dir, "samples")
+            local_detects = os.path.join(work_dir, "detections")
+            os.makedirs(local_samples, exist_ok=True)
+            os.makedirs(local_detects, exist_ok=True)
+            process_solar_system(
+                work_dir, local_samples, local_detects,
+                fallback_dir=work_dir, logger=logger,
+            )
+        except ImportError as e:
+            logger.warning(f"solar_system_cutout not available — skipping: {e}")
+        except Exception as e:
+            logger.error(f"Solar system photometry failed: {e}")
+            traceback.print_exc()
     logger.info(f"[TIMER] science_solar_system: {time.time() - _t:.1f}s")
 
     # --- C. Transient Search ---
     _t = time.time()
-    logger.info("--- Science C: Transient Search ---")
-    if catalog:
-        try:
-            from orca.transform.transient_search import run_test as _run_test
+    if not skip_science:
+        logger.info("--- Science C: Transient Search ---")
+        if catalog:
+            try:
+                from orca.transform.transient_search import run_test as _run_test
 
-            local_transient_detections = os.path.join(
-                work_dir, "detections")
-            os.makedirs(local_transient_detections, exist_ok=True)
+                local_transient_detections = os.path.join(
+                    work_dir, "detections")
+                os.makedirs(local_transient_detections, exist_ok=True)
 
-            def _find_transient_images(pol, category, suffix_filter=None):
-                """Find tapered, optionally dewarped, non-pbcorr images."""
-                pat = os.path.join(
-                    work_dir, pol, category, "*Taper*_dewarped.fits")
-                imgs = [f for f in glob.glob(pat)
-                        if "pbcorr" not in f
-                        and "_dewarped_dewarped" not in f]
-                if not imgs:
+                def _find_transient_images(pol, category, suffix_filter=None):
+                    """Find tapered, optionally dewarped, non-pbcorr images."""
                     pat = os.path.join(
-                        work_dir, pol, category, "*Taper*image*.fits")
+                        work_dir, pol, category, "*Taper*_dewarped.fits")
                     imgs = [f for f in glob.glob(pat)
-                            if "pbcorr" not in f and "dewarped" not in f]
-                if suffix_filter:
-                    filtered = [f for f in imgs
-                                if suffix_filter in os.path.basename(f)
-                                and "NoTaper" not in os.path.basename(f)]
-                    if filtered:
-                        imgs = filtered
-                return imgs
+                            if "pbcorr" not in f
+                            and "_dewarped_dewarped" not in f]
+                    if not imgs:
+                        pat = os.path.join(
+                            work_dir, pol, category, "*Taper*image*.fits")
+                        imgs = [f for f in glob.glob(pat)
+                                if "pbcorr" not in f and "dewarped" not in f]
+                    if suffix_filter:
+                        filtered = [f for f in imgs
+                                    if suffix_filter in os.path.basename(f)
+                                    and "NoTaper" not in os.path.basename(f)]
+                        if filtered:
+                            imgs = filtered
+                    return imgs
 
-            # Deep I reference (Robust-0) for masking + subtraction
-            ref_i_imgs = _find_transient_images(
-                "I", "deep", suffix_filter="Robust-0-")
-            ref_i_path = ref_i_imgs[0] if ref_i_imgs else None
-            if ref_i_path:
-                logger.info(
-                    f"Deep I reference: {os.path.basename(ref_i_path)}")
+                # Deep I reference (Robust-0) for masking + subtraction
+                ref_i_imgs = _find_transient_images(
+                    "I", "deep", suffix_filter="Robust-0-")
+                ref_i_path = ref_i_imgs[0] if ref_i_imgs else None
+                if ref_i_path:
+                    logger.info(
+                        f"Deep I reference: {os.path.basename(ref_i_path)}")
 
-            # Stokes V: blind search (no subtraction)
-            logger.info("Running Stokes V Blind Search...")
-            v_deep = _find_transient_images("V", "deep")
-            v_10min = _find_transient_images("V", "10min")
-            v_detections = []
-            for v_img in v_deep + v_10min:
-                try:
-                    result = _run_test(
-                        None, v_img, ref_i_path, catalog,
-                        output_dir=local_transient_detections)
-                    if result:
-                        v_detections.extend(
-                            result if isinstance(result, list) else [result])
-                except Exception as e:
-                    logger.error(
-                        f"V transient search failed on "
-                        f"{os.path.basename(v_img)}: {e}")
-
-            # Stokes I: subtract deep from 10min snapshots
-            logger.info("Running Stokes I Subtraction Search...")
-            i_snaps = _find_transient_images("I", "10min")
-            i_detections = []
-            if ref_i_path:
-                for i_img in i_snaps:
+                # Stokes V: blind search (no subtraction)
+                logger.info("Running Stokes V Blind Search...")
+                v_deep = _find_transient_images("V", "deep")
+                v_10min = _find_transient_images("V", "10min")
+                v_detections = []
+                for v_img in v_deep + v_10min:
                     try:
                         result = _run_test(
-                            ref_i_path, i_img, ref_i_path, catalog,
+                            None, v_img, ref_i_path, catalog,
                             output_dir=local_transient_detections)
                         if result:
-                            i_detections.extend(
-                                result if isinstance(result, list)
-                                else [result])
+                            v_detections.extend(
+                                result if isinstance(result, list) else [result])
                     except Exception as e:
                         logger.error(
-                            f"I transient search failed on "
-                            f"{os.path.basename(i_img)}: {e}")
+                            f"V transient search failed on "
+                            f"{os.path.basename(v_img)}: {e}")
 
-            total_det = len(v_detections) + len(i_detections)
-            logger.info(
-                f"Transient candidates: {len(v_detections)} Stokes V, "
-                f"{len(i_detections)} Stokes I")
-            if total_det > 10:
+                # Stokes I: subtract deep from 10min snapshots
+                logger.info("Running Stokes I Subtraction Search...")
+                i_snaps = _find_transient_images("I", "10min")
+                i_detections = []
+                if ref_i_path:
+                    for i_img in i_snaps:
+                        try:
+                            result = _run_test(
+                                ref_i_path, i_img, ref_i_path, catalog,
+                                output_dir=local_transient_detections)
+                            if result:
+                                i_detections.extend(
+                                    result if isinstance(result, list)
+                                    else [result])
+                        except Exception as e:
+                            logger.error(
+                                f"I transient search failed on "
+                                f"{os.path.basename(i_img)}: {e}")
+
+                total_det = len(v_detections) + len(i_detections)
+                logger.info(
+                    f"Transient candidates: {len(v_detections)} Stokes V, "
+                    f"{len(i_detections)} Stokes I")
+                if total_det > 10:
+                    logger.warning(
+                        f"QUALITY FLAG: {total_det} candidates — "
+                        f"data quality may be poor.")
+            except ImportError as e:
                 logger.warning(
-                    f"QUALITY FLAG: {total_det} candidates — "
-                    f"data quality may be poor.")
-        except ImportError as e:
-            logger.warning(
-                f"transient_search not available — skipping: {e}")
-        except Exception as e:
-            logger.error(f"Transient search failed: {e}")
-            traceback.print_exc()
-    else:
-        logger.info("No catalog specified — skipping transient search.")
+                    f"transient_search not available — skipping: {e}")
+            except Exception as e:
+                logger.error(f"Transient search failed: {e}")
+                traceback.print_exc()
+        else:
+            logger.info("No catalog specified — skipping transient search.")
     logger.info(f"[TIMER] science_transient_search: {time.time() - _t:.1f}s")
 
     # --- D. Flux Scale Check ---
     _t = time.time()
-    logger.info("--- Science D: Flux Scale Check ---")
-    try:
-        from orca.transform.flux_check_cutout import run_flux_check
-        run_flux_check(work_dir, logger=logger)
-    except ImportError as e:
-        logger.warning(f"flux_check_cutout not available — skipping: {e}")
-    except Exception as e:
-        logger.error(f"Flux check failed: {e}")
-        traceback.print_exc()
+    if not skip_science:
+        logger.info("--- Science D: Flux Scale Check ---")
+        try:
+            from orca.transform.flux_check_cutout import run_flux_check
+            run_flux_check(work_dir, logger=logger)
+        except ImportError as e:
+            logger.warning(f"flux_check_cutout not available — skipping: {e}")
+        except Exception as e:
+            logger.error(f"Flux check failed: {e}")
+            traceback.print_exc()
     logger.info(f"[TIMER] science_flux_check: {time.time() - _t:.1f}s")
 
     # ------------------------------------------------------------------
@@ -752,6 +764,7 @@ def submit_subband_pipeline(
     catalog: Optional[str] = None,
     snapshot_clean: bool = False,
     reduced_pixels: bool = False,
+    skip_science: bool = False,
 ) -> 'celery.result.AsyncResult':
     """Submit the full two-phase subband pipeline as a Celery chord.
 
@@ -777,6 +790,7 @@ def submit_subband_pipeline(
         catalog: Path to BDSF catalog for transient search masking.
         snapshot_clean: If True, use CLEAN imaging for pilot snapshots.
         reduced_pixels: If True, scale pixel count by subband frequency.
+        skip_science: If True, skip science phases after PB correction.
 
     Returns:
         Celery AsyncResult for the chord (Phase 2 result).
@@ -815,6 +829,7 @@ def submit_subband_pipeline(
         catalog=catalog,
         snapshot_clean=snapshot_clean,
         reduced_pixels=reduced_pixels,
+        skip_science=skip_science,
     ).set(queue=queue)
 
     # chord(Phase1)(Phase2) — Phase2 receives list of Phase1 return values
