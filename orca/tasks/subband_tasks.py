@@ -98,6 +98,39 @@ from orca.resources.subband_config import (
 logger = logging.getLogger(__name__)
 
 
+def _trigger_next_and_cleanup(
+    remaining_hours, work_dir, cleanup_nvme, subband, lst_label,
+):
+    """Trigger the next hour in the sequential chain and optionally clean NVMe.
+
+    Called from the ``finally`` block of ``process_subband_task`` so that the
+    chain **always** continues even when the current hour fails.
+    """
+    if remaining_hours:
+        next_hour = remaining_hours[0]
+        rest = remaining_hours[1:] or None
+        next_label = next_hour.get('lst_label', '?')
+        logger.info(
+            f"Chain → submitting next hour {next_label} for {subband} "
+            f"({len(remaining_hours) - 1} hours remaining after)"
+        )
+        try:
+            # Avoid circular import: submit_subband_pipeline is defined later
+            # in this module, so call it directly.
+            submit_subband_pipeline(remaining_hours=rest, **next_hour)
+        except Exception as e:
+            logger.error(f"Failed to trigger next hour {next_label}: {e}")
+            traceback.print_exc()
+
+    # NVMe cleanup (best-effort)
+    if cleanup_nvme and os.path.isdir(work_dir):
+        try:
+            shutil.rmtree(work_dir)
+            logger.info(f"Cleaned up NVMe work_dir: {work_dir}")
+        except Exception:
+            pass
+
+
 def _patch_size_args(args: list, npix: int) -> list:
     """Return a copy of *args* with ``-size W H`` replaced by *npix npix*."""
     args = list(args)  # don't mutate the config
@@ -237,9 +270,6 @@ def prepare_one_ms_task(
 @app.task(
     bind=True,
     name='orca.tasks.subband_tasks.process_subband_task',
-    autoretry_for=(Exception,),
-    retry_backoff=True,
-    retry_kwargs={'max_retries': 1},
     acks_late=True,
     time_limit=28800,       # 8 hours hard limit
     soft_time_limit=27000,  # 7h30m soft limit
@@ -316,455 +346,485 @@ def process_subband_task(
     have_concat = os.path.isdir(existing_concat)
 
     if not valid_ms and not have_concat:
+        # No data at all — still trigger chain + cleanup before failing
+        logger.error(f"No valid MS files for {subband} in {lst_label}")
+        _trigger_next_and_cleanup(
+            remaining_hours, work_dir, cleanup_nvme, subband, lst_label,
+        )
         raise RuntimeError(f"No valid MS files for {subband}")
 
-    # ------------------------------------------------------------------
-    #  Create output directory structure
-    # ------------------------------------------------------------------
-    for d in ['I/deep', 'V/deep', 'I/10min', 'V/10min', 'snapshots', 'QA',
-              'samples', 'detections', 'Dewarp_Diagnostics']:
-        os.makedirs(os.path.join(work_dir, d), exist_ok=True)
+    # Track whether processing succeeded for the summary log
+    _phase2_failed = False
+    archive_base = None
 
-    # ------------------------------------------------------------------
-    #  1. Concatenation  (skip if concat MS already exists from prior attempt)
-    # ------------------------------------------------------------------
-    _t = time.time()
-    if have_concat:
-        concat_ms = existing_concat
-        logger.info(f"Resuming from existing concat MS: {concat_ms}")
-    else:
-        logger.info("Concatenating MS files...")
-        concat_ms = concatenate_ms(valid_ms, work_dir, subband)
-        if not concat_ms:
-            raise RuntimeError("Concatenation failed")
-
-        # Clean up individual MS files (they are on NVMe, space is precious)
-        if not skip_cleanup:
-            for ms in valid_ms:
-                if os.path.exists(ms):
-                    shutil.rmtree(ms)
-    logger.info(f"[TIMER] concatenation: {time.time() - _t:.1f}s")
-
-    # ------------------------------------------------------------------
-    #  2. Fix FIELD_ID
-    # ------------------------------------------------------------------
-    _t = time.time()
-    fix_field_id(concat_ms)
-    logger.info(f"[TIMER] fix_field_id: {time.time() - _t:.1f}s")
-
-    # ------------------------------------------------------------------
-    #  3. Change phase centre
-    # ------------------------------------------------------------------
-    _t = time.time()
-    hour_int = int(lst_label.replace('h', ''))
-    phase_center = f"{hour_int:02d}h30m00s 37d12m57.057s"
-    logger.info(f"Changing phase centre → {phase_center}")
-    change_phase_center(concat_ms, phase_center)
-    logger.info(f"[TIMER] chgcentre: {time.time() - _t:.1f}s")
-
-    # ------------------------------------------------------------------
-    #  4. AOFlagger
-    # ------------------------------------------------------------------
-    _t = time.time()
-    aoflagger_bin = os.environ.get('AOFLAGGER_BIN', '/opt/bin/aoflagger')
-    logger.info(f"Running AOFlagger with strategy {AOFLAGGER_STRATEGY}")
-    run_subprocess(
-        [aoflagger_bin, '-strategy', AOFLAGGER_STRATEGY, concat_ms],
-        "AOFlagger (Post-Concat)",
-    )
-    logger.info(f"[TIMER] aoflagger: {time.time() - _t:.1f}s")
-
-    # ------------------------------------------------------------------
-    #  5. Pilot snapshots + QA
-    # ------------------------------------------------------------------
-    _t = time.time()
     try:
-        t = table(concat_ms, ack=False)
-        times = t.getcol("TIME")
-        n_ints = len(np.unique(times))
-        t.close()
-    except Exception:
-        n_ints = 357
-
-    pilot_name = f"{subband}-{SNAPSHOT_PARAMS['suffix']}"
-    pilot_path = os.path.join(work_dir, "snapshots", pilot_name)
-
-    snapshot_cfg = SNAPSHOT_CLEAN_PARAMS if snapshot_clean else SNAPSHOT_PARAMS
-    wsclean_bin = os.environ.get('WSCLEAN_BIN', '/opt/bin/wsclean')
-    _, _, wsclean_j = get_image_resources(subband)
-    npix = get_pixel_size(subband) if reduced_pixels else 4096
-    logger.info(f"Pixel size for {subband}: {npix}x{npix} (reduced_pixels={reduced_pixels})")
-    cmd_pilot = (
-        [wsclean_bin]
-        + ['-j', str(wsclean_j)]
-        + _patch_size_args(snapshot_cfg['args'], npix)
-        + ['-name', pilot_path, '-intervals-out', str(n_ints), concat_ms]
-    )
-    run_subprocess(cmd_pilot, "Pilot snapshot imaging")
-
-    add_timestamps_to_images(
-        os.path.join(work_dir, "snapshots"), pilot_name, concat_ms, n_ints,
-    )
-
-    pilot_v = sorted(glob.glob(
-        os.path.join(work_dir, "snapshots", f"{pilot_name}*-V-image*.fits")
-    ))
-    bad_idx, stats = analyze_snapshot_quality(pilot_v)
-    plot_snapshot_diagnostics(stats, bad_idx, work_dir, subband)
-
-    if bad_idx:
-        flag_bad_integrations(concat_ms, bad_idx, n_ints)
-    logger.info(f"[TIMER] pilot_snapshots_qa: {time.time() - _t:.1f}s")
-
-    # ------------------------------------------------------------------
-    #  6. Hot baseline removal (optional)
-    # ------------------------------------------------------------------
-    if hot_baselines:
+        for d in ['I/deep', 'V/deep', 'I/10min', 'V/10min', 'snapshots', 'QA',
+                  'samples', 'detections', 'Dewarp_Diagnostics']:
+            os.makedirs(os.path.join(work_dir, d), exist_ok=True)
+    
+        # ------------------------------------------------------------------
+        #  1. Concatenation  (skip if concat MS already exists from prior attempt)
+        # ------------------------------------------------------------------
+        _t = time.time()
+        if have_concat:
+            concat_ms = existing_concat
+            logger.info(f"Resuming from existing concat MS: {concat_ms}")
+        else:
+            logger.info("Concatenating MS files...")
+            concat_ms = concatenate_ms(valid_ms, work_dir, subband)
+            if not concat_ms:
+                raise RuntimeError("Concatenation failed")
+    
+            # Clean up individual MS files (they are on NVMe, space is precious)
+            if not skip_cleanup:
+                for ms in valid_ms:
+                    if os.path.exists(ms):
+                        shutil.rmtree(ms)
+        logger.info(f"[TIMER] concatenation: {time.time() - _t:.1f}s")
+    
+        # ------------------------------------------------------------------
+        #  2. Fix FIELD_ID
+        # ------------------------------------------------------------------
+        _t = time.time()
+        fix_field_id(concat_ms)
+        logger.info(f"[TIMER] fix_field_id: {time.time() - _t:.1f}s")
+    
+        # ------------------------------------------------------------------
+        #  3. Change phase centre
+        # ------------------------------------------------------------------
+        _t = time.time()
+        hour_int = int(lst_label.replace('h', ''))
+        phase_center = f"{hour_int:02d}h30m00s 37d12m57.057s"
+        logger.info(f"Changing phase centre → {phase_center}")
+        change_phase_center(concat_ms, phase_center)
+        logger.info(f"[TIMER] chgcentre: {time.time() - _t:.1f}s")
+    
+        # ------------------------------------------------------------------
+        #  4. AOFlagger
+        # ------------------------------------------------------------------
+        _t = time.time()
+        aoflagger_bin = os.environ.get('AOFLAGGER_BIN', '/opt/bin/aoflagger')
+        logger.info(f"Running AOFlagger with strategy {AOFLAGGER_STRATEGY}")
+        run_subprocess(
+            [aoflagger_bin, '-strategy', AOFLAGGER_STRATEGY, concat_ms],
+            "AOFlagger (Post-Concat)",
+        )
+        logger.info(f"[TIMER] aoflagger: {time.time() - _t:.1f}s")
+    
+        # ------------------------------------------------------------------
+        #  5. Pilot snapshots + QA
+        # ------------------------------------------------------------------
         _t = time.time()
         try:
-            _run_hot_baseline_diagnostics(concat_ms, work_dir)
-        except Exception as e:
-            logger.error(f"Hot baseline diagnostics failed: {e}")
-            traceback.print_exc()
-        logger.info(f"[TIMER] hot_baselines: {time.time() - _t:.1f}s")
-
-    # ------------------------------------------------------------------
-    #  7. Science imaging + PB correction
-    # ------------------------------------------------------------------
-    _t_imaging_all = time.time()
-    logger.info(f"Starting Science Imaging for {subband}...")
-    logger.info(f"wsclean binary: {wsclean_bin}, thread limit: -j {wsclean_j}")
-
-    for step in IMAGING_STEPS:
-        _t_step = time.time()
-        target_dir = os.path.join(work_dir, step['pol'], step['category'])
-        base = f"{subband}-{step['suffix']}"
-        full_path = os.path.join(target_dir, base)
-
-        cmd = [wsclean_bin] + ['-j', str(wsclean_j)] + _patch_size_args(step['args'], npix) + ['-name', full_path]
-
-        if step.get('per_integration'):
-            n_out = n_ints
-            cmd += ['-intervals-out', str(n_ints)]
-        elif '-intervals-out' in step['args']:
-            idx = step['args'].index('-intervals-out')
-            n_out = int(step['args'][idx + 1])
-        else:
-            n_out = 1
-
-        cmd.append(concat_ms)
-        run_subprocess(cmd, f"Imaging {step['suffix']}")
-        add_timestamps_to_images(target_dir, base, concat_ms, n_out)
-
-        # Apply Primary Beam Correction to all images from this step
-        pb_count = apply_pb_correction_to_images(target_dir, base)
-        if pb_count > 0:
-            logger.info(f"PB corrected {pb_count} images for {step['suffix']}")
-        logger.info(f"[TIMER] imaging_{step['suffix']}: {time.time() - _t_step:.1f}s")
-    logger.info(f"[TIMER] imaging_all: {time.time() - _t_imaging_all:.1f}s")
-
-    # ------------------------------------------------------------------
-    #  7b. SCIENCE PHASES (all on NVMe)
-    # ------------------------------------------------------------------
-    if skip_science:
-        logger.info("--skip_science: skipping dewarping, photometry, transients, flux check")
-
-    try:
-        freq_mhz = float(subband.replace('MHz', ''))
-    except Exception:
-        freq_mhz = 50.0
-
-    # --- A. Ionospheric Dewarping (VLSSr cross-match) ---
-    _t = time.time()
-    if not skip_science:
-        logger.info("--- Science A: Ionospheric Dewarping (VLSSr) ---")
-        try:
-            from orca.transform.ionospheric_dewarping import (
-                load_ref_catalog, generate_warp_screens, apply_warp,
-            )
-            from astropy.wcs import WCS as _WCS
-
-            vlssr = load_ref_catalog(VLSSR_CATALOG, "VLSSr")
-            # Find all PB-corrected AND raw images to dewarp
-            files_to_warp = glob.glob(
-                os.path.join(work_dir, "*", "*", "*pbcorr*.fits"))
-            files_to_warp = [f for f in files_to_warp
-                             if "_dewarped" not in f]
-            raw_images = glob.glob(
-                os.path.join(work_dir, "*", "*", "*image*.fits"))
-            raw_images = [f for f in raw_images
-                          if "pbcorr" not in f and "_dewarped" not in f]
-            files_to_warp.extend(raw_images)
-
-            calc_img = find_deep_image(work_dir, freq_mhz, 'I')
-
-            if calc_img and vlssr:
-                df = extract_sources_to_df(calc_img)
-                if not df.empty:
-                    with fits.open(calc_img) as h:
-                        wcs_calc = _WCS(h[0].header).celestial
-                        calc_shape = h[0].data.squeeze().shape
-                        bmaj_deg = h[0].header.get('BMAJ', 5.0 / 60.0)
-
-                    diag_dir = os.path.join(work_dir, "Dewarp_Diagnostics")
-                    os.makedirs(diag_dir, exist_ok=True)
-                    warp_base = os.path.join(diag_dir, f"{subband}_warp")
-
-                    prev_cwd = os.getcwd()
-                    os.chdir(diag_dir)
-                    try:
-                        sx, sy, _, _ = generate_warp_screens(
-                            df, vlssr, wcs_calc, calc_shape,
-                            freq_mhz, 74.0,
-                            bmaj_deg, 5.0, base_name=warp_base,
-                        )
-                    finally:
-                        os.chdir(prev_cwd)
-
-                    if sx is not None:
-                        n_warped = 0
-                        for f in files_to_warp:
-                            out = f.replace('.fits', '_dewarped.fits')
-                            if os.path.exists(out):
-                                continue
-                            try:
-                                with fits.open(f) as hf:
-                                    fdata = hf[0].data.squeeze()
-                                    if fdata.shape == sx.shape:
-                                        warped = apply_warp(fdata, sx, sy)
-                                        if warped is not None:
-                                            fits.writeto(
-                                                out, warped, hf[0].header,
-                                                overwrite=True)
-                                            n_warped += 1
-                            except Exception:
-                                pass
-                        logger.info(f"Dewarped {n_warped}/{len(files_to_warp)} images")
-                    else:
-                        logger.warning("Warp screen generation failed — skipping dewarping.")
-                else:
-                    logger.warning("No sources extracted for dewarping.")
-            else:
-                logger.warning("No deep I image or VLSSr catalog — skipping dewarping.")
-        except ImportError as e:
-            logger.warning(f"Dewarping modules not available — skipping: {e}")
-        except Exception as e:
-            logger.error(f"Dewarping failed: {e}")
-            traceback.print_exc()
-    logger.info(f"[TIMER] science_dewarping: {time.time() - _t:.1f}s")
-
-    # --- B. Target Photometry ---
-    _t = time.time()
-    if not skip_science:
-        logger.info("--- Science B: Target Photometry ---")
-        if targets:
+            t = table(concat_ms, ack=False)
+            times = t.getcol("TIME")
+            n_ints = len(np.unique(times))
+            t.close()
+        except Exception:
+            n_ints = 357
+    
+        pilot_name = f"{subband}-{SNAPSHOT_PARAMS['suffix']}"
+        pilot_path = os.path.join(work_dir, "snapshots", pilot_name)
+    
+        snapshot_cfg = SNAPSHOT_CLEAN_PARAMS if snapshot_clean else SNAPSHOT_PARAMS
+        wsclean_bin = os.environ.get('WSCLEAN_BIN', '/opt/bin/wsclean')
+        _, _, wsclean_j = get_image_resources(subband)
+        npix = get_pixel_size(subband) if reduced_pixels else 4096
+        logger.info(f"Pixel size for {subband}: {npix}x{npix} (reduced_pixels={reduced_pixels})")
+        cmd_pilot = (
+            [wsclean_bin]
+            + ['-j', str(wsclean_j)]
+            + _patch_size_args(snapshot_cfg['args'], npix)
+            + ['-name', pilot_path, '-intervals-out', str(n_ints), concat_ms]
+        )
+        run_subprocess(cmd_pilot, "Pilot snapshot imaging")
+    
+        add_timestamps_to_images(
+            os.path.join(work_dir, "snapshots"), pilot_name, concat_ms, n_ints,
+        )
+    
+        pilot_v = sorted(glob.glob(
+            os.path.join(work_dir, "snapshots", f"{pilot_name}*-V-image*.fits")
+        ))
+        bad_idx, stats = analyze_snapshot_quality(pilot_v)
+        plot_snapshot_diagnostics(stats, bad_idx, work_dir, subband)
+    
+        if bad_idx:
+            flag_bad_integrations(concat_ms, bad_idx, n_ints)
+        logger.info(f"[TIMER] pilot_snapshots_qa: {time.time() - _t:.1f}s")
+    
+        # ------------------------------------------------------------------
+        #  6. Hot baseline removal (optional)
+        # ------------------------------------------------------------------
+        if hot_baselines:
+            _t = time.time()
             try:
-                from orca.transform.cutout import (
-                    load_targets as _load_targets,
-                    process_target as _process_target,
+                _run_hot_baseline_diagnostics(concat_ms, work_dir)
+            except Exception as e:
+                logger.error(f"Hot baseline diagnostics failed: {e}")
+                traceback.print_exc()
+            logger.info(f"[TIMER] hot_baselines: {time.time() - _t:.1f}s")
+    
+        # ------------------------------------------------------------------
+        #  7. Science imaging + PB correction
+        # ------------------------------------------------------------------
+        _t_imaging_all = time.time()
+        logger.info(f"Starting Science Imaging for {subband}...")
+        logger.info(f"wsclean binary: {wsclean_bin}, thread limit: -j {wsclean_j}")
+    
+        for step in IMAGING_STEPS:
+            _t_step = time.time()
+            target_dir = os.path.join(work_dir, step['pol'], step['category'])
+            base = f"{subband}-{step['suffix']}"
+            full_path = os.path.join(target_dir, base)
+    
+            cmd = [wsclean_bin] + ['-j', str(wsclean_j)] + _patch_size_args(step['args'], npix) + ['-name', full_path]
+    
+            if step.get('per_integration'):
+                n_out = n_ints
+                cmd += ['-intervals-out', str(n_ints)]
+            elif '-intervals-out' in step['args']:
+                idx = step['args'].index('-intervals-out')
+                n_out = int(step['args'][idx + 1])
+            else:
+                n_out = 1
+    
+            cmd.append(concat_ms)
+            run_subprocess(cmd, f"Imaging {step['suffix']}")
+            add_timestamps_to_images(target_dir, base, concat_ms, n_out)
+    
+            # Apply Primary Beam Correction to all images from this step
+            pb_count = apply_pb_correction_to_images(target_dir, base)
+            if pb_count > 0:
+                logger.info(f"PB corrected {pb_count} images for {step['suffix']}")
+            logger.info(f"[TIMER] imaging_{step['suffix']}: {time.time() - _t_step:.1f}s")
+        logger.info(f"[TIMER] imaging_all: {time.time() - _t_imaging_all:.1f}s")
+    
+        # ------------------------------------------------------------------
+        #  7b. SCIENCE PHASES (all on NVMe)
+        # ------------------------------------------------------------------
+        if skip_science:
+            logger.info("--skip_science: skipping dewarping, photometry, transients, flux check")
+    
+        try:
+            freq_mhz = float(subband.replace('MHz', ''))
+        except Exception:
+            freq_mhz = 50.0
+    
+        # --- A. Ionospheric Dewarping (VLSSr cross-match) ---
+        _t = time.time()
+        if not skip_science:
+            logger.info("--- Science A: Ionospheric Dewarping (VLSSr) ---")
+            try:
+                from orca.transform.ionospheric_dewarping import (
+                    load_ref_catalog, generate_warp_screens, apply_warp,
                 )
+                from astropy.wcs import WCS as _WCS
+    
+                vlssr = load_ref_catalog(VLSSR_CATALOG, "VLSSr")
+                # Find all PB-corrected AND raw images to dewarp
+                files_to_warp = glob.glob(
+                    os.path.join(work_dir, "*", "*", "*pbcorr*.fits"))
+                files_to_warp = [f for f in files_to_warp
+                                 if "_dewarped" not in f]
+                raw_images = glob.glob(
+                    os.path.join(work_dir, "*", "*", "*image*.fits"))
+                raw_images = [f for f in raw_images
+                              if "pbcorr" not in f and "_dewarped" not in f]
+                files_to_warp.extend(raw_images)
+    
+                calc_img = find_deep_image(work_dir, freq_mhz, 'I')
+    
+                if calc_img and vlssr:
+                    df = extract_sources_to_df(calc_img)
+                    if not df.empty:
+                        with fits.open(calc_img) as h:
+                            wcs_calc = _WCS(h[0].header).celestial
+                            calc_shape = h[0].data.squeeze().shape
+                            bmaj_deg = h[0].header.get('BMAJ', 5.0 / 60.0)
+    
+                        diag_dir = os.path.join(work_dir, "Dewarp_Diagnostics")
+                        os.makedirs(diag_dir, exist_ok=True)
+                        warp_base = os.path.join(diag_dir, f"{subband}_warp")
+    
+                        prev_cwd = os.getcwd()
+                        os.chdir(diag_dir)
+                        try:
+                            sx, sy, _, _ = generate_warp_screens(
+                                df, vlssr, wcs_calc, calc_shape,
+                                freq_mhz, 74.0,
+                                bmaj_deg, 5.0, base_name=warp_base,
+                            )
+                        finally:
+                            os.chdir(prev_cwd)
+    
+                        if sx is not None:
+                            n_warped = 0
+                            for f in files_to_warp:
+                                out = f.replace('.fits', '_dewarped.fits')
+                                if os.path.exists(out):
+                                    continue
+                                try:
+                                    with fits.open(f) as hf:
+                                        fdata = hf[0].data.squeeze()
+                                        if fdata.shape == sx.shape:
+                                            warped = apply_warp(fdata, sx, sy)
+                                            if warped is not None:
+                                                fits.writeto(
+                                                    out, warped, hf[0].header,
+                                                    overwrite=True)
+                                                n_warped += 1
+                                except Exception:
+                                    pass
+                            logger.info(f"Dewarped {n_warped}/{len(files_to_warp)} images")
+                        else:
+                            logger.warning("Warp screen generation failed — skipping dewarping.")
+                    else:
+                        logger.warning("No sources extracted for dewarping.")
+                else:
+                    logger.warning("No deep I image or VLSSr catalog — skipping dewarping.")
+            except ImportError as e:
+                logger.warning(f"Dewarping modules not available — skipping: {e}")
+            except Exception as e:
+                logger.error(f"Dewarping failed: {e}")
+                traceback.print_exc()
+        logger.info(f"[TIMER] science_dewarping: {time.time() - _t:.1f}s")
+    
+        # --- B. Target Photometry ---
+        _t = time.time()
+        if not skip_science:
+            logger.info("--- Science B: Target Photometry ---")
+            if targets:
+                try:
+                    from orca.transform.cutout import (
+                        load_targets as _load_targets,
+                        process_target as _process_target,
+                    )
+                    local_samples = os.path.join(work_dir, "samples")
+                    local_detects = os.path.join(work_dir, "detections")
+                    os.makedirs(local_samples, exist_ok=True)
+                    os.makedirs(local_detects, exist_ok=True)
+    
+                    for t_file in targets:
+                        if not os.path.exists(t_file):
+                            logger.warning(f"Target file not found: {t_file}")
+                            continue
+                        logger.info(f"Processing target file: {t_file}")
+                        try:
+                            s_name = os.path.splitext(os.path.basename(t_file))[0]
+                            target_list = _load_targets(t_file)
+                            logger.info(
+                                f"  Loaded {len(target_list)} targets from "
+                                f"{os.path.basename(t_file)}")
+                            for nm, crd, det_stokes, confusing_sources in target_list:
+                                try:
+                                    _process_target(
+                                        work_dir, nm, crd, s_name,
+                                        local_samples, local_detects,
+                                        fallback_dir=work_dir,
+                                        detection_stokes=det_stokes,
+                                        confusing_sources=confusing_sources,
+                                    )
+                                except Exception as e:
+                                    logger.error(f"  Target '{nm}' failed: {e}")
+                        except Exception as e:
+                            logger.error(f"Failed to process target file {t_file}: {e}")
+                            traceback.print_exc()
+                except ImportError as e:
+                    logger.warning(f"cutout module not available — skipping target photometry: {e}")
+            else:
+                logger.info("No target files specified — skipping target photometry.")
+        logger.info(f"[TIMER] science_target_photometry: {time.time() - _t:.1f}s")
+    
+        # --- B2. Solar System Body Photometry ---
+        _t = time.time()
+        if not skip_science:
+            logger.info("--- Science B2: Solar System Photometry ---")
+            try:
+                from orca.transform.solar_system_cutout import process_solar_system
                 local_samples = os.path.join(work_dir, "samples")
                 local_detects = os.path.join(work_dir, "detections")
                 os.makedirs(local_samples, exist_ok=True)
                 os.makedirs(local_detects, exist_ok=True)
-
-                for t_file in targets:
-                    if not os.path.exists(t_file):
-                        logger.warning(f"Target file not found: {t_file}")
-                        continue
-                    logger.info(f"Processing target file: {t_file}")
-                    try:
-                        s_name = os.path.splitext(os.path.basename(t_file))[0]
-                        target_list = _load_targets(t_file)
-                        logger.info(
-                            f"  Loaded {len(target_list)} targets from "
-                            f"{os.path.basename(t_file)}")
-                        for nm, crd, det_stokes, confusing_sources in target_list:
-                            try:
-                                _process_target(
-                                    work_dir, nm, crd, s_name,
-                                    local_samples, local_detects,
-                                    fallback_dir=work_dir,
-                                    detection_stokes=det_stokes,
-                                    confusing_sources=confusing_sources,
-                                )
-                            except Exception as e:
-                                logger.error(f"  Target '{nm}' failed: {e}")
-                    except Exception as e:
-                        logger.error(f"Failed to process target file {t_file}: {e}")
-                        traceback.print_exc()
+                process_solar_system(
+                    work_dir, local_samples, local_detects,
+                    fallback_dir=work_dir, logger=logger,
+                )
             except ImportError as e:
-                logger.warning(f"cutout module not available — skipping target photometry: {e}")
-        else:
-            logger.info("No target files specified — skipping target photometry.")
-    logger.info(f"[TIMER] science_target_photometry: {time.time() - _t:.1f}s")
-
-    # --- B2. Solar System Body Photometry ---
-    _t = time.time()
-    if not skip_science:
-        logger.info("--- Science B2: Solar System Photometry ---")
-        try:
-            from orca.transform.solar_system_cutout import process_solar_system
-            local_samples = os.path.join(work_dir, "samples")
-            local_detects = os.path.join(work_dir, "detections")
-            os.makedirs(local_samples, exist_ok=True)
-            os.makedirs(local_detects, exist_ok=True)
-            process_solar_system(
-                work_dir, local_samples, local_detects,
-                fallback_dir=work_dir, logger=logger,
-            )
-        except ImportError as e:
-            logger.warning(f"solar_system_cutout not available — skipping: {e}")
-        except Exception as e:
-            logger.error(f"Solar system photometry failed: {e}")
-            traceback.print_exc()
-    logger.info(f"[TIMER] science_solar_system: {time.time() - _t:.1f}s")
-
-    # --- C. Transient Search ---
-    _t = time.time()
-    if not skip_science:
-        logger.info("--- Science C: Transient Search ---")
-        if catalog:
-            try:
-                from orca.transform.transient_search import run_test as _run_test
-
-                local_transient_detections = os.path.join(
-                    work_dir, "detections")
-                os.makedirs(local_transient_detections, exist_ok=True)
-
-                def _find_transient_images(pol, category, suffix_filter=None):
-                    """Find tapered, optionally dewarped, non-pbcorr images."""
-                    pat = os.path.join(
-                        work_dir, pol, category, "*Taper*_dewarped.fits")
-                    imgs = [f for f in glob.glob(pat)
-                            if "pbcorr" not in f
-                            and "_dewarped_dewarped" not in f]
-                    if not imgs:
+                logger.warning(f"solar_system_cutout not available — skipping: {e}")
+            except Exception as e:
+                logger.error(f"Solar system photometry failed: {e}")
+                traceback.print_exc()
+        logger.info(f"[TIMER] science_solar_system: {time.time() - _t:.1f}s")
+    
+        # --- C. Transient Search ---
+        _t = time.time()
+        if not skip_science:
+            logger.info("--- Science C: Transient Search ---")
+            if catalog:
+                try:
+                    from orca.transform.transient_search import run_test as _run_test
+    
+                    local_transient_detections = os.path.join(
+                        work_dir, "detections")
+                    os.makedirs(local_transient_detections, exist_ok=True)
+    
+                    def _find_transient_images(pol, category, suffix_filter=None):
+                        """Find tapered, optionally dewarped, non-pbcorr images."""
                         pat = os.path.join(
-                            work_dir, pol, category, "*Taper*image*.fits")
+                            work_dir, pol, category, "*Taper*_dewarped.fits")
                         imgs = [f for f in glob.glob(pat)
-                                if "pbcorr" not in f and "dewarped" not in f]
-                    if suffix_filter:
-                        filtered = [f for f in imgs
-                                    if suffix_filter in os.path.basename(f)
-                                    and "NoTaper" not in os.path.basename(f)]
-                        if filtered:
-                            imgs = filtered
-                    return imgs
-
-                # Deep I reference (Robust-0) for masking + subtraction
-                ref_i_imgs = _find_transient_images(
-                    "I", "deep", suffix_filter="Robust-0-")
-                ref_i_path = ref_i_imgs[0] if ref_i_imgs else None
-                if ref_i_path:
-                    logger.info(
-                        f"Deep I reference: {os.path.basename(ref_i_path)}")
-
-                # Stokes V: blind search (no subtraction)
-                logger.info("Running Stokes V Blind Search...")
-                v_deep = _find_transient_images("V", "deep")
-                v_10min = _find_transient_images("V", "10min")
-                v_detections = []
-                for v_img in v_deep + v_10min:
-                    try:
-                        result = _run_test(
-                            None, v_img, ref_i_path, catalog,
-                            output_dir=local_transient_detections)
-                        if result:
-                            v_detections.extend(
-                                result if isinstance(result, list) else [result])
-                    except Exception as e:
-                        logger.error(
-                            f"V transient search failed on "
-                            f"{os.path.basename(v_img)}: {e}")
-
-                # Stokes I: subtract deep from 10min snapshots
-                logger.info("Running Stokes I Subtraction Search...")
-                i_snaps = _find_transient_images("I", "10min")
-                i_detections = []
-                if ref_i_path:
-                    for i_img in i_snaps:
+                                if "pbcorr" not in f
+                                and "_dewarped_dewarped" not in f]
+                        if not imgs:
+                            pat = os.path.join(
+                                work_dir, pol, category, "*Taper*image*.fits")
+                            imgs = [f for f in glob.glob(pat)
+                                    if "pbcorr" not in f and "dewarped" not in f]
+                        if suffix_filter:
+                            filtered = [f for f in imgs
+                                        if suffix_filter in os.path.basename(f)
+                                        and "NoTaper" not in os.path.basename(f)]
+                            if filtered:
+                                imgs = filtered
+                        return imgs
+    
+                    # Deep I reference (Robust-0) for masking + subtraction
+                    ref_i_imgs = _find_transient_images(
+                        "I", "deep", suffix_filter="Robust-0-")
+                    ref_i_path = ref_i_imgs[0] if ref_i_imgs else None
+                    if ref_i_path:
+                        logger.info(
+                            f"Deep I reference: {os.path.basename(ref_i_path)}")
+    
+                    # Stokes V: blind search (no subtraction)
+                    logger.info("Running Stokes V Blind Search...")
+                    v_deep = _find_transient_images("V", "deep")
+                    v_10min = _find_transient_images("V", "10min")
+                    v_detections = []
+                    for v_img in v_deep + v_10min:
                         try:
                             result = _run_test(
-                                ref_i_path, i_img, ref_i_path, catalog,
+                                None, v_img, ref_i_path, catalog,
                                 output_dir=local_transient_detections)
                             if result:
-                                i_detections.extend(
-                                    result if isinstance(result, list)
-                                    else [result])
+                                v_detections.extend(
+                                    result if isinstance(result, list) else [result])
                         except Exception as e:
                             logger.error(
-                                f"I transient search failed on "
-                                f"{os.path.basename(i_img)}: {e}")
-
-                total_det = len(v_detections) + len(i_detections)
-                logger.info(
-                    f"Transient candidates: {len(v_detections)} Stokes V, "
-                    f"{len(i_detections)} Stokes I")
-                if total_det > 10:
+                                f"V transient search failed on "
+                                f"{os.path.basename(v_img)}: {e}")
+    
+                    # Stokes I: subtract deep from 10min snapshots
+                    logger.info("Running Stokes I Subtraction Search...")
+                    i_snaps = _find_transient_images("I", "10min")
+                    i_detections = []
+                    if ref_i_path:
+                        for i_img in i_snaps:
+                            try:
+                                result = _run_test(
+                                    ref_i_path, i_img, ref_i_path, catalog,
+                                    output_dir=local_transient_detections)
+                                if result:
+                                    i_detections.extend(
+                                        result if isinstance(result, list)
+                                        else [result])
+                            except Exception as e:
+                                logger.error(
+                                    f"I transient search failed on "
+                                    f"{os.path.basename(i_img)}: {e}")
+    
+                    total_det = len(v_detections) + len(i_detections)
+                    logger.info(
+                        f"Transient candidates: {len(v_detections)} Stokes V, "
+                        f"{len(i_detections)} Stokes I")
+                    if total_det > 10:
+                        logger.warning(
+                            f"QUALITY FLAG: {total_det} candidates — "
+                            f"data quality may be poor.")
+                except ImportError as e:
                     logger.warning(
-                        f"QUALITY FLAG: {total_det} candidates — "
-                        f"data quality may be poor.")
+                        f"transient_search not available — skipping: {e}")
+                except Exception as e:
+                    logger.error(f"Transient search failed: {e}")
+                    traceback.print_exc()
+            else:
+                logger.info("No catalog specified — skipping transient search.")
+        logger.info(f"[TIMER] science_transient_search: {time.time() - _t:.1f}s")
+    
+        # --- D. Flux Scale Check ---
+        _t = time.time()
+        if not skip_science:
+            logger.info("--- Science D: Flux Scale Check ---")
+            try:
+                from orca.transform.flux_check_cutout import run_flux_check
+                run_flux_check(work_dir, logger=logger)
             except ImportError as e:
-                logger.warning(
-                    f"transient_search not available — skipping: {e}")
+                logger.warning(f"flux_check_cutout not available — skipping: {e}")
             except Exception as e:
-                logger.error(f"Transient search failed: {e}")
+                logger.error(f"Flux check failed: {e}")
                 traceback.print_exc()
-        else:
-            logger.info("No catalog specified — skipping transient search.")
-    logger.info(f"[TIMER] science_transient_search: {time.time() - _t:.1f}s")
-
-    # --- D. Flux Scale Check ---
-    _t = time.time()
-    if not skip_science:
-        logger.info("--- Science D: Flux Scale Check ---")
-        try:
-            from orca.transform.flux_check_cutout import run_flux_check
-            run_flux_check(work_dir, logger=logger)
-        except ImportError as e:
-            logger.warning(f"flux_check_cutout not available — skipping: {e}")
-        except Exception as e:
-            logger.error(f"Flux check failed: {e}")
-            traceback.print_exc()
-    logger.info(f"[TIMER] science_flux_check: {time.time() - _t:.1f}s")
-
-    # ------------------------------------------------------------------
-    #  8. Archive to Lustre
-    # ------------------------------------------------------------------
-    _t = time.time()
-    archive_base = os.path.join(
-        LUSTRE_ARCHIVE_DIR,
-        lst_label, obs_date, run_label, subband,
-    )
-    archive_results(
-        work_dir, archive_base,
-        subband=subband,
-        cleanup_concat=not skip_cleanup,
-        cleanup_workdir=cleanup_nvme,
-    )
-    logger.info(f"[TIMER] archive_to_lustre: {time.time() - _t:.1f}s")
-
-    # ------------------------------------------------------------------
-    #  9. Trigger next hour (sequential chaining)
-    # ------------------------------------------------------------------
-    if remaining_hours:
-        next_hour = remaining_hours[0]
-        rest = remaining_hours[1:] or None
-        next_label = next_hour.get('lst_label', '?')
-        logger.info(
-            f"Chain → submitting next hour {next_label} for {subband} "
-            f"({len(remaining_hours) - 1} hours remaining after)"
+        logger.info(f"[TIMER] science_flux_check: {time.time() - _t:.1f}s")
+    
+        # ------------------------------------------------------------------
+        #  8. Archive to Lustre
+        # ------------------------------------------------------------------
+        _t = time.time()
+        archive_base = os.path.join(
+            LUSTRE_ARCHIVE_DIR,
+            lst_label, obs_date, run_label, subband,
         )
-        try:
-            submit_subband_pipeline(remaining_hours=rest, **next_hour)
-        except Exception as e:
-            logger.error(f"Failed to trigger next hour {next_label}: {e}")
-            traceback.print_exc()
+        archive_results(
+            work_dir, archive_base,
+            subband=subband,
+            cleanup_concat=not skip_cleanup,
+            cleanup_workdir=cleanup_nvme,
+        )
+        logger.info(f"[TIMER] archive_to_lustre: {time.time() - _t:.1f}s")
+    
+    except Exception as exc:
+        _phase2_failed = True
+        logger.error(
+            f"Phase 2 FAILED for {subband} {lst_label}: {exc}"
+        )
+        traceback.print_exc()
 
-    logger.info(f"[TIMER] phase2_total: {time.time() - _p2_t0:.1f}s")
-    logger.info(f"[{self.request.id}] Phase 2 COMPLETE: {subband} → {archive_base}")
-    return archive_base
+        # Best-effort archive of whatever products exist so far
+        try:
+            archive_base = os.path.join(
+                LUSTRE_ARCHIVE_DIR,
+                lst_label, obs_date, run_label, subband,
+            )
+            archive_results(
+                work_dir, archive_base,
+                subband=subband,
+                cleanup_concat=not skip_cleanup,
+                cleanup_workdir=False,
+            )
+            logger.info(f"Partial archive saved to {archive_base}")
+        except Exception as archive_exc:
+            logger.error(f"Partial archive also failed: {archive_exc}")
+
+    finally:
+        # ------------------------------------------------------------------
+        #  9. Trigger next hour + cleanup  — ALWAYS runs
+        # ------------------------------------------------------------------
+        _trigger_next_and_cleanup(
+            remaining_hours, work_dir, cleanup_nvme, subband, lst_label,
+        )
+        logger.info(f"[TIMER] phase2_total: {time.time() - _p2_t0:.1f}s")
+        if _phase2_failed:
+            logger.error(
+                f"[{self.request.id}] Phase 2 FAILED: {subband} {lst_label} "
+                f"(chain continues)"
+            )
+        else:
+            logger.info(
+                f"[{self.request.id}] Phase 2 COMPLETE: "
+                f"{subband} → {archive_base}"
+            )
+
+    return archive_base or ''
 
 
 # ============================================================================
