@@ -1,0 +1,101 @@
+# Worker Management Guide
+
+## Quick Reference
+
+```bash
+# All commands run from the repo on any calim node (e.g. calim10):
+cd /opt/devel/nkosogor/nkosogor/distributed-pipeline
+```
+
+| Action | Command |
+|---|---|
+| Start all workers | `./deploy/manage-workers.sh start` |
+| Stop all workers | `./deploy/manage-workers.sh stop` |
+| Check status | `./deploy/manage-workers.sh status` |
+| **Code change → deploy** | `./deploy/manage-workers.sh deploy` |
+| Start/stop one node | `./deploy/manage-workers.sh start calim08` |
+| Tail logs | `./deploy/manage-workers.sh logs calim08` |
+| Clear log files | `./deploy/manage-workers.sh clean-logs` |
+
+## After Code Changes
+
+```bash
+# 1. Push what you've developed
+git push
+
+# 2. SSH to any calim node and run ONE command:
+./deploy/manage-workers.sh deploy
+```
+
+This does `git pull` + restart on all 7 nodes automatically.
+
+## Adding/Removing Nodes
+
+Edit `AVAILABLE_NODES` in `deploy/manage-workers.sh`:
+
+```bash
+AVAILABLE_NODES=(calim01 calim05 calim06 calim07 calim08 calim09 calim10)
+```
+
+## Submitting Jobs
+
+```bash
+# Dry run (verify file discovery):
+python pipeline/subband_celery.py \
+  --range 04-05 --date 2026-01-31 \
+  --bp_table /path/to/bandpass.B.flagged \
+  --xy_table /path/to/xyphase.Xf \
+  --subbands 73MHz 78MHz \
+  --peel_sky --peel_rfi --dry_run
+
+# Real run (with NVMe cleanup after archiving):
+python pipeline/subband_celery.py \
+  --range 04-05 --date 2026-01-31 \
+  --bp_table /path/to/bandpass.B.flagged \
+  --xy_table /path/to/xyphase.Xf \
+  --subbands 73MHz 78MHz \
+  --peel_sky --peel_rfi --cleanup_nvme
+
+# Remap subbands to different nodes:
+--remap 18MHz=calim01 23MHz=calim05
+```
+
+## Monitoring
+
+- **Flower**: `http://localhost:5555` (SSH tunnel: `ssh -L 5555:localhost:5555 lwacalim10`)
+- **Worker logs**: `./deploy/manage-workers.sh logs calim08`
+- **Log files on disk**: `deploy/logs/calim08.log`
+
+## Troubleshooting
+
+| Symptom | Likely Cause | Fix |
+|---------|-------------|-----|
+| Worker never picks up tasks | Wrong queue name | Verify worker listens on the correct queue (check `-Q` flag) |
+| `FileNotFoundError: orca-conf.yml` | Missing config on worker node | Copy `~/orca-conf.yml` to the worker's home dir |
+| `No files for 73MHz in 14h` | No data for that date/hour | Check `/lustre/pipeline/night-time/averaged/73MHz/<date>/<hour>/` exists |
+| Calibration fails | Bad cal table path or SPW mismatch | Check paths; inspect `logs/casa_pipeline.log` on NVMe |
+| TTCal / peeling fails | Conda env missing | Run `conda env list` on worker — need `julia060` and `ttcal_dev` |
+| `wsclean: command not found` | WSClean not on PATH | Set `export WSCLEAN_BIN=/opt/bin/wsclean` or check install |
+| Worker OOM killed | Too much concurrency | Reduce `-c` (e.g. `-c 2`), or check `mem` in imaging config |
+| `Connection refused` on broker | RabbitMQ down or wrong URI | Check `~/orca-conf.yml` broker_uri; verify RabbitMQ is running |
+| Task stuck in PENDING | Worker not running or queue mismatch | Start worker; confirm queue matches `get_queue_for_subband()` |
+| Phase 2 never starts | A Phase 1 task failed all retries | Check Flower for failed tasks; fix and resubmit |
+
+### Useful debug commands
+
+```bash
+# Check RabbitMQ queues:
+rabbitmqctl list_queues name messages consumers
+
+# Check Celery cluster status:
+celery -A orca.celery inspect active
+
+# Check registered tasks:
+celery -A orca.celery inspect registered
+
+# Purge a queue (careful!):
+celery -A orca.celery purge -Q calim08
+
+# Check NVMe usage:
+df -h /fast/
+```

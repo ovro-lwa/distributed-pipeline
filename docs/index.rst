@@ -20,6 +20,15 @@ enabling parallel processing of large radio astronomy datasets.
 
    installation
    quickstart
+   usage_guide
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Subband Pipeline
+
+   subband-pipeline
+   worker-management
+   celery_deployment
 
 .. toctree::
    :maxdepth: 3

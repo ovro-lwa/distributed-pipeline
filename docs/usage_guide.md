@@ -23,7 +23,7 @@ wget https://raw.githubusercontent.com/ovro-lwa/distributed-pipeline/main/orca/d
 
 This file includes paths and telescope-specific settings used by the pipeline. You can edit it as needed.
 
-For more details, see [README.md](README.md#configuration-setup).
+For more details, see the [README](../README.md#configuration-setup).
 
 
 The shared conda environment on calim is available at:
