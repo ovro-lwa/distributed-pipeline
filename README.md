@@ -133,12 +133,20 @@ The Celery-based subband pipeline processes OVRO-LWA data on the calim cluster u
 # Start workers on all available calim nodes (from any calim node):
 ./deploy/manage-workers.sh start
 
-# Submit a pipeline run:
+# Submit a pipeline run (static mode — subband pinned to its default node):
 python pipeline/subband_celery.py \
   --range 04-05 --date 2026-01-31 \
   --bp_table /path/to/bandpass.B.flagged \
   --xy_table /path/to/xyphase.Xf \
   --subbands 73MHz --peel_sky --peel_rfi
+
+# Submit with dynamic scheduling (any free node picks up work):
+python pipeline/subband_celery.py \
+  --range 00-24 --date 2026-01-31 \
+  --bp_table /path/to/bandpass.B.flagged \
+  --xy_table /path/to/xyphase.Xf \
+  --peel_sky --peel_rfi --hot_baselines \
+  --cleanup_nvme --compress_snapshots --dynamic
 
 # After code changes — deploy to all nodes in one command:
 ./deploy/manage-workers.sh deploy

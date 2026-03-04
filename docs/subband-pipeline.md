@@ -45,7 +45,7 @@ for post-run performance analysis. Grep with `grep '\[TIMER\]' worker.log`.
 
 | File | Purpose |
 |------|---------|
-| `pipeline/subband_celery.py` | **CLI entry point.** Discovers MS files, computes LST segments, submits one chord per (subband, LST-hour) to the correct Celery queue. Flags: `--targets`, `--catalog`, `--snapshot_clean`, `--remap SUBBAND=NODE`. |
+| `pipeline/subband_celery.py` | **CLI entry point.** Discovers MS files, computes LST segments, submits one chord per (subband, LST-hour) to the correct Celery queue. Flags: `--targets`, `--catalog`, `--snapshot_clean`, `--remap SUBBAND=NODE`, `--dynamic`, `--nodes`, `--exclude_nodes`, `--compress_snapshots`. |
 | `orca/tasks/subband_tasks.py` | **Celery task definitions.** Contains `prepare_one_ms_task` (Phase 1), `process_subband_task` (Phase 2 including science phases A–D), and `submit_subband_pipeline()` which wires them into a chord. All steps have `[TIMER]` instrumentation. |
 | `orca/celery.py` | **Celery app configuration.** Defines broker/backend, all queues (`default`, `cosmology`, `bandpass`, `imaging`, `calim00`–`calim10`), and task include list. |
 
@@ -114,10 +114,92 @@ archived to shared Lustre (`/lustre/pipeline/`).
 | 69 MHz | lwacalim07 | `calim07` | Full node |
 | **73 MHz** | lwacalim08 | `calim08` | Full node |
 | 78 MHz | lwacalim09 | `calim09` | Full node |
-| 82 MHz | lwacalim10 | `calim10` | Full node |
+| 82 MHz | lwacalim00 | `calim00` | Shared with 18/23 MHz |
+
+> **Note:** calim02 and calim10 are currently inactive. Subbands that map to
+> inactive nodes must use `--remap` (static mode) or `--dynamic` mode.
 
 Dual-subband nodes get 16 CPUs / 60 GB / 12 wsclean threads each.
 Single-subband nodes get 32 CPUs / 120 GB / 24 wsclean threads.
+
+---
+
+## Dynamic Scheduling Mode
+
+By default, each subband is pinned to a fixed node (static mode). The
+**`--dynamic`** flag enables a work-queue scheduler where any free node
+picks up the next (subband, hour) work unit automatically.
+
+### How it works
+
+```
+1. Submission script builds all (subband × hour) work units
+2. All work units are pushed to a Redis list (FIFO queue)
+3. One work unit is popped per node to seed initial execution
+4. When a node finishes Phase 2, it pops the next work unit from Redis
+   and submits it to itself
+5. Continues until the Redis queue is empty → nodes go idle
+```
+
+This eliminates idle nodes when subbands have uneven processing times.
+Any subband can run on any node — data is copied from Lustre to local
+NVMe at the start of Phase 1 regardless.
+
+### Usage
+
+```bash
+# All subbands, all hours, dynamically distributed across active nodes
+python pipeline/subband_celery.py \
+  --range 00-24 --date 2024-12-21 \
+  --bp_table /path/to/bandpass.B.flagged \
+  --xy_table /path/to/xyphase.Xf \
+  --peel_sky --peel_rfi --hot_baselines \
+  --cleanup_nvme --compress_snapshots \
+  --dynamic
+
+# Custom node pool
+--dynamic --nodes calim01 calim03 calim08 calim09
+
+# Exclude specific nodes
+--dynamic --exclude_nodes calim07
+
+# Dry run — shows work units and node pool without submitting
+--dynamic --dry_run
+```
+
+### Monitoring the Redis work queue
+
+```python
+# From any node with access to Redis (10.41.0.85)
+python -c "
+import redis, json
+r = redis.Redis(host='10.41.0.85', port=6379, db=0)
+key = 'pipeline:dynamic:Run_YYYYMMDD_HHMMSS'  # replace with actual run label
+n = r.llen(key)
+print(f'Remaining: {n}')
+for i, raw in enumerate(r.lrange(key, 0, -1)):
+    wu = json.loads(raw)
+    print(f'  [{i}] {wu[\"subband\"]} {wu[\"lst_label\"]} ({len(wu[\"ms_files\"])} files)')
+"
+```
+
+Or use `redis-cli` if available:
+
+```bash
+redis-cli -h 10.41.0.85 LLEN pipeline:dynamic:Run_YYYYMMDD_HHMMSS
+redis-cli -h 10.41.0.85 LRANGE pipeline:dynamic:Run_YYYYMMDD_HHMMSS 0 -1
+```
+
+### Static vs Dynamic comparison
+
+| Aspect | Static (`--remap`) | Dynamic (`--dynamic`) |
+|--------|-------------------|----------------------|
+| Node assignment | Fixed per subband | Any free node |
+| Idle nodes | Possible (uneven load) | Minimized |
+| NVMe locality | Guaranteed same node | Guaranteed (copy at Phase 1 start) |
+| Subband ordering | Priority order | FIFO from Redis queue |
+| Remapping inactive nodes | Manual `--remap` | Automatic (excluded from pool) |
+| Sequential chaining | Per-subband on same node | Work units are independent |
 
 ---
 
@@ -348,3 +430,28 @@ python pipeline/subband_celery.py \
 ```
 
 Add `--dry_run` to any command to preview without submitting.
+
+Dynamic mode — 3-hour test on 2 nodes:
+
+```bash
+python pipeline/subband_celery.py \
+    --range 03-06 --date 2024-12-21 \
+    --bp_table /lustre/pipeline/calibration/results/2024-12-21/02h/successful/20251224_131951/tables/calibration_2024-12-21_02h.B.flagged \
+    --xy_table /lustre/gh/polcal/xyphase_delay_pos_3.8643ns.Xf \
+    --subbands 73MHz \
+    --peel_sky --peel_rfi --hot_baselines \
+    --skip_science --cleanup_nvme --compress_snapshots \
+    --dynamic --nodes calim01 calim03
+```
+
+Dynamic mode — full observation across all active nodes:
+
+```bash
+python pipeline/subband_celery.py \
+    --range 00-24 --date 2024-12-21 \
+    --bp_table /lustre/pipeline/calibration/results/2024-12-21/02h/successful/20251224_131951/tables/calibration_2024-12-21_02h.B.flagged \
+    --xy_table /lustre/gh/polcal/xyphase_delay_pos_3.8643ns.Xf \
+    --peel_sky --peel_rfi --hot_baselines \
+    --cleanup_nvme --compress_snapshots \
+    --dynamic
+```
