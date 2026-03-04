@@ -31,7 +31,7 @@ NODE_SUBBAND_MAP = {
     '69MHz': 'lwacalim07',
     '73MHz': 'lwacalim08',
     '78MHz': 'lwacalim09',
-    '82MHz': 'lwacalim10',
+    '82MHz': 'lwacalim00',
 }
 
 # Reverse map: node → list of subbands
