@@ -261,14 +261,30 @@ def _compress_snapshot_fits(work_dir: str) -> int:
     Only snapshot images are compressed — deep images in ``I/`` and ``V/``
     are left as-is.
 
-    Requires ``fpack`` to be available on ``$PATH``.
+    Looks for ``fpack`` in this order:
+
+    1. ``$FPACK_BIN`` environment variable
+    2. Direct ``fpack`` on ``$PATH``
+    3. ``conda run -n development fpack`` (fallback)
 
     Returns:
         Number of files successfully compressed.
     """
-    fpack_bin = shutil.which('fpack')
-    if not fpack_bin:
-        logger.warning("fpack not found on PATH — skipping snapshot compression.")
+    # Resolve fpack binary / command prefix
+    fpack_env = os.environ.get('FPACK_BIN')
+    fpack_direct = shutil.which('fpack')
+    conda_bin = shutil.which('conda')
+
+    if fpack_env and os.path.isfile(fpack_env):
+        fpack_cmd = [fpack_env]
+    elif fpack_direct:
+        fpack_cmd = [fpack_direct]
+    elif conda_bin:
+        # Fall back to running fpack inside the 'development' conda env
+        fpack_cmd = [conda_bin, 'run', '-n', 'development', 'fpack']
+        logger.info("Using fpack via 'conda run -n development'")
+    else:
+        logger.warning("fpack not found (PATH, $FPACK_BIN, or conda development env) — skipping compression.")
         return 0
 
     snap_dir = os.path.join(work_dir, "snapshots")
@@ -282,7 +298,7 @@ def _compress_snapshot_fits(work_dir: str) -> int:
         fs_path = fpath + ".fs"
         try:
             subprocess.run(
-                [fpack_bin, "-v", fpath],
+                fpack_cmd + ["-v", fpath],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 check=True,
             )
