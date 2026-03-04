@@ -98,6 +98,8 @@ Celery admin notes are in [docs/celery_deployment.md](docs/celery_deployment.md)
 
 `pipeline` is where the pipelines live and serve as useful examples for how to use celery.
 
+`tools` contains standalone utility scripts (e.g. QA imaging) that are not part of the core pipeline. See each subdirectory's README for usage.
+
 ## Developer & Testing Guide
 
 For usage examples and how to test the pipeline without Celery, please refer to the [Usage Guide](docs/usage_guide.md)

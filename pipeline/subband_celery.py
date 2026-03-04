@@ -183,6 +183,9 @@ def main():
                              'Still archives products to Lustre.')
     parser.add_argument('--reduced_pixels', action='store_true',
                         help='Scale image pixels by subband: 1024 (18-36MHz), 2048 (41-59MHz), 4096 (64-82MHz)')
+    parser.add_argument('--compress_snapshots', action='store_true',
+                        help='Compress snapshot FITS with fpack (.fits → .fits.fs). '
+                             'Originals are deleted. Deep images are NOT compressed.')
     parser.add_argument('--remap', nargs='+', default=None, metavar='SUBBAND=NODE',
                         help='Override node routing, e.g. --remap 18MHz=calim08 23MHz=calim08')
     parser.add_argument('--dry_run', action='store_true',
@@ -301,6 +304,7 @@ def main():
             snapshot_clean=args.snapshot_clean,
             reduced_pixels=args.reduced_pixels,
             skip_science=args.skip_science,
+            compress_snapshots=args.compress_snapshots,
         )
         results.append({
             'subband': subband,

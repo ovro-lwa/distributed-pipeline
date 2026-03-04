@@ -47,6 +47,7 @@ import glob
 import shutil
 import socket
 import logging
+import subprocess
 import time
 import traceback
 
@@ -59,6 +60,14 @@ import numpy as np
 from celery import chord
 from casacore.tables import table
 from astropy.io import fits
+
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import matplotlib.animation as animation
+except ImportError:
+    animation = None
 
 from orca.celery import app
 from orca.wrapper.ttcal import zest_with_ttcal
@@ -129,6 +138,167 @@ def _trigger_next_and_cleanup(
             logger.info(f"Cleaned up NVMe work_dir: {work_dir}")
         except Exception:
             pass
+
+
+def _generate_local_movies(work_dir: str, freq_str: str) -> None:
+    """Generate raw + filtered MP4 movies from pilot snapshot FITS images.
+
+    Produces up to three movies inside ``<work_dir>/Movies/``:
+
+    * ``<freq>_I_Raw.mp4``      — Stokes I time-lapse (grayscale)
+    * ``<freq>_V_Raw.mp4``      — Stokes V time-lapse (grayscale)
+    * ``<freq>_I_Filtered.mp4`` — Stokes I median-subtracted (highlights transients)
+
+    Uses ``matplotlib.animation`` + ``ffmpeg``.  If either is unavailable the
+    step is silently skipped.
+
+    Args:
+        work_dir: NVMe working directory (must contain a ``snapshots/`` subfolder).
+        freq_str: Frequency label, e.g. ``'73MHz'``.
+    """
+    if animation is None:
+        logger.warning("matplotlib.animation not available — skipping movie generation.")
+        return
+
+    logger.info("Generating movies from pilot snapshots...")
+    movie_dir = os.path.join(work_dir, "Movies")
+    os.makedirs(movie_dir, exist_ok=True)
+    snap_dir = os.path.join(work_dir, "snapshots")
+
+    for pol in ['I', 'V']:
+        files = sorted(glob.glob(os.path.join(snap_dir, f"*{pol}-image*.fits")))
+        if len(files) < 10:
+            logger.info(f"Only {len(files)} {pol} snapshot frames — skipping movie.")
+            continue
+
+        frames = []
+        for f in files[:150]:
+            try:
+                frames.append(fits.getdata(f).squeeze())
+            except Exception:
+                pass
+
+        if not frames:
+            continue
+
+        try:
+            cube = np.array(frames)
+            mid = len(cube) // 2
+
+            # 1. Raw movie (both I and V) — grayscale
+            if pol == 'V':
+                rms = np.nanstd(cube[mid])
+                vmin, vmax = -5 * rms, 5 * rms
+            else:
+                vmin, vmax = np.nanpercentile(cube[mid], [1, 99.5])
+
+            fig = plt.figure(figsize=(8, 8))
+            ax = fig.add_axes([0, 0, 1, 1])
+            ax.axis('off')
+            ims = [[ax.imshow(fr, animated=True, origin='lower', cmap='gray',
+                              vmin=vmin, vmax=vmax)] for fr in cube]
+            ani = animation.ArtistAnimation(fig, ims, interval=100, blit=True)
+            raw_path = os.path.join(movie_dir, f"{freq_str}_{pol}_Raw.mp4")
+            ani.save(raw_path, writer='ffmpeg', dpi=150)
+            plt.close(fig)
+            logger.info(f"Saved {raw_path}")
+
+            # 2. Filtered movie (Stokes I only — median subtraction)
+            if pol == 'I':
+                med = np.median(cube, axis=0)
+                diff = cube - med
+                rms = np.std(diff)
+                fig = plt.figure(figsize=(8, 8))
+                ax = fig.add_axes([0, 0, 1, 1])
+                ax.axis('off')
+                ims = [[ax.imshow(fr, animated=True, origin='lower', cmap='gray',
+                                  vmin=-3 * rms, vmax=5 * rms)] for fr in diff]
+                ani = animation.ArtistAnimation(fig, ims, interval=100, blit=True)
+                filt_path = os.path.join(movie_dir, f"{freq_str}_{pol}_Filtered.mp4")
+                ani.save(filt_path, writer='ffmpeg', dpi=150)
+                plt.close(fig)
+                logger.info(f"Saved {filt_path}")
+
+        except Exception as e:
+            logger.error(f"Movie generation failed for {pol}: {e}")
+            traceback.print_exc()
+
+
+def _cleanup_psf_files(work_dir: str) -> int:
+    """Delete PSF FITS files from snapshots/, keeping only the first one.
+
+    WSClean produces a ``*-psf.fits`` for every snapshot interval.  These are
+    large and rarely needed after QA — keep just the first as a reference and
+    remove the rest to save space before archiving.
+
+    Returns:
+        Number of PSF files removed.
+    """
+    snap_dir = os.path.join(work_dir, "snapshots")
+    psf_files = sorted(glob.glob(os.path.join(snap_dir, "*-psf.fits")))
+    if len(psf_files) <= 1:
+        return 0
+    removed = 0
+    for psf in psf_files[1:]:
+        try:
+            os.remove(psf)
+            removed += 1
+        except OSError:
+            pass
+    logger.info(
+        f"PSF cleanup: kept {os.path.basename(psf_files[0])}, "
+        f"removed {removed}/{len(psf_files) - 1}"
+    )
+    return removed
+
+
+def _compress_snapshot_fits(work_dir: str) -> int:
+    """Compress all FITS files in ``snapshots/`` using fpack.
+
+    Each ``*.fits`` file is compressed to ``*.fits.fz`` by fpack, then
+    renamed to ``*.fits.fs``.  The original uncompressed FITS is deleted.
+
+    Only snapshot images are compressed — deep images in ``I/`` and ``V/``
+    are left as-is.
+
+    Requires ``fpack`` to be available on ``$PATH``.
+
+    Returns:
+        Number of files successfully compressed.
+    """
+    fpack_bin = shutil.which('fpack')
+    if not fpack_bin:
+        logger.warning("fpack not found on PATH — skipping snapshot compression.")
+        return 0
+
+    snap_dir = os.path.join(work_dir, "snapshots")
+    fits_files = sorted(glob.glob(os.path.join(snap_dir, "*.fits")))
+    if not fits_files:
+        return 0
+
+    compressed = 0
+    for fpath in fits_files:
+        fz_path = fpath + ".fz"
+        fs_path = fpath + ".fs"
+        try:
+            subprocess.run(
+                [fpack_bin, "-v", fpath],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                check=True,
+            )
+            if os.path.exists(fz_path):
+                os.rename(fz_path, fs_path)
+                os.remove(fpath)
+                compressed += 1
+            else:
+                logger.warning(f"fpack did not produce {fz_path}")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"fpack failed on {os.path.basename(fpath)}: {e}")
+        except OSError as e:
+            logger.error(f"Compress file error {os.path.basename(fpath)}: {e}")
+
+    logger.info(f"Compressed {compressed}/{len(fits_files)} snapshot FITS → .fs")
+    return compressed
 
 
 def _patch_size_args(args: list, npix: int) -> list:
@@ -290,6 +460,7 @@ def process_subband_task(
     snapshot_clean: bool = False,
     reduced_pixels: bool = False,
     skip_science: bool = False,
+    compress_snapshots: bool = False,
     remaining_hours: Optional[List[dict]] = None,
 ) -> str:
     """Phase 2: concatenate, image, run science, and archive one subband.
@@ -317,6 +488,8 @@ def process_subband_task(
         skip_science: If True, skip all science phases (dewarping, photometry,
             transient search, flux check) after PB correction. Products
             are still archived to Lustre.
+        compress_snapshots: If True, fpack-compress all snapshot FITS to .fs
+            and remove the originals.  Deep images are not compressed.
         remaining_hours: List of kwarg dicts for subsequent hours.
             Each dict contains the arguments for ``submit_subband_pipeline``.
             The first entry is submitted after this hour completes, with
@@ -359,7 +532,7 @@ def process_subband_task(
 
     try:
         for d in ['I/deep', 'V/deep', 'I/10min', 'V/10min', 'snapshots', 'QA',
-                  'samples', 'detections', 'Dewarp_Diagnostics']:
+                  'samples', 'detections', 'Dewarp_Diagnostics', 'Movies']:
             os.makedirs(os.path.join(work_dir, d), exist_ok=True)
     
         # ------------------------------------------------------------------
@@ -499,6 +672,17 @@ def process_subband_task(
                 logger.info(f"PB corrected {pb_count} images for {step['suffix']}")
             logger.info(f"[TIMER] imaging_{step['suffix']}: {time.time() - _t_step:.1f}s")
         logger.info(f"[TIMER] imaging_all: {time.time() - _t_imaging_all:.1f}s")
+    
+        # ------------------------------------------------------------------
+        #  7a. Movie generation from pilot snapshots
+        # ------------------------------------------------------------------
+        _t = time.time()
+        try:
+            _generate_local_movies(work_dir, subband)
+        except Exception as e:
+            logger.error(f"Movie generation failed: {e}")
+            traceback.print_exc()
+        logger.info(f"[TIMER] movie_generation: {time.time() - _t:.1f}s")
     
         # ------------------------------------------------------------------
         #  7b. SCIENCE PHASES (all on NVMe)
@@ -767,6 +951,15 @@ def process_subband_task(
         logger.info(f"[TIMER] science_flux_check: {time.time() - _t:.1f}s")
     
         # ------------------------------------------------------------------
+        #  7c. Snapshot cleanup + optional compression
+        # ------------------------------------------------------------------
+        _t = time.time()
+        _cleanup_psf_files(work_dir)
+        if compress_snapshots:
+            _compress_snapshot_fits(work_dir)
+        logger.info(f"[TIMER] snapshot_cleanup_compress: {time.time() - _t:.1f}s")
+    
+        # ------------------------------------------------------------------
         #  8. Archive to Lustre
         # ------------------------------------------------------------------
         _t = time.time()
@@ -851,6 +1044,7 @@ def submit_subband_pipeline(
     snapshot_clean: bool = False,
     reduced_pixels: bool = False,
     skip_science: bool = False,
+    compress_snapshots: bool = False,
     remaining_hours: Optional[List[dict]] = None,
 ) -> 'celery.result.AsyncResult':
     """Submit the full two-phase subband pipeline as a Celery chord.
@@ -878,6 +1072,7 @@ def submit_subband_pipeline(
         snapshot_clean: If True, use CLEAN imaging for pilot snapshots.
         reduced_pixels: If True, scale pixel count by subband frequency.
         skip_science: If True, skip science phases after PB correction.
+        compress_snapshots: If True, fpack-compress snapshot FITS.
 
     Returns:
         Celery AsyncResult for the chord (Phase 2 result).
@@ -917,6 +1112,7 @@ def submit_subband_pipeline(
         snapshot_clean=snapshot_clean,
         reduced_pixels=reduced_pixels,
         skip_science=skip_science,
+        compress_snapshots=compress_snapshots,
         remaining_hours=remaining_hours,
     ).set(queue=queue)
 
@@ -991,6 +1187,7 @@ def submit_subband_pipeline_chained(
     snapshot_clean: bool = False,
     reduced_pixels: bool = False,
     skip_science: bool = False,
+    compress_snapshots: bool = False,
 ) -> 'celery.result.AsyncResult':
     """Submit multiple LST-hours for one subband as a sequential chain.
 
@@ -1025,6 +1222,7 @@ def submit_subband_pipeline_chained(
         snapshot_clean: Use CLEAN imaging for pilot snapshots.
         reduced_pixels: Scale pixel count by subband frequency.
         skip_science: Skip science phases after PB correction.
+        compress_snapshots: fpack-compress snapshot FITS.
 
     Returns:
         Celery AsyncResult for the first hour's chord (only the first
@@ -1057,6 +1255,7 @@ def submit_subband_pipeline_chained(
             snapshot_clean=snapshot_clean,
             reduced_pixels=reduced_pixels,
             skip_science=skip_science,
+            compress_snapshots=compress_snapshots,
         )
         all_hour_kwargs.append(kwargs)
 
