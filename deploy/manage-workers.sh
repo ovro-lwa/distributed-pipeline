@@ -39,8 +39,10 @@ ssh_cmd() {
 }
 
 get_nodes() {
-    if [[ -n "${2:-}" ]]; then
-        echo "$2"
+    # $1 is the action name (status, start, etc.), remaining args are node names
+    shift  # drop action name
+    if [[ $# -gt 0 ]]; then
+        echo "$@"
     else
         echo "${AVAILABLE_NODES[@]}"
     fi
