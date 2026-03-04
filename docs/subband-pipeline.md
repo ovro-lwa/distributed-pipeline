@@ -163,6 +163,12 @@ python pipeline/subband_celery.py \
 # Exclude specific nodes
 --dynamic --exclude_nodes calim07
 
+# Shared dynamic queue across multiple submissions (different dates/ranges)
+--dynamic --dynamic_queue_label Dec21_Backlog
+
+# Append-only: push to existing shared queue without seeding new node tasks
+--dynamic --dynamic_queue_label Dec21_Backlog --dynamic_append_only
+
 # Dry run — shows work units and node pool without submitting
 --dynamic --dry_run
 ```

@@ -114,6 +114,14 @@ logger = logging.getLogger(__name__)
 DYNAMIC_WORK_QUEUE = "pipeline:dynamic:{run_label}"
 
 
+def _dynamic_queue_length(run_label: str) -> int:
+    """Return the number of queued work units for a dynamic run label."""
+    import redis as _redis
+    r = _redis.Redis.from_url(queue_config.result_backend_uri)
+    key = DYNAMIC_WORK_QUEUE.format(run_label=run_label)
+    return int(r.llen(key))
+
+
 def _push_work_units(run_label: str, work_units: List[dict]) -> int:
     """Push work units to a Redis list for dynamic dispatch.
 
