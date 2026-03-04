@@ -94,11 +94,16 @@ Now you can submit tasks to the application from another session (e.g., IPython,
 Celery admin notes are in [docs/celery_deployment.md](docs/celery_deployment.md). The submission session will show some logging, but the celery application process will show more.
 
 ## Code Structure
-`orca` is where the wrappers and functions that do single units of work sit.
 
-`pipeline` is where the pipelines live and serve as useful examples for how to use celery.
-
-`tools` contains standalone utility scripts (e.g. QA imaging) that are not part of the core pipeline. See each subdirectory's README for usage.
+| Directory | Description |
+|-----------|-------------|
+| `orca/` | Core library — wrappers and functions that do single units of work |
+| `pipeline/` | Pipeline submission scripts (Celery chord/chain orchestration) |
+| `deploy/` | Worker management scripts (see [docs/worker-management.md](docs/worker-management.md)) |
+| `tools/` | Standalone utilities (e.g. QA imaging) — not part of the core pipeline |
+| `tests/` | Unit and integration tests |
+| `docs/` | Sphinx documentation and guides |
+| `notebooks/` | Jupyter notebooks for examples and monitoring |
 
 ## Developer & Testing Guide
 
