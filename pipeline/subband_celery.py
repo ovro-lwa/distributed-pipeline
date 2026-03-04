@@ -38,10 +38,13 @@ import astropy.units as u
 from orca.tasks.subband_tasks import (
     submit_subband_pipeline,
     submit_subband_pipeline_chained,
+    _push_work_units,
+    _pop_and_submit,
 )
 from orca.transform.subband_processing import find_archive_files_for_subband
 from orca.resources.subband_config import (
     NODE_SUBBAND_MAP,
+    DYNAMIC_NODE_POOL,
     get_queue_for_subband,
 )
 
@@ -188,9 +191,21 @@ def main():
                              'Originals are deleted. Deep images are NOT compressed.')
     parser.add_argument('--remap', nargs='+', default=None, metavar='SUBBAND=NODE',
                         help='Override node routing, e.g. --remap 18MHz=calim08 23MHz=calim08')
+    parser.add_argument('--dynamic', action='store_true',
+                        help='Dynamic scheduling: work units are dispatched to '
+                             'whichever node finishes first. Incompatible with --remap.')
+    parser.add_argument('--nodes', nargs='+', default=None, metavar='NODE',
+                        help='Node pool for --dynamic (default: DYNAMIC_NODE_POOL from config). '
+                             'e.g. --nodes calim01 calim03 calim08')
+    parser.add_argument('--exclude_nodes', nargs='+', default=None, metavar='NODE',
+                        help='Exclude nodes from --dynamic pool, e.g. --exclude_nodes calim10')
     parser.add_argument('--dry_run', action='store_true',
                         help='Show what would be submitted without actually submitting')
     args = parser.parse_args()
+
+    if args.dynamic and args.remap:
+        logger.error('--dynamic and --remap are mutually exclusive')
+        sys.exit(1)
 
     # Resolve target/catalog paths to absolute so they work on remote workers.
     # Paths under orca/resources/ are resolved relative to the orca package
@@ -233,6 +248,105 @@ def main():
         all_subs = list(NODE_SUBBAND_MAP.keys())
         subbands = priority + [s for s in all_subs if s not in priority]
 
+    # =======================================================================
+    #  DYNAMIC MODE
+    # =======================================================================
+    if args.dynamic:
+        node_pool = args.nodes or list(DYNAMIC_NODE_POOL)
+        if args.exclude_nodes:
+            node_pool = [n for n in node_pool if n not in args.exclude_nodes]
+        if not node_pool:
+            logger.error('Node pool is empty after exclusions')
+            sys.exit(1)
+
+        # Build all work units
+        all_work_units = []
+        for subband in subbands:
+            for seg in segments:
+                obs_date = seg['start'].datetime.strftime('%Y-%m-%d')
+                lst_label = seg['lst_label']
+                start_dt = seg['start'].datetime
+                end_dt = seg['end'].datetime
+                ms_files = find_archive_files_for_subband(
+                    start_dt, end_dt, subband, input_dir=args.input_dir,
+                )
+                if not ms_files:
+                    logger.warning(
+                        f"No files for {subband} in {lst_label} "
+                        f"({start_dt} → {end_dt})"
+                    )
+                    continue
+
+                all_work_units.append({
+                    'ms_files': ms_files,
+                    'subband': subband,
+                    'bp_table': args.bp_table,
+                    'xy_table': args.xy_table,
+                    'lst_label': lst_label,
+                    'obs_date': obs_date,
+                    'run_label': run_label,
+                    'peel_sky': args.peel_sky,
+                    'peel_rfi': args.peel_rfi,
+                    'hot_baselines': args.hot_baselines,
+                    'skip_cleanup': args.skip_cleanup,
+                    'cleanup_nvme': args.cleanup_nvme,
+                    'targets': args.targets,
+                    'catalog': args.catalog,
+                    'snapshot_clean': args.snapshot_clean,
+                    'reduced_pixels': args.reduced_pixels,
+                    'skip_science': args.skip_science,
+                    'compress_snapshots': args.compress_snapshots,
+                })
+
+        if not all_work_units:
+            logger.error('No work units found')
+            sys.exit(1)
+
+        logger.info(
+            f"=== Dynamic mode: {len(all_work_units)} work units "
+            f"across {len(node_pool)} nodes ==="
+        )
+        for wu in all_work_units:
+            logger.info(
+                f"  {wu['subband']:>6s} | {wu['lst_label']} | "
+                f"{len(wu['ms_files']):3d} files"
+            )
+
+        if args.dry_run:
+            logger.info(
+                f"[DRY RUN] Would push {len(all_work_units)} work units "
+                f"to Redis and seed {len(node_pool)} nodes: "
+                f"{', '.join(node_pool)}"
+            )
+            sys.exit(0)
+
+        # Push all work units to Redis
+        _push_work_units(run_label, all_work_units)
+
+        # Seed: pop one work unit per node to kick things off
+        seeded = 0
+        for node_queue in node_pool:
+            result = _pop_and_submit(run_label, node_queue)
+            if result:
+                seeded += 1
+                logger.info(f"  Seeded {node_queue}")
+            else:
+                break  # queue exhausted
+
+        logger.info(
+            f"=== Dynamic dispatch started: {seeded} nodes seeded, "
+            f"{len(all_work_units) - seeded} queued ==="
+        )
+        logger.info(
+            "Nodes will self-schedule from Redis as they finish.\n"
+            "Monitor progress with:\n"
+            "  celery -A orca.celery flower --port=5555"
+        )
+        sys.exit(0)
+
+    # =======================================================================
+    #  STATIC MODE  (original behavior)
+    # =======================================================================
     results = []
 
     for subband in subbands:

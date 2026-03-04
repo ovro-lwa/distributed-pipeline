@@ -45,6 +45,7 @@ Usage (from a submission script or notebook)::
 import os
 import glob
 import shutil
+import json
 import socket
 import logging
 import subprocess
@@ -90,6 +91,7 @@ from orca.transform.subband_processing import (
     find_deep_image,
     extract_sources_to_df,
 )
+from orca.configmanager import queue_config
 from orca.resources.subband_config import (
     PEELING_PARAMS,
     AOFLAGGER_STRATEGY,
@@ -106,16 +108,92 @@ from orca.resources.subband_config import (
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+#  Dynamic dispatch — Redis-backed work queue
+# ---------------------------------------------------------------------------
+DYNAMIC_WORK_QUEUE = "pipeline:dynamic:{run_label}"
+
+
+def _push_work_units(run_label: str, work_units: List[dict]) -> int:
+    """Push work units to a Redis list for dynamic dispatch.
+
+    Each work unit is a complete kwargs dict for
+    :func:`submit_subband_pipeline`.
+
+    Returns:
+        Number of work units pushed.
+    """
+    import redis as _redis
+    r = _redis.Redis.from_url(queue_config.result_backend_uri)
+    key = DYNAMIC_WORK_QUEUE.format(run_label=run_label)
+    for wu in work_units:
+        r.rpush(key, json.dumps(wu))
+    r.expire(key, 86400 * 7)  # 7-day TTL
+    logger.info(f"Pushed {len(work_units)} work units to Redis key {key}")
+    return len(work_units)
+
+
+def _pop_and_submit(run_label: str, queue: str):
+    """Pop the next work unit from Redis and submit to *queue*.
+
+    Called during initial seeding (from the submission script) and from
+    :func:`_trigger_next_and_cleanup` on the worker after each hour
+    completes.
+
+    Returns:
+        Celery ``AsyncResult`` for the submitted chord, or *None*
+        if the queue is empty.
+    """
+    import redis as _redis
+    r = _redis.Redis.from_url(queue_config.result_backend_uri)
+    key = DYNAMIC_WORK_QUEUE.format(run_label=run_label)
+
+    raw = r.lpop(key)
+    if not raw:
+        remaining = r.llen(key)
+        logger.info(
+            f"Dynamic dispatch: queue empty for {run_label} — node idle"
+        )
+        return None
+
+    work = json.loads(raw)
+    remaining = r.llen(key)
+    logger.info(
+        f"Dynamic dispatch: popped {work.get('subband')} "
+        f"{work.get('lst_label')} → queue {queue} "
+        f"({remaining} remaining in queue)"
+    )
+
+    # Route to the specified node and propagate dynamic mode
+    work['queue_override'] = queue
+    work['dynamic_run_label'] = run_label
+    return submit_subband_pipeline(remaining_hours=None, **work)
+
 
 def _trigger_next_and_cleanup(
     remaining_hours, work_dir, cleanup_nvme, subband, lst_label,
+    dynamic_run_label=None,
 ):
     """Trigger the next hour in the sequential chain and optionally clean NVMe.
 
     Called from the ``finally`` block of ``process_subband_task`` so that the
     chain **always** continues even when the current hour fails.
+
+    In **dynamic mode** (``dynamic_run_label`` is set), the next work unit is
+    popped from the Redis work queue instead of using ``remaining_hours``.
+    This allows any subband/hour to be dispatched to whichever node finishes
+    first.
     """
-    if remaining_hours:
+    if dynamic_run_label:
+        # Dynamic mode: pop next work unit from Redis
+        queue = socket.gethostname().replace('lwa', '')
+        try:
+            _pop_and_submit(dynamic_run_label, queue)
+        except Exception as e:
+            logger.error(f"Dynamic dispatch failed: {e}")
+            traceback.print_exc()
+    elif remaining_hours:
+        # Static chaining mode
         next_hour = remaining_hours[0]
         rest = remaining_hours[1:] or None
         next_label = next_hour.get('lst_label', '?')
@@ -124,8 +202,6 @@ def _trigger_next_and_cleanup(
             f"({len(remaining_hours) - 1} hours remaining after)"
         )
         try:
-            # Avoid circular import: submit_subband_pipeline is defined later
-            # in this module, so call it directly.
             submit_subband_pipeline(remaining_hours=rest, **next_hour)
         except Exception as e:
             logger.error(f"Failed to trigger next hour {next_label}: {e}")
@@ -478,6 +554,7 @@ def process_subband_task(
     skip_science: bool = False,
     compress_snapshots: bool = False,
     remaining_hours: Optional[List[dict]] = None,
+    dynamic_run_label: Optional[str] = None,
 ) -> str:
     """Phase 2: concatenate, image, run science, and archive one subband.
 
@@ -487,6 +564,11 @@ def process_subband_task(
     When *remaining_hours* is provided (by ``submit_subband_pipeline_chained``),
     this task will submit the next hour's chord upon successful completion,
     ensuring hours are processed **sequentially** on the same node.
+
+    When *dynamic_run_label* is set, the task operates in **dynamic dispatch**
+    mode: instead of chaining to the next hour of the same subband, it pops
+    the next (subband, hour) work unit from a Redis queue.  This lets any
+    free node pick up whatever work is available.
 
     Args:
         ms_paths: NVMe paths returned by prepare_one_ms_task (via chord).
@@ -510,6 +592,8 @@ def process_subband_task(
             Each dict contains the arguments for ``submit_subband_pipeline``.
             The first entry is submitted after this hour completes, with
             the rest forwarded as its own ``remaining_hours``.
+        dynamic_run_label: If set, enables dynamic dispatch mode using
+            this run label as the Redis work-queue key.
 
     Returns:
         Path to the Lustre archive directory with final products.
@@ -539,6 +623,7 @@ def process_subband_task(
         logger.error(f"No valid MS files for {subband} in {lst_label}")
         _trigger_next_and_cleanup(
             remaining_hours, work_dir, cleanup_nvme, subband, lst_label,
+            dynamic_run_label=dynamic_run_label,
         )
         raise RuntimeError(f"No valid MS files for {subband}")
 
@@ -1020,6 +1105,7 @@ def process_subband_task(
         # ------------------------------------------------------------------
         _trigger_next_and_cleanup(
             remaining_hours, work_dir, cleanup_nvme, subband, lst_label,
+            dynamic_run_label=dynamic_run_label,
         )
         logger.info(f"[TIMER] phase2_total: {time.time() - _p2_t0:.1f}s")
         if _phase2_failed:
@@ -1062,6 +1148,7 @@ def submit_subband_pipeline(
     skip_science: bool = False,
     compress_snapshots: bool = False,
     remaining_hours: Optional[List[dict]] = None,
+    dynamic_run_label: Optional[str] = None,
 ) -> 'celery.result.AsyncResult':
     """Submit the full two-phase subband pipeline as a Celery chord.
 
@@ -1089,6 +1176,7 @@ def submit_subband_pipeline(
         reduced_pixels: If True, scale pixel count by subband frequency.
         skip_science: If True, skip science phases after PB correction.
         compress_snapshots: If True, fpack-compress snapshot FITS.
+        dynamic_run_label: If set, enables dynamic dispatch mode.
 
     Returns:
         Celery AsyncResult for the chord (Phase 2 result).
@@ -1130,6 +1218,7 @@ def submit_subband_pipeline(
         skip_science=skip_science,
         compress_snapshots=compress_snapshots,
         remaining_hours=remaining_hours,
+        dynamic_run_label=dynamic_run_label,
     ).set(queue=queue)
 
     # chord(Phase1)(Phase2) — Phase2 receives list of Phase1 return values

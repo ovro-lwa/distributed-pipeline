@@ -42,6 +42,16 @@ for _sb, _node in NODE_SUBBAND_MAP.items():
 # All unique calim nodes
 CALIM_NODES = sorted(set(NODE_SUBBAND_MAP.values()))
 
+# ---------------------------------------------------------------------------
+#  Dynamic dispatch — node pool
+#  Used with ``--dynamic`` mode.  Any node in this list can process any
+#  subband.  Edit this list to match currently active nodes.
+# ---------------------------------------------------------------------------
+DYNAMIC_NODE_POOL = [
+    'calim00', 'calim01', 'calim03', 'calim04',
+    'calim05', 'calim06', 'calim07', 'calim08', 'calim09',
+]
+
 def get_queue_for_subband(subband: str) -> str:
     """Return the Celery queue name for a given subband.
 
