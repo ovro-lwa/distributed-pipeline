@@ -178,6 +178,45 @@ def _pop_and_submit(run_label: str, queue: str):
     return submit_subband_pipeline(remaining_hours=None, **work)
 
 
+@app.task(
+    bind=True,
+    name='orca.tasks.subband_tasks.on_chord_error',
+    acks_late=True,
+)
+def on_chord_error(
+    self,
+    request,
+    exc,
+    traceback_str,
+    dynamic_run_label: Optional[str] = None,
+    work_dir: Optional[str] = None,
+    cleanup_nvme: bool = False,
+    subband: str = '',
+    lst_label: str = '',
+):
+    """Error callback attached to every chord via ``link_error``.
+
+    When **all retries** of a Phase 1 task are exhausted the chord never
+    fires the Phase 2 callback, so ``_trigger_next_and_cleanup`` is never
+    reached.  This task fills that gap: it pops the next work unit from
+    the Redis queue (dynamic mode) or submits the next static-chain hour
+    so that the node does not go permanently idle.
+    """
+    logger.error(
+        f"Chord FAILED for {subband} {lst_label} on "
+        f"{socket.gethostname()}: {exc}"
+    )
+    # Best-effort: continue the dispatch chain
+    _trigger_next_and_cleanup(
+        remaining_hours=None,
+        work_dir=work_dir or '',
+        cleanup_nvme=cleanup_nvme,
+        subband=subband,
+        lst_label=lst_label,
+        dynamic_run_label=dynamic_run_label,
+    )
+
+
 def _trigger_next_and_cleanup(
     remaining_hours, work_dir, cleanup_nvme, subband, lst_label,
     dynamic_run_label=None,
@@ -186,6 +225,10 @@ def _trigger_next_and_cleanup(
 
     Called from the ``finally`` block of ``process_subband_task`` so that the
     chain **always** continues even when the current hour fails.
+
+    Also called from :func:`on_chord_error` when Phase 1 fails entirely
+    (all retries exhausted), ensuring the node picks up the next work unit
+    instead of going idle.
 
     In **dynamic mode** (``dynamic_run_label`` is set), the next work unit is
     popped from the Redis work queue instead of using ``remaining_hours``.
@@ -1229,8 +1272,18 @@ def submit_subband_pipeline(
         dynamic_run_label=dynamic_run_label,
     ).set(queue=queue)
 
+    # Error handler: if all Phase 1 retries fail the chord never fires
+    # Phase 2, so this callback ensures the dispatch chain continues.
+    error_callback = on_chord_error.s(
+        dynamic_run_label=dynamic_run_label,
+        work_dir=nvme_work_dir,
+        cleanup_nvme=cleanup_nvme,
+        subband=subband,
+        lst_label=lst_label,
+    ).set(queue=queue)
+
     # chord(Phase1)(Phase2) — Phase2 receives list of Phase1 return values
-    pipeline = chord(phase1_tasks)(phase2_callback)
+    pipeline = chord(phase1_tasks)(phase2_callback, link_error=[error_callback])
     logger.info(
         f"Submitted {subband} → queue={queue}: "
         f"{len(ms_files)} MS files, work_dir={nvme_work_dir}"
