@@ -185,28 +185,74 @@ def _pop_and_submit(run_label: str, queue: str):
 )
 def on_chord_error(
     self,
-    request,
-    exc,
-    traceback_str,
+    task_id=None,
+    exc=None,
+    traceback_str=None,
     dynamic_run_label: Optional[str] = None,
     work_dir: Optional[str] = None,
     cleanup_nvme: bool = False,
     subband: str = '',
     lst_label: str = '',
 ):
-    """Error callback attached to every chord via ``link_error``.
+    """Error callback for Phase 1 task failures.
 
-    When **all retries** of a Phase 1 task are exhausted the chord never
-    fires the Phase 2 callback, so ``_trigger_next_and_cleanup`` is never
-    reached.  This task fills that gap: it pops the next work unit from
-    the Redis queue (dynamic mode) or submits the next static-chain hour
-    so that the node does not go permanently idle.
+    Attached via ``link_error`` on each individual Phase 1 task.  When all
+    retries are exhausted for *any* MS in the chord, Celery fires this
+    callback.  The chord itself may still complete (other MS tasks succeed)
+    and Phase 2 runs normally.  But if enough tasks fail that the chord
+    never fires Phase 2, this ensures the dynamic dispatch chain continues.
+
+    A Redis ``SETNX`` lock (60 min TTL) prevents duplicate pops when
+    multiple Phase 1 tasks in the same chord all fail.
     """
+    import redis as _redis
+
+    node = socket.gethostname()
     logger.error(
-        f"Chord FAILED for {subband} {lst_label} on "
-        f"{socket.gethostname()}: {exc}"
+        f"Phase 1 task {task_id} FAILED for {subband} {lst_label} on "
+        f"{node}: {exc}"
     )
-    # Best-effort: continue the dispatch chain
+
+    if not dynamic_run_label:
+        return
+
+    # Dedup: only one error callback per (subband, lst_label) should pop.
+    # Use a Redis lock with 60-min TTL so it auto-expires.
+    try:
+        r = _redis.Redis.from_url(queue_config.result_backend_uri)
+        lock_key = f"pipeline:chord_error_lock:{dynamic_run_label}:{subband}:{lst_label}"
+        acquired = r.set(lock_key, "1", nx=True, ex=3600)
+        if not acquired:
+            logger.info(
+                f"Chord error handler already fired for {subband} {lst_label} "
+                f"— skipping duplicate pop"
+            )
+            return
+    except Exception as e:
+        logger.warning(f"Could not acquire dedup lock: {e} — popping anyway")
+
+    # Wait briefly: the chord may still succeed if other MS tasks complete.
+    # Phase 2's finally block would then handle dispatch normally.
+    # 90s is enough for Phase 2 to start if it's going to.
+    import time as _time
+    _time.sleep(90)
+
+    # Check if Phase 2 already ran by seeing if the work_dir was cleaned
+    # or if archive products exist.  If so, dispatch already happened.
+    archive_marker = os.path.join(
+        LUSTRE_ARCHIVE_DIR, lst_label, '*', '*', subband,
+    )
+    if work_dir and not os.path.isdir(work_dir) and glob.glob(archive_marker):
+        logger.info(
+            f"Phase 2 appears to have run for {subband} {lst_label} "
+            f"— skipping error-handler dispatch"
+        )
+        return
+
+    logger.info(
+        f"Phase 2 did not fire for {subband} {lst_label} — "
+        f"error handler triggering next work unit"
+    )
     _trigger_next_and_cleanup(
         remaining_hours=None,
         work_dir=work_dir or '',
@@ -1274,16 +1320,20 @@ def submit_subband_pipeline(
 
     # Error handler: if all Phase 1 retries fail the chord never fires
     # Phase 2, so this callback ensures the dispatch chain continues.
-    error_callback = on_chord_error.s(
+    # Attach link_error to each individual Phase 1 task (Celery 4.x
+    # compatible — cannot pass link_error to chord() directly).
+    error_sig = on_chord_error.si(
         dynamic_run_label=dynamic_run_label,
         work_dir=nvme_work_dir,
         cleanup_nvme=cleanup_nvme,
         subband=subband,
         lst_label=lst_label,
     ).set(queue=queue)
+    for t in phase1_tasks:
+        t.link_error = [error_sig]
 
     # chord(Phase1)(Phase2) — Phase2 receives list of Phase1 return values
-    pipeline = chord(phase1_tasks)(phase2_callback, link_error=[error_callback])
+    pipeline = chord(phase1_tasks)(phase2_callback)
     logger.info(
         f"Submitted {subband} → queue={queue}: "
         f"{len(ms_files)} MS files, work_dir={nvme_work_dir}"
