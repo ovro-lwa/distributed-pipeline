@@ -881,18 +881,85 @@ def process_subband_task(
             logger.error(f"Movie generation failed: {e}")
             traceback.print_exc()
         logger.info(f"[TIMER] movie_generation: {time.time() - _t:.1f}s")
-    
+
+        # ------------------------------------------------------------------
+        #  7b-pre. Lightweight image QA (runs ALWAYS, even with --skip_science)
+        # ------------------------------------------------------------------
+        try:
+            freq_mhz = float(subband.replace('MHz', ''))
+        except Exception:
+            freq_mhz = 50.0
+
+        # --- i. Per-subband noise RMS (Stokes V deep + Stokes I deep) ---
+        _t = time.time()
+        try:
+            from orca.transform.post_process_science import get_inner_rms
+
+            v_deep_dir = os.path.join(work_dir, "V", "deep")
+            i_deep_dir = os.path.join(work_dir, "I", "deep")
+
+            # Stokes V: raw image (not pbcorr)
+            v_candidates = sorted(glob.glob(
+                os.path.join(v_deep_dir, f"*V-Taper-Deep*image*.fits")))
+            v_candidates = [f for f in v_candidates
+                            if "pbcorr" not in f and "dewarped" not in f]
+            v_rms = float(get_inner_rms(v_candidates[0])) if v_candidates else None
+
+            # Stokes I: pbcorr preferred, raw fallback
+            i_candidates = sorted(glob.glob(
+                os.path.join(i_deep_dir, f"*I-Deep-Taper-Robust-0.75*pbcorr*.fits")))
+            i_candidates = [f for f in i_candidates if "dewarped" not in f]
+            if not i_candidates:
+                i_candidates = sorted(glob.glob(
+                    os.path.join(i_deep_dir, f"*I-Deep-Taper-Robust-0.75*image*.fits")))
+                i_candidates = [f for f in i_candidates
+                                if "pbcorr" not in f and "dewarped" not in f]
+            i_rms = float(get_inner_rms(i_candidates[0])) if i_candidates else None
+
+            # Write CSV (append-friendly: one row per subband-hour)
+            import csv
+            from datetime import datetime as _dt
+            qa_csv = os.path.join(work_dir, "QA", "image_noise.csv")
+            write_header = not os.path.exists(qa_csv)
+            with open(qa_csv, "a", newline="") as fh:
+                writer = csv.writer(fh)
+                if write_header:
+                    writer.writerow([
+                        "subband", "freq_mhz", "lst_label",
+                        "v_deep_rms", "i_deep_rms", "timestamp",
+                    ])
+                writer.writerow([
+                    subband, freq_mhz, lst_label,
+                    f"{v_rms:.6e}" if v_rms else "",
+                    f"{i_rms:.6e}" if i_rms else "",
+                    _dt.utcnow().isoformat(),
+                ])
+            logger.info(
+                f"Image noise QA: V_rms={v_rms:.4e}, I_rms={i_rms:.4e}"
+                if v_rms and i_rms else
+                f"Image noise QA: V_rms={v_rms}, I_rms={i_rms}"
+            )
+        except Exception as e:
+            logger.warning(f"Image noise QA failed (non-fatal): {e}")
+        logger.info(f"[TIMER] image_noise_qa: {time.time() - _t:.1f}s")
+
+        # --- ii. Flux scale check (runs on PB-corrected images, no dewarping needed) ---
+        _t = time.time()
+        try:
+            from orca.transform.flux_check_cutout import run_flux_check
+            run_flux_check(work_dir, logger=logger)
+        except ImportError as e:
+            logger.warning(f"flux_check_cutout not available — skipping: {e}")
+        except Exception as e:
+            logger.warning(f"Flux check failed (non-fatal): {e}")
+        logger.info(f"[TIMER] image_flux_check_qa: {time.time() - _t:.1f}s")
+
         # ------------------------------------------------------------------
         #  7b. SCIENCE PHASES (all on NVMe)
         # ------------------------------------------------------------------
         if skip_science:
             logger.info("--skip_science: skipping dewarping, photometry, transients, flux check")
-    
-        try:
-            freq_mhz = float(subband.replace('MHz', ''))
-        except Exception:
-            freq_mhz = 50.0
-    
+
         # --- A. Ionospheric Dewarping (VLSSr cross-match) ---
         _t = time.time()
         if not skip_science:
@@ -1133,20 +1200,12 @@ def process_subband_task(
             else:
                 logger.info("No catalog specified — skipping transient search.")
         logger.info(f"[TIMER] science_transient_search: {time.time() - _t:.1f}s")
-    
+
         # --- D. Flux Scale Check ---
-        _t = time.time()
-        if not skip_science:
-            logger.info("--- Science D: Flux Scale Check ---")
-            try:
-                from orca.transform.flux_check_cutout import run_flux_check
-                run_flux_check(work_dir, logger=logger)
-            except ImportError as e:
-                logger.warning(f"flux_check_cutout not available — skipping: {e}")
-            except Exception as e:
-                logger.error(f"Flux check failed: {e}")
-                traceback.print_exc()
-        logger.info(f"[TIMER] science_flux_check: {time.time() - _t:.1f}s")
+        # NOTE: flux check now runs unconditionally in step 7b-pre (above),
+        # so it no longer needs the skip_science guard.  The timer tag is
+        # kept for backwards compatibility with log parsers.
+        logger.info(f"[TIMER] science_flux_check: 0.0s")
     
         # ------------------------------------------------------------------
         #  7c. Snapshot cleanup + optional compression
