@@ -97,6 +97,7 @@ from orca.resources.subband_config import (
     AOFLAGGER_STRATEGY,
     SNAPSHOT_PARAMS,
     SNAPSHOT_CLEAN_PARAMS,
+    SNAPSHOT_CLEAN_I_PARAMS,
     IMAGING_STEPS,
     get_pixel_size,
     NVME_BASE_DIR,
@@ -443,6 +444,15 @@ def _compress_snapshot_fits(work_dir: str) -> int:
     Returns:
         Number of files successfully compressed.
     """
+    return _compress_snapshot_fits_dir(os.path.join(work_dir, "snapshots"))
+
+
+def _compress_snapshot_fits_dir(snap_dir: str) -> int:
+    """Compress all ``*.fits`` in *snap_dir* via fpack → ``.fits.fs``.
+
+    Returns:
+        Number of files successfully compressed.
+    """
     # Resolve fpack binary / command prefix
     fpack_env = os.environ.get('FPACK_BIN')
     fpack_direct = shutil.which('fpack')
@@ -460,7 +470,6 @@ def _compress_snapshot_fits(work_dir: str) -> int:
         logger.warning("fpack not found (PATH, $FPACK_BIN, or conda development env) — skipping compression.")
         return 0
 
-    snap_dir = os.path.join(work_dir, "snapshots")
     fits_files = sorted(glob.glob(os.path.join(snap_dir, "*.fits")))
     if not fits_files:
         return 0
@@ -647,6 +656,7 @@ def process_subband_task(
     targets: Optional[List[str]] = None,
     catalog: Optional[str] = None,
     snapshot_clean: bool = False,
+    clean_snapshots: bool = False,
     reduced_pixels: bool = False,
     skip_science: bool = False,
     compress_snapshots: bool = False,
@@ -680,6 +690,9 @@ def process_subband_task(
         targets: List of target-list file paths for photometry.
         catalog: Path to BDSF catalog for transient search masking.
         snapshot_clean: If True, use CLEAN imaging for pilot snapshots.
+        clean_snapshots: If True, produce CLEANed Stokes-I snapshots in
+            ``snapshots_clean/`` in addition to the dirty pilots in
+            ``snapshots/``.  Always fpack-compressed.
         skip_science: If True, skip all science phases (dewarping, photometry,
             transient search, flux check) after PB correction. Products
             are still archived to Lustre.
@@ -835,6 +848,38 @@ def process_subband_task(
                 logger.error(f"Hot baseline diagnostics failed: {e}")
                 traceback.print_exc()
             logger.info(f"[TIMER] hot_baselines: {time.time() - _t:.1f}s")
+    
+        # ------------------------------------------------------------------
+        #  6b. CLEANed Stokes-I snapshots (optional, in addition to dirty)
+        # ------------------------------------------------------------------
+        if clean_snapshots:
+            _t = time.time()
+            try:
+                clean_snap_dir = os.path.join(work_dir, "snapshots_clean")
+                os.makedirs(clean_snap_dir, exist_ok=True)
+
+                clean_name = f"{subband}-{SNAPSHOT_CLEAN_I_PARAMS['suffix']}"
+                clean_path = os.path.join(clean_snap_dir, clean_name)
+
+                cmd_clean_snap = (
+                    [wsclean_bin]
+                    + ['-j', str(wsclean_j)]
+                    + _patch_size_args(SNAPSHOT_CLEAN_I_PARAMS['args'], npix)
+                    + ['-name', clean_path,
+                       '-intervals-out', str(n_ints), concat_ms]
+                )
+                run_subprocess(cmd_clean_snap, "Clean Stokes-I snapshot imaging")
+
+                add_timestamps_to_images(
+                    clean_snap_dir, clean_name, concat_ms, n_ints,
+                )
+
+                # Always fpack-compress clean snapshots
+                _compress_snapshot_fits_dir(clean_snap_dir)
+            except Exception as e:
+                logger.error(f"Clean snapshot imaging failed: {e}")
+                traceback.print_exc()
+            logger.info(f"[TIMER] clean_snapshots: {time.time() - _t:.1f}s")
     
         # ------------------------------------------------------------------
         #  7. Science imaging + PB correction
@@ -1300,6 +1345,7 @@ def submit_subband_pipeline(
     targets: Optional[List[str]] = None,
     catalog: Optional[str] = None,
     snapshot_clean: bool = False,
+    clean_snapshots: bool = False,
     reduced_pixels: bool = False,
     skip_science: bool = False,
     compress_snapshots: bool = False,
@@ -1329,6 +1375,7 @@ def submit_subband_pipeline(
         targets: List of target-list file paths for photometry.
         catalog: Path to BDSF catalog for transient search masking.
         snapshot_clean: If True, use CLEAN imaging for pilot snapshots.
+        clean_snapshots: If True, produce CLEANed Stokes-I snapshots.
         reduced_pixels: If True, scale pixel count by subband frequency.
         skip_science: If True, skip science phases after PB correction.
         compress_snapshots: If True, fpack-compress snapshot FITS.
@@ -1370,6 +1417,7 @@ def submit_subband_pipeline(
         targets=targets,
         catalog=catalog,
         snapshot_clean=snapshot_clean,
+        clean_snapshots=clean_snapshots,
         reduced_pixels=reduced_pixels,
         skip_science=skip_science,
         compress_snapshots=compress_snapshots,
@@ -1460,6 +1508,7 @@ def submit_subband_pipeline_chained(
     targets: Optional[List[str]] = None,
     catalog: Optional[str] = None,
     snapshot_clean: bool = False,
+    clean_snapshots: bool = False,
     reduced_pixels: bool = False,
     skip_science: bool = False,
     compress_snapshots: bool = False,
@@ -1495,6 +1544,7 @@ def submit_subband_pipeline_chained(
         targets: Target-list file paths for photometry.
         catalog: BDSF catalog for transient search masking.
         snapshot_clean: Use CLEAN imaging for pilot snapshots.
+        clean_snapshots: Produce CLEANed Stokes-I snapshots.
         reduced_pixels: Scale pixel count by subband frequency.
         skip_science: Skip science phases after PB correction.
         compress_snapshots: fpack-compress snapshot FITS.
@@ -1528,6 +1578,7 @@ def submit_subband_pipeline_chained(
             targets=targets,
             catalog=catalog,
             snapshot_clean=snapshot_clean,
+            clean_snapshots=clean_snapshots,
             reduced_pixels=reduced_pixels,
             skip_science=skip_science,
             compress_snapshots=compress_snapshots,

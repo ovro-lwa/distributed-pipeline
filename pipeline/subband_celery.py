@@ -181,6 +181,11 @@ def main():
                         help='BDSF catalog file for transient search masking')
     parser.add_argument('--snapshot_clean', action='store_true',
                         help='Use CLEAN (niter=50000) for pilot snapshots instead of dirty')
+    parser.add_argument('--clean_snapshots', action='store_true',
+                        help='Produce CLEANed Stokes-I snapshots (in addition to '
+                             'dirty pilots) in snapshots_clean/. Uses optimised '
+                             'wsclean params (auto-mask=5, mgain=0.9999). '
+                             'Compressed with fpack automatically.')
     parser.add_argument('--skip_science', action='store_true',
                         help='Stop after imaging + PB correction; skip dewarping, '
                              'photometry, transient search, flux check. '
@@ -308,6 +313,7 @@ def main():
                     'targets': args.targets,
                     'catalog': args.catalog,
                     'snapshot_clean': args.snapshot_clean,
+                    'clean_snapshots': args.clean_snapshots,
                     'reduced_pixels': args.reduced_pixels,
                     'skip_science': args.skip_science,
                     'compress_snapshots': args.compress_snapshots,
@@ -457,6 +463,7 @@ def main():
             targets=args.targets,
             catalog=args.catalog,
             snapshot_clean=args.snapshot_clean,
+            clean_snapshots=args.clean_snapshots,
             reduced_pixels=args.reduced_pixels,
             skip_science=args.skip_science,
             compress_snapshots=args.compress_snapshots,
