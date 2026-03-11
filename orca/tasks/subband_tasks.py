@@ -779,6 +779,17 @@ def process_subband_task(
                     'skip_science': skip_science,
                     'compress_snapshots': compress_snapshots,
                 },
+                'imaging': {
+                    'pixel_size': get_pixel_size(subband) if reduced_pixels else 4096,
+                    'wsclean_bin': os.environ.get('WSCLEAN_BIN', '/opt/bin/wsclean'),
+                    'snapshot_dirty': SNAPSHOT_PARAMS,
+                    'snapshot_clean_i': SNAPSHOT_CLEAN_I_PARAMS if clean_snapshots else None,
+                    'science_steps': [
+                        {'suffix': s['suffix'], 'pol': s['pol'],
+                         'category': s['category'], 'args': s['args']}
+                        for s in IMAGING_STEPS
+                    ],
+                },
             }
             prov_path = os.path.join(work_dir, 'provenance.json')
             with open(prov_path, 'w') as f:
