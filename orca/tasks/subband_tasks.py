@@ -662,6 +662,8 @@ def process_subband_task(
     compress_snapshots: bool = False,
     remaining_hours: Optional[List[dict]] = None,
     dynamic_run_label: Optional[str] = None,
+    bp_table: Optional[str] = None,
+    xy_table: Optional[str] = None,
 ) -> str:
     """Phase 2: concatenate, image, run science, and archive one subband.
 
@@ -745,6 +747,45 @@ def process_subband_task(
         for d in ['I/deep', 'V/deep', 'I/10min', 'V/10min', 'snapshots', 'QA',
                   'samples', 'detections', 'Dewarp_Diagnostics', 'Movies']:
             os.makedirs(os.path.join(work_dir, d), exist_ok=True)
+    
+        # ------------------------------------------------------------------
+        #  0. Write provenance metadata
+        # ------------------------------------------------------------------
+        try:
+            import orca as _orca
+            provenance = {
+                'pipeline_version': getattr(_orca, '__git_version__', 'unknown'),
+                'pipeline_branch': getattr(_orca, '__git_branch__', 'unknown'),
+                'package_version': getattr(_orca, '__version__', 'unknown'),
+                'task_id': self.request.id,
+                'worker_node': node,
+                'started_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                'subband': subband,
+                'obs_date': obs_date,
+                'lst_label': lst_label,
+                'run_label': run_label,
+                'dynamic_run_label': dynamic_run_label,
+                'bp_table': bp_table,
+                'xy_table': xy_table,
+                'n_ms_files': len(ms_paths),
+                'n_valid_ms': len([p for p in ms_paths if p and os.path.isdir(p)]),
+                'flags': {
+                    'hot_baselines': hot_baselines,
+                    'skip_cleanup': skip_cleanup,
+                    'cleanup_nvme': cleanup_nvme,
+                    'snapshot_clean': snapshot_clean,
+                    'clean_snapshots': clean_snapshots,
+                    'reduced_pixels': reduced_pixels,
+                    'skip_science': skip_science,
+                    'compress_snapshots': compress_snapshots,
+                },
+            }
+            prov_path = os.path.join(work_dir, 'provenance.json')
+            with open(prov_path, 'w') as f:
+                json.dump(provenance, f, indent=2)
+            logger.info(f"Provenance written to {prov_path}")
+        except Exception as e:
+            logger.warning(f"Failed to write provenance.json: {e}")
     
         # ------------------------------------------------------------------
         #  1. Concatenation  (skip if concat MS already exists from prior attempt)
@@ -1423,6 +1464,8 @@ def submit_subband_pipeline(
         compress_snapshots=compress_snapshots,
         remaining_hours=remaining_hours,
         dynamic_run_label=dynamic_run_label,
+        bp_table=bp_table,
+        xy_table=xy_table,
     ).set(queue=queue)
 
     # Error handler: if all Phase 1 retries fail the chord never fires
