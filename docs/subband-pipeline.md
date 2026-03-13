@@ -19,7 +19,8 @@ Phase 1 (parallel, one Celery task per MS file):
 
 Phase 2 (sequential, runs once all Phase 1 tasks finish):
     concatenate → fix field IDs → change phase centre → AOFlagger →
-    pilot snapshots → snapshot QA → hot-baseline removal → science imaging →
+    pilot snapshots → snapshot QA → optional clean I snapshots →
+    hot-baseline removal → science imaging →
     PB correction → ionospheric dewarping → target photometry →
     solar system photometry → transient search → flux scale check →
     archive to Lustre (per-run + centralized samples/detections)
@@ -45,8 +46,8 @@ for post-run performance analysis. Grep with `grep '\[TIMER\]' worker.log`.
 
 | File | Purpose |
 |------|---------|
-| `pipeline/subband_celery.py` | **CLI entry point.** Discovers MS files, computes LST segments, submits one chord per (subband, LST-hour) to the correct Celery queue. Flags: `--targets`, `--catalog`, `--snapshot_clean`, `--remap SUBBAND=NODE`, `--dynamic`, `--nodes`, `--exclude_nodes`, `--compress_snapshots`. |
-| `orca/tasks/subband_tasks.py` | **Celery task definitions.** Contains `prepare_one_ms_task` (Phase 1), `process_subband_task` (Phase 2 including science phases A–D), and `submit_subband_pipeline()` which wires them into a chord. All steps have `[TIMER]` instrumentation. |
+| `pipeline/subband_celery.py` | **CLI entry point.** Discovers MS files, computes LST segments, submits one chord per (subband, LST-hour) to the correct Celery queue. Key flags: `--targets`, `--catalog`, `--clean_snapshots`, `--skip_science`, `--remap SUBBAND=NODE`, `--dynamic`, `--nodes`, `--exclude_nodes`, `--dynamic_queue_label`, `--dynamic_append_only`, `--compress_snapshots`. |
+| `orca/tasks/subband_tasks.py` | **Celery task definitions.** Contains `prepare_one_ms_task` (Phase 1), `process_subband_task` (Phase 2 including science phases A–D), and `submit_subband_pipeline()` which wires them into a chord. Writes `provenance.json` per work unit and emits `[TIMER]` instrumentation. |
 | `orca/celery.py` | **Celery app configuration.** Defines broker/backend, all queues (`default`, `cosmology`, `bandpass`, `imaging`, `calim00`–`calim10`), and task include list. |
 
 ### Processing Logic (no Celery decorators — pure functions, testable locally)
@@ -78,7 +79,7 @@ for post-run performance analysis. Grep with `grep '\[TIMER\]' worker.log`.
 
 | File | Purpose |
 |------|---------|
-| `orca/resources/subband_config.py` | **All pipeline configuration in one place.** Node↔subband mapping (`NODE_SUBBAND_MAP`), NVMe/Lustre directory layout, peeling parameters, AOFlagger strategy path, hot-baseline params (with `uv_window_size`), `SNAPSHOT_PARAMS` (dirty) and `SNAPSHOT_CLEAN_PARAMS` (niter=50 000), all 7 imaging steps, resource allocation per node, `CALIB_DATA` (SH12/PB17 flux models for 7 calibrators), `VLSSR_CATALOG` and `BEAM_MODEL_H5` paths. |
+| `orca/resources/subband_config.py` | **All pipeline configuration in one place.** Node↔subband mapping (`NODE_SUBBAND_MAP`), NVMe/Lustre directory layout, peeling parameters, AOFlagger strategy path, hot-baseline params (with `uv_window_size`), `SNAPSHOT_PARAMS` (dirty pilot snapshots) and `SNAPSHOT_CLEAN_I_PARAMS` (Stokes-I clean snapshots in `snapshots_clean/`), all 7 imaging steps, resource allocation per node, `CALIB_DATA` (SH12/PB17 flux models for 7 calibrators), `VLSSR_CATALOG` and `BEAM_MODEL_H5` paths. |
 | `orca/resources/system_config.py` | **Hardware mapping.** 353-entry `SYSTEM_CONFIG` dict mapping LWA antenna numbers to correlator numbers, ARX boards, SNAP2 boards, and channel assignments. Used by `hot_baselines.py`. |
 | `orca/configmanager.py` | **Orca-wide config singleton.** Reads `~/orca-conf.yml` (or `default-orca-conf.yml`) for broker URI, backend URI, telescope params, executable paths. |
 | `orca/default-orca-conf.yml` | Default config template. Copy to `~/orca-conf.yml` and fill in credentials. |
@@ -167,6 +168,7 @@ python pipeline/subband_celery.py \
 --dynamic --dynamic_queue_label Dec21_Backlog
 
 # Append-only: push to existing shared queue without seeding new node tasks
+# (use only while nodes are already actively running from that queue)
 --dynamic --dynamic_queue_label Dec21_Backlog --dynamic_append_only
 
 # Dry run — shows work units and node pool without submitting
@@ -214,6 +216,7 @@ redis-cli -h 10.41.0.85 LRANGE pipeline:dynamic:Run_YYYYMMDD_HHMMSS 0 -1
 ```
 NVMe (per-node, not shared):
 /fast/pipeline/<lst>/<date>/<run_label>/<subband>/
+    ├── provenance.json          # Run metadata (git version, cal tables, flags)
     ├── *.ms                     # Individual MS files (Phase 1)
     ├── <subband>_concat.ms      # Concatenated MS (Phase 2)
     ├── I/deep/                  # Stokes I deep images (+pbcorr, +dewarped)
@@ -221,6 +224,7 @@ NVMe (per-node, not shared):
     ├── V/deep/                  # Stokes V deep images
     ├── V/10min/                 # Stokes V 10-min interval images
     ├── snapshots/               # Pilot snapshot images + QA
+    ├── snapshots_clean/         # CLEANed Stokes-I snapshots (optional)
     ├── QA/                      # Hot-baseline plots, flux check CSV+plot
     ├── samples/<sample>/<target>/ # Target photometry cutouts + CSVs
     ├── detections/              # Transient cutouts, solar system detections
@@ -286,7 +290,7 @@ These must be available on the calim worker nodes:
 
 ```
 pipeline/subband_celery.py          # User runs this
-    │  Flags: --targets, --catalog, --snapshot_clean, --remap SUBBAND=NODE
+    │  Flags: --targets, --catalog, --clean_snapshots, --skip_science, --remap SUBBAND=NODE
     │
     ├── orca.resources.subband_config   # Reads NODE_SUBBAND_MAP, queue routing
     ├── orca.transform.subband_processing.find_archive_files_for_subband()
@@ -307,12 +311,14 @@ pipeline/subband_celery.py          # User runs this
                     ├── subband_processing.fix_field_id()
                     ├── orca.wrapper.change_phase_centre.change_phase_center()
                     ├── AOFlagger (subprocess)
-                    ├── WSClean pilot snapshots (dirty or --snapshot_clean)
+                    ├── WSClean pilot snapshots (dirty)
                     ├── subband_processing.analyze_snapshot_quality()
                     ├── subband_processing.flag_bad_integrations()
                     ├── hot_baselines.run_diagnostics()      (optional)
+                    ├── WSClean clean I snapshots (optional, --clean_snapshots)
                     ├── WSClean science imaging ×7 (subprocess)
                     ├── pb_correction.apply_pb_correction()
+                    ├── write provenance.json
                     │
                     │  --- Science Phases (all on NVMe) ---
                     ├── A. ionospheric_dewarping (VLSSr cross-match)
@@ -409,7 +415,7 @@ python pipeline/subband_celery.py \
     --peel_sky --peel_rfi --hot_baselines
 ```
 
-Same, with CLEAN snapshots (niter=50 000):
+Same, with additional CLEANed Stokes-I snapshots (`snapshots_clean/`):
 
 ```bash
 python pipeline/subband_celery.py \
@@ -419,7 +425,7 @@ python pipeline/subband_celery.py \
     --subbands 55MHz \
     --remap 55MHz=calim08 \
     --peel_sky --peel_rfi --hot_baselines \
-    --snapshot_clean
+    --clean_snapshots
 ```
 
 Full observation with science extraction:
@@ -432,7 +438,7 @@ python pipeline/subband_celery.py \
     --peel_sky --peel_rfi --hot_baselines \
     --targets /lustre/gh/targets/exoplanets.csv /lustre/gh/targets/pulsars.csv \
     --catalog /lustre/gh/catalogs/bdsf_73MHz.csv \
-    --snapshot_clean
+    --clean_snapshots
 ```
 
 Add `--dry_run` to any command to preview without submitting.
