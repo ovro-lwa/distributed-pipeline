@@ -185,7 +185,8 @@ SNAPSHOT_CLEAN_PARAMS = {
 # Stokes-I-only CLEANed snapshots (produced IN ADDITION to dirty pilots).
 # Optimised per Marin Torchiarolo's wsclean benchmarks:
 #   auto-mask=5 (sweet spot), mgain=0.9999 (~2 major cycles),
-#   auto-threshold=1 (safe floor, negligible time impact).
+#   auto-threshold=1 (safe floor, negligible time impact),
+#   mniter=2 (hard cap at 2 major iterations).
 # Output goes to snapshots_clean/ and is always fpack-compressed.
 SNAPSHOT_CLEAN_I_PARAMS = {
     'suffix': 'Clean-Snapshot',
@@ -193,12 +194,14 @@ SNAPSHOT_CLEAN_I_PARAMS = {
         '-log-time',
         '-pol', 'I',
         '-niter', '50000',
+        '-mniter', '2',
         '-mgain', '0.9999',
         '-auto-mask', '5',
         '-auto-threshold', '1',
         '-local-rms',
         '-horizon-mask', '10deg',
         '-mem', '50',
+        '-no-dirty',
         '-size', '4096', '4096',
         '-scale', '0.03125',
         '-taper-inner-tukey', '30',

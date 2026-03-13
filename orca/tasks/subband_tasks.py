@@ -926,6 +926,14 @@ def process_subband_task(
                     clean_snap_dir, clean_name, concat_ms, n_ints,
                 )
 
+                # Remove PSF, model, and residual files (not needed after CLEAN)
+                for pattern in ['*-psf.fits', '*-model.fits', '*-residual.fits']:
+                    for f in glob.glob(os.path.join(clean_snap_dir, pattern)):
+                        try:
+                            os.remove(f)
+                        except OSError:
+                            pass
+
                 # Always fpack-compress clean snapshots
                 _compress_snapshot_fits_dir(clean_snap_dir)
             except Exception as e:
