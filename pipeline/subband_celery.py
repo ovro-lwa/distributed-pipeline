@@ -179,8 +179,6 @@ def main():
                         help='Target list files for photometry (one or more paths)')
     parser.add_argument('--catalog', default=None,
                         help='BDSF catalog file for transient search masking')
-    parser.add_argument('--snapshot_clean', action='store_true',
-                        help='Use CLEAN (niter=50000) for pilot snapshots instead of dirty')
     parser.add_argument('--clean_snapshots', action='store_true',
                         help='Produce CLEANed Stokes-I snapshots (in addition to '
                              'dirty pilots) in snapshots_clean/. Uses optimised '
@@ -312,7 +310,6 @@ def main():
                     'cleanup_nvme': args.cleanup_nvme,
                     'targets': args.targets,
                     'catalog': args.catalog,
-                    'snapshot_clean': args.snapshot_clean,
                     'clean_snapshots': args.clean_snapshots,
                     'reduced_pixels': args.reduced_pixels,
                     'skip_science': args.skip_science,
@@ -462,7 +459,6 @@ def main():
             queue_override=queue_override,
             targets=args.targets,
             catalog=args.catalog,
-            snapshot_clean=args.snapshot_clean,
             clean_snapshots=args.clean_snapshots,
             reduced_pixels=args.reduced_pixels,
             skip_science=args.skip_science,

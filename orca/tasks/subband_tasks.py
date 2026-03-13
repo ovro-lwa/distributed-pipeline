@@ -96,7 +96,6 @@ from orca.resources.subband_config import (
     PEELING_PARAMS,
     AOFLAGGER_STRATEGY,
     SNAPSHOT_PARAMS,
-    SNAPSHOT_CLEAN_PARAMS,
     SNAPSHOT_CLEAN_I_PARAMS,
     IMAGING_STEPS,
     get_pixel_size,
@@ -655,7 +654,6 @@ def process_subband_task(
     cleanup_nvme: bool = False,
     targets: Optional[List[str]] = None,
     catalog: Optional[str] = None,
-    snapshot_clean: bool = False,
     clean_snapshots: bool = False,
     reduced_pixels: bool = False,
     skip_science: bool = False,
@@ -691,7 +689,6 @@ def process_subband_task(
         cleanup_nvme: If True, remove the entire NVMe work_dir after archiving.
         targets: List of target-list file paths for photometry.
         catalog: Path to BDSF catalog for transient search masking.
-        snapshot_clean: If True, use CLEAN imaging for pilot snapshots.
         clean_snapshots: If True, produce CLEANed Stokes-I snapshots in
             ``snapshots_clean/`` in addition to the dirty pilots in
             ``snapshots/``.  Always fpack-compressed.
@@ -773,7 +770,6 @@ def process_subband_task(
                     'hot_baselines': hot_baselines,
                     'skip_cleanup': skip_cleanup,
                     'cleanup_nvme': cleanup_nvme,
-                    'snapshot_clean': snapshot_clean,
                     'clean_snapshots': clean_snapshots,
                     'reduced_pixels': reduced_pixels,
                     'skip_science': skip_science,
@@ -862,7 +858,6 @@ def process_subband_task(
         pilot_name = f"{subband}-{SNAPSHOT_PARAMS['suffix']}"
         pilot_path = os.path.join(work_dir, "snapshots", pilot_name)
     
-        snapshot_cfg = SNAPSHOT_CLEAN_PARAMS if snapshot_clean else SNAPSHOT_PARAMS
         wsclean_bin = os.environ.get('WSCLEAN_BIN', '/opt/bin/wsclean')
         _, _, wsclean_j = get_image_resources(subband)
         npix = get_pixel_size(subband) if reduced_pixels else 4096
@@ -870,7 +865,7 @@ def process_subband_task(
         cmd_pilot = (
             [wsclean_bin]
             + ['-j', str(wsclean_j)]
-            + _patch_size_args(snapshot_cfg['args'], npix)
+            + _patch_size_args(SNAPSHOT_PARAMS['args'], npix)
             + ['-name', pilot_path, '-intervals-out', str(n_ints), concat_ms]
         )
         run_subprocess(cmd_pilot, "Pilot snapshot imaging")
@@ -1404,7 +1399,6 @@ def submit_subband_pipeline(
     queue_override: Optional[str] = None,
     targets: Optional[List[str]] = None,
     catalog: Optional[str] = None,
-    snapshot_clean: bool = False,
     clean_snapshots: bool = False,
     reduced_pixels: bool = False,
     skip_science: bool = False,
@@ -1434,7 +1428,6 @@ def submit_subband_pipeline(
             default node.  E.g. 'calim08' to run 18MHz on calim08.
         targets: List of target-list file paths for photometry.
         catalog: Path to BDSF catalog for transient search masking.
-        snapshot_clean: If True, use CLEAN imaging for pilot snapshots.
         clean_snapshots: If True, produce CLEANed Stokes-I snapshots.
         reduced_pixels: If True, scale pixel count by subband frequency.
         skip_science: If True, skip science phases after PB correction.
@@ -1476,7 +1469,6 @@ def submit_subband_pipeline(
         cleanup_nvme=cleanup_nvme,
         targets=targets,
         catalog=catalog,
-        snapshot_clean=snapshot_clean,
         clean_snapshots=clean_snapshots,
         reduced_pixels=reduced_pixels,
         skip_science=skip_science,
@@ -1569,7 +1561,6 @@ def submit_subband_pipeline_chained(
     queue_override: Optional[str] = None,
     targets: Optional[List[str]] = None,
     catalog: Optional[str] = None,
-    snapshot_clean: bool = False,
     clean_snapshots: bool = False,
     reduced_pixels: bool = False,
     skip_science: bool = False,
@@ -1605,7 +1596,6 @@ def submit_subband_pipeline_chained(
         queue_override: Force routing to this queue.
         targets: Target-list file paths for photometry.
         catalog: BDSF catalog for transient search masking.
-        snapshot_clean: Use CLEAN imaging for pilot snapshots.
         clean_snapshots: Produce CLEANed Stokes-I snapshots.
         reduced_pixels: Scale pixel count by subband frequency.
         skip_science: Skip science phases after PB correction.
@@ -1639,7 +1629,6 @@ def submit_subband_pipeline_chained(
             queue_override=queue_override,
             targets=targets,
             catalog=catalog,
-            snapshot_clean=snapshot_clean,
             clean_snapshots=clean_snapshots,
             reduced_pixels=reduced_pixels,
             skip_science=skip_science,

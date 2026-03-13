@@ -160,28 +160,6 @@ SNAPSHOT_PARAMS = {
     ],
 }
 
-# Snapshot CLEAN params: same as SNAPSHOT_PARAMS but with niter=50000
-# for higher-quality snapshot images (used with --snapshot_clean)
-SNAPSHOT_CLEAN_PARAMS = {
-    'suffix': 'Pilot-Snapshot',
-    'args': [
-        '-log-time',
-        '-pol', 'IV',
-        '-niter', '50000',
-        '-mgain', '0.95',
-        '-horizon-mask', '10deg',
-        '-mem', '50',
-        '-auto-threshold', '1',
-        '-auto-mask', '5',
-        '-local-rms',
-        '-size', '4096', '4096',
-        '-scale', '0.03125',
-        '-taper-inner-tukey', '30',
-        '-weight', 'briggs', '0',
-        '-no-update-model-required',
-    ],
-}
-
 # Stokes-I-only CLEANed snapshots (produced IN ADDITION to dirty pilots).
 # Optimised per Marin Torchiarolo's wsclean benchmarks:
 #   auto-mask=5 (sweet spot), mgain=0.9999 (~2 major cycles),
