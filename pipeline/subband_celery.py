@@ -184,6 +184,11 @@ def main():
                              'dirty pilots) in snapshots_clean/. Uses optimised '
                              'wsclean params (auto-mask=5, mgain=0.9999). '
                              'Compressed with fpack automatically.')
+    parser.add_argument('--clean_reduced_pixels', action='store_true',
+                        help='Scale clean-snapshot pixel count by subband frequency: '
+                             '1024 (18-36MHz), 2048 (41-59MHz), 4096 (64-82MHz). '
+                             'Only affects --clean_snapshots imaging, not dirty '
+                             'snapshots or science imaging.')
     parser.add_argument('--skip_science', action='store_true',
                         help='Stop after imaging + PB correction; skip dewarping, '
                              'photometry, transient search, flux check. '
@@ -311,6 +316,7 @@ def main():
                     'targets': args.targets,
                     'catalog': args.catalog,
                     'clean_snapshots': args.clean_snapshots,
+                    'clean_reduced_pixels': args.clean_reduced_pixels,
                     'reduced_pixels': args.reduced_pixels,
                     'skip_science': args.skip_science,
                     'compress_snapshots': args.compress_snapshots,
@@ -460,6 +466,7 @@ def main():
             targets=args.targets,
             catalog=args.catalog,
             clean_snapshots=args.clean_snapshots,
+            clean_reduced_pixels=args.clean_reduced_pixels,
             reduced_pixels=args.reduced_pixels,
             skip_science=args.skip_science,
             compress_snapshots=args.compress_snapshots,

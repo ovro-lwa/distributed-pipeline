@@ -99,6 +99,7 @@ from orca.resources.subband_config import (
     SNAPSHOT_CLEAN_I_PARAMS,
     IMAGING_STEPS,
     get_pixel_size,
+    get_pixel_scale,
     NVME_BASE_DIR,
     LUSTRE_ARCHIVE_DIR,
     VLSSR_CATALOG,
@@ -510,6 +511,17 @@ def _patch_size_args(args: list, npix: int) -> list:
     return args
 
 
+def _patch_scale_arg(args: list, scale: float) -> list:
+    """Return a copy of *args* with ``-scale V`` replaced by *scale*."""
+    args = list(args)
+    try:
+        idx = args.index('-scale')
+        args[idx + 1] = str(scale)
+    except (ValueError, IndexError):
+        pass
+    return args
+
+
 # ============================================================================
 #  PHASE 1 — Per-MS task  (runs in parallel via Celery)
 # ============================================================================
@@ -655,6 +667,7 @@ def process_subband_task(
     targets: Optional[List[str]] = None,
     catalog: Optional[str] = None,
     clean_snapshots: bool = False,
+    clean_reduced_pixels: bool = False,
     reduced_pixels: bool = False,
     skip_science: bool = False,
     compress_snapshots: bool = False,
@@ -692,6 +705,9 @@ def process_subband_task(
         clean_snapshots: If True, produce CLEANed Stokes-I snapshots in
             ``snapshots_clean/`` in addition to the dirty pilots in
             ``snapshots/``.  Always fpack-compressed.
+        clean_reduced_pixels: If True, scale clean snapshot pixel count
+            by subband frequency (1024/2048/4096).  Only affects clean
+            snapshots, not dirty pilots or science imaging.
         skip_science: If True, skip all science phases (dewarping, photometry,
             transient search, flux check) after PB correction. Products
             are still archived to Lustre.
@@ -771,12 +787,15 @@ def process_subband_task(
                     'skip_cleanup': skip_cleanup,
                     'cleanup_nvme': cleanup_nvme,
                     'clean_snapshots': clean_snapshots,
+                    'clean_reduced_pixels': clean_reduced_pixels,
                     'reduced_pixels': reduced_pixels,
                     'skip_science': skip_science,
                     'compress_snapshots': compress_snapshots,
                 },
                 'imaging': {
                     'pixel_size': get_pixel_size(subband) if reduced_pixels else 4096,
+                    'clean_pixel_size': get_pixel_size(subband) if (clean_snapshots and clean_reduced_pixels) else (get_pixel_size(subband) if reduced_pixels else 4096),
+                    'clean_pixel_scale': get_pixel_scale(subband) if (clean_snapshots and clean_reduced_pixels) else 0.03125,
                     'wsclean_bin': os.environ.get('WSCLEAN_BIN', '/opt/bin/wsclean'),
                     'snapshot_dirty': SNAPSHOT_PARAMS,
                     'snapshot_clean_i': SNAPSHOT_CLEAN_I_PARAMS if clean_snapshots else None,
@@ -905,13 +924,24 @@ def process_subband_task(
                 clean_snap_dir = os.path.join(work_dir, "snapshots_clean")
                 os.makedirs(clean_snap_dir, exist_ok=True)
 
+                # Frequency-dependent pixel scaling for clean snapshots
+                npix_clean = get_pixel_size(subband) if clean_reduced_pixels else npix
+                scale_clean = get_pixel_scale(subband) if clean_reduced_pixels else 0.03125
+                logger.info(
+                    f"Clean snapshot pixels for {subband}: {npix_clean}x{npix_clean}, "
+                    f"scale={scale_clean} deg/px "
+                    f"(clean_reduced_pixels={clean_reduced_pixels})"
+                )
+
                 clean_name = f"{subband}-{SNAPSHOT_CLEAN_I_PARAMS['suffix']}"
                 clean_path = os.path.join(clean_snap_dir, clean_name)
 
+                _clean_args = _patch_size_args(SNAPSHOT_CLEAN_I_PARAMS['args'], npix_clean)
+                _clean_args = _patch_scale_arg(_clean_args, scale_clean)
                 cmd_clean_snap = (
                     [wsclean_bin]
                     + ['-j', str(wsclean_j)]
-                    + _patch_size_args(SNAPSHOT_CLEAN_I_PARAMS['args'], npix)
+                    + _clean_args
                     + ['-name', clean_path,
                        '-intervals-out', str(n_ints), concat_ms]
                 )
@@ -1400,6 +1430,7 @@ def submit_subband_pipeline(
     targets: Optional[List[str]] = None,
     catalog: Optional[str] = None,
     clean_snapshots: bool = False,
+    clean_reduced_pixels: bool = False,
     reduced_pixels: bool = False,
     skip_science: bool = False,
     compress_snapshots: bool = False,
@@ -1429,6 +1460,7 @@ def submit_subband_pipeline(
         targets: List of target-list file paths for photometry.
         catalog: Path to BDSF catalog for transient search masking.
         clean_snapshots: If True, produce CLEANed Stokes-I snapshots.
+        clean_reduced_pixels: Scale clean snapshot pixels by frequency.
         reduced_pixels: If True, scale pixel count by subband frequency.
         skip_science: If True, skip science phases after PB correction.
         compress_snapshots: If True, fpack-compress snapshot FITS.
@@ -1470,6 +1502,7 @@ def submit_subband_pipeline(
         targets=targets,
         catalog=catalog,
         clean_snapshots=clean_snapshots,
+        clean_reduced_pixels=clean_reduced_pixels,
         reduced_pixels=reduced_pixels,
         skip_science=skip_science,
         compress_snapshots=compress_snapshots,
@@ -1562,6 +1595,7 @@ def submit_subband_pipeline_chained(
     targets: Optional[List[str]] = None,
     catalog: Optional[str] = None,
     clean_snapshots: bool = False,
+    clean_reduced_pixels: bool = False,
     reduced_pixels: bool = False,
     skip_science: bool = False,
     compress_snapshots: bool = False,
@@ -1597,6 +1631,7 @@ def submit_subband_pipeline_chained(
         targets: Target-list file paths for photometry.
         catalog: BDSF catalog for transient search masking.
         clean_snapshots: Produce CLEANed Stokes-I snapshots.
+        clean_reduced_pixels: Scale clean snapshot pixels by frequency.
         reduced_pixels: Scale pixel count by subband frequency.
         skip_science: Skip science phases after PB correction.
         compress_snapshots: fpack-compress snapshot FITS.
@@ -1630,6 +1665,7 @@ def submit_subband_pipeline_chained(
             targets=targets,
             catalog=catalog,
             clean_snapshots=clean_snapshots,
+            clean_reduced_pixels=clean_reduced_pixels,
             reduced_pixels=reduced_pixels,
             skip_science=skip_science,
             compress_snapshots=compress_snapshots,
