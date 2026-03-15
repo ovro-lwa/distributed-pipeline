@@ -796,9 +796,19 @@ def process_subband_task(
                     'pixel_size': get_pixel_size(subband) if reduced_pixels else 4096,
                     'clean_pixel_size': get_pixel_size(subband) if (clean_snapshots and clean_reduced_pixels) else (get_pixel_size(subband) if reduced_pixels else 4096),
                     'clean_pixel_scale': get_pixel_scale(subband) if (clean_snapshots and clean_reduced_pixels) else 0.03125,
+                    'wsclean_j': get_image_resources(subband)[2],
                     'wsclean_bin': os.environ.get('WSCLEAN_BIN', '/opt/bin/wsclean'),
                     'snapshot_dirty': SNAPSHOT_PARAMS,
-                    'snapshot_clean_i': SNAPSHOT_CLEAN_I_PARAMS if clean_snapshots else None,
+                    'snapshot_clean_i': {
+                        'suffix': SNAPSHOT_CLEAN_I_PARAMS['suffix'],
+                        'args': _patch_scale_arg(
+                            _patch_size_args(
+                                SNAPSHOT_CLEAN_I_PARAMS['args'],
+                                get_pixel_size(subband) if clean_reduced_pixels else 4096,
+                            ),
+                            get_pixel_scale(subband) if clean_reduced_pixels else 0.03125,
+                        ),
+                    } if clean_snapshots else None,
                     'science_steps': [
                         {'suffix': s['suffix'], 'pol': s['pol'],
                          'category': s['category'], 'args': s['args']}

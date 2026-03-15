@@ -163,8 +163,7 @@ SNAPSHOT_PARAMS = {
 # Stokes-I-only CLEANed snapshots (produced IN ADDITION to dirty pilots).
 # Optimised per Marin Torchiarolo's wsclean benchmarks:
 #   auto-mask=5 (sweet spot), mgain=0.9999 (~2 major cycles),
-#   auto-threshold=1 (safe floor, negligible time impact),
-#   mniter=2 (hard cap at 2 major iterations).
+#   auto-threshold=1 (safe floor, negligible time impact).
 # Output goes to snapshots_clean/ and is always fpack-compressed.
 SNAPSHOT_CLEAN_I_PARAMS = {
     'suffix': 'Clean-Snapshot',
@@ -172,7 +171,6 @@ SNAPSHOT_CLEAN_I_PARAMS = {
         '-log-time',
         '-pol', 'I',
         '-niter', '50000',
-        '-mniter', '2',
         '-mgain', '0.9999',
         '-auto-mask', '5',
         '-auto-threshold', '1',
@@ -338,8 +336,9 @@ def get_pixel_scale(subband: str) -> float:
 def get_image_resources(subband: str):
     """Return (cpus, mem_gb, wsclean_j) for a given subband.
 
-    On nodes that serve two subbands the resources are halved to avoid
-    contention when both subbands process simultaneously.
+    In dynamic dispatch mode any subband can land on any node, so we
+    always allocate full node resources (44 cores).  The old dual-node
+    halving (22 cores) is no longer used.
 
     Args:
         subband: e.g. '73MHz'
@@ -347,7 +346,4 @@ def get_image_resources(subband: str):
     Returns:
         Tuple of (cpus: int, mem_gb: int, wsclean_j: int).
     """
-    node = NODE_SUBBAND_MAP.get(subband)
-    if node in _DUAL_SUBBAND_NODES:
-        return 22, 60, 22
     return 44, 120, 44
