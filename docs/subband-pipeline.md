@@ -46,7 +46,7 @@ for post-run performance analysis. Grep with `grep '\[TIMER\]' worker.log`.
 
 | File | Purpose |
 |------|---------|
-| `pipeline/subband_celery.py` | **CLI entry point.** Discovers MS files, computes LST segments, submits one chord per (subband, LST-hour) to the correct Celery queue. Key flags: `--targets`, `--catalog`, `--clean_snapshots`, `--skip_science`, `--remap SUBBAND=NODE`, `--dynamic`, `--nodes`, `--exclude_nodes`, `--dynamic_queue_label`, `--dynamic_append_only`, `--compress_snapshots`. |
+| `pipeline/subband_celery.py` | **CLI entry point.** Discovers MS files, computes LST segments, submits one chord per (subband, LST-hour) to the correct Celery queue. Key flags: `--targets`, `--catalog`, `--clean_snapshots`, `--clean_reduced_pixels`, `--reduced_pixels`, `--skip_science`, `--remap SUBBAND=NODE`, `--dynamic`, `--nodes`, `--exclude_nodes`, `--dynamic_queue_label`, `--dynamic_append_only`, `--compress_snapshots`. |
 | `orca/tasks/subband_tasks.py` | **Celery task definitions.** Contains `prepare_one_ms_task` (Phase 1), `process_subband_task` (Phase 2 including science phases A–D), and `submit_subband_pipeline()` which wires them into a chord. Writes `provenance.json` per work unit and emits `[TIMER]` instrumentation. |
 | `orca/celery.py` | **Celery app configuration.** Defines broker/backend, all queues (`default`, `cosmology`, `bandpass`, `imaging`, `calim00`–`calim10`), and task include list. |
 
@@ -79,7 +79,7 @@ for post-run performance analysis. Grep with `grep '\[TIMER\]' worker.log`.
 
 | File | Purpose |
 |------|---------|
-| `orca/resources/subband_config.py` | **All pipeline configuration in one place.** Node↔subband mapping (`NODE_SUBBAND_MAP`), NVMe/Lustre directory layout, peeling parameters, AOFlagger strategy path, hot-baseline params (with `uv_window_size`), `SNAPSHOT_PARAMS` (dirty pilot snapshots) and `SNAPSHOT_CLEAN_I_PARAMS` (Stokes-I clean snapshots in `snapshots_clean/`), all 7 imaging steps, resource allocation per node, `CALIB_DATA` (SH12/PB17 flux models for 7 calibrators), `VLSSR_CATALOG` and `BEAM_MODEL_H5` paths. |
+| `orca/resources/subband_config.py` | **All pipeline configuration in one place.** Node↔subband mapping (`NODE_SUBBAND_MAP`), NVMe/Lustre directory layout, peeling parameters, AOFlagger strategy path, hot-baseline params (with `uv_window_size`), `SNAPSHOT_PARAMS` (dirty pilot snapshots) and `SNAPSHOT_CLEAN_I_PARAMS` (Stokes-I clean snapshots in `snapshots_clean/`), per-subband pixel scaling (`get_pixel_size()`, `get_pixel_scale()`, `_SUBBAND_PIXEL_SCALE`) for `--clean_reduced_pixels`, all 7 imaging steps, resource allocation per node, `CALIB_DATA` (SH12/PB17 flux models for 7 calibrators), `VLSSR_CATALOG` and `BEAM_MODEL_H5` paths. |
 | `orca/resources/system_config.py` | **Hardware mapping.** 353-entry `SYSTEM_CONFIG` dict mapping LWA antenna numbers to correlator numbers, ARX boards, SNAP2 boards, and channel assignments. Used by `hot_baselines.py`. |
 | `orca/configmanager.py` | **Orca-wide config singleton.** Reads `~/orca-conf.yml` (or `default-orca-conf.yml`) for broker URI, backend URI, telescope params, executable paths. |
 | `orca/default-orca-conf.yml` | Default config template. Copy to `~/orca-conf.yml` and fill in credentials. |
@@ -120,8 +120,9 @@ archived to shared Lustre (`/lustre/pipeline/`).
 > **Note:** calim02 and calim10 are currently inactive. Subbands that map to
 > inactive nodes must use `--remap` (static mode) or `--dynamic` mode.
 
-Dual-subband nodes get 16 CPUs / 60 GB / 12 wsclean threads each.
-Single-subband nodes get 32 CPUs / 120 GB / 24 wsclean threads.
+All nodes get 44 CPUs / 120 GB / 44 wsclean threads (`-j 44`).
+The old dual-subband halving (22 threads) was removed — in dynamic mode
+any subband can land on any node, so full resources are always allocated.
 
 ---
 
@@ -267,6 +268,15 @@ The pipeline produces 7 image products per subband-hour:
 
 All images are 4096×4096 at 0.03125° scale with primary beam correction applied.
 
+With `--clean_reduced_pixels`, clean snapshots use frequency-dependent resolution
+(FoV is preserved at ~128° by scaling both pixel count and pixel scale):
+
+| Tier | Subbands | Size | Scale (deg/px) |
+|------|----------|------|----------------|
+| Lower | 18–36 MHz | 1024×1024 | 0.125 |
+| Middle | 41–59 MHz | 2048×2048 | 0.0625 |
+| Upper | 64–82 MHz | 4096×4096 | 0.03125 |
+
 ---
 
 ## External Dependencies
@@ -377,6 +387,7 @@ grep '\[TIMER\]' /path/to/worker.log
 | `aoflagger` | Post-concat flagging |
 | `pilot_snapshots_qa` | Snapshot imaging + QA |
 | `hot_baselines` | Hot baseline removal |
+| `clean_snapshots` | CLEANed Stokes-I snapshots (optional) |
 | `imaging_<suffix>` | Each of 7 imaging steps |
 | `imaging_all` | All imaging combined |
 | `science_dewarping` | Ionospheric dewarping |
@@ -426,6 +437,21 @@ python pipeline/subband_celery.py \
     --remap 55MHz=calim08 \
     --peel_sky --peel_rfi --hot_baselines \
     --clean_snapshots
+```
+
+All subbands with frequency-tiered clean snapshot resolution:
+
+```bash
+python pipeline/subband_celery.py \
+    --range 01-02 --date 2024-12-26 \
+    --bp_table /lustre/pipeline/calibration/results/2024-12-26/02h/successful/20251225_055451/tables/calibration_2024-12-26_02h.B.flagged \
+    --xy_table /lustre/gh/polcal/xyphase_delay_pos_3.8643ns.Xf \
+    --subbands 18MHz 23MHz 27MHz 32MHz 36MHz 41MHz 46MHz 50MHz 55MHz 59MHz 64MHz 69MHz 73MHz 78MHz 82MHz \
+    --peel_sky --peel_rfi --hot_baselines \
+    --skip_science --cleanup_nvme --compress_snapshots \
+    --clean_snapshots --clean_reduced_pixels \
+    --dynamic --exclude_nodes calim02 calim08 calim10 \
+    --dynamic_queue_label Dec26_all
 ```
 
 Full observation with science extraction:
