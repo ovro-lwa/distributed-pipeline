@@ -4,12 +4,32 @@ The orca package provides a distributed data processing pipeline for the
 OVRO Long Wavelength Array (OVRO-LWA) radio telescope.
 """
 
+import os
+import subprocess
 from importlib.metadata import version, PackageNotFoundError
 
 try:
     __version__ = version("orca-pipeline")
 except PackageNotFoundError:
     __version__ = "unknown"
+
+try:
+    __git_version__ = subprocess.check_output(
+        ['git', 'rev-parse', '--short', 'HEAD'],
+        cwd=os.path.dirname(os.path.abspath(__file__)),
+        stderr=subprocess.DEVNULL,
+    ).decode().strip()
+except Exception:
+    __git_version__ = 'unknown'
+
+try:
+    __git_branch__ = subprocess.check_output(
+        ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+        cwd=os.path.dirname(os.path.abspath(__file__)),
+        stderr=subprocess.DEVNULL,
+    ).decode().strip()
+except Exception:
+    __git_branch__ = 'unknown'
 
 __doc__ = """ORCA: OVRO-LWA Radio Camera Analysis Pipeline.
 

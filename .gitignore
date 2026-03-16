@@ -107,4 +107,4 @@ venv.bak/
 
 preliminary_pipeline
 scripts
-.DS_Store
+.DS_Store*.mp4

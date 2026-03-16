@@ -15,7 +15,7 @@ set -euo pipefail
 
 # --- Configuration ---
 # Nodes that are currently available (edit this list as needed)
-AVAILABLE_NODES=(calim01 calim03 calim04 calim05 calim06 calim07 calim08 calim09 calim10)
+AVAILABLE_NODES=(calim00 calim01 calim03 calim04 calim05 calim06 calim07 calim08 calim09)
 
 REPO_DIR="/opt/devel/nkosogor/nkosogor/distributed-pipeline"
 CONDA_ENV="/opt/devel/pipeline/envs/py38_orca_nkosogor"
@@ -39,8 +39,10 @@ ssh_cmd() {
 }
 
 get_nodes() {
-    if [[ -n "${2:-}" ]]; then
-        echo "$2"
+    # $1 is the action name (status, start, etc.), remaining args are node names
+    shift  # drop action name
+    if [[ $# -gt 0 ]]; then
+        echo "$@"
     else
         echo "${AVAILABLE_NODES[@]}"
     fi

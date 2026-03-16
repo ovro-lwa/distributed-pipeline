@@ -880,8 +880,8 @@ def archive_results(
     os.makedirs(archive_base, exist_ok=True)
     logger.info(f"Archiving results → {archive_base}")
 
-    for top_level in ['I', 'V', 'snapshots', 'QA', 'samples', 'detections',
-                      'Movies', 'Dewarp_Diagnostics']:
+    for top_level in ['I', 'V', 'snapshots', 'snapshots_clean', 'QA',
+                      'samples', 'detections', 'Movies', 'Dewarp_Diagnostics']:
         src = os.path.join(work_dir, top_level)
         dest = os.path.join(archive_base, top_level)
         if os.path.exists(src):

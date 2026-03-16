@@ -45,8 +45,10 @@ Usage (from a submission script or notebook)::
 import os
 import glob
 import shutil
+import json
 import socket
 import logging
+import subprocess
 import time
 import traceback
 
@@ -59,6 +61,14 @@ import numpy as np
 from celery import chord
 from casacore.tables import table
 from astropy.io import fits
+
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import matplotlib.animation as animation
+except ImportError:
+    animation = None
 
 from orca.celery import app
 from orca.wrapper.ttcal import zest_with_ttcal
@@ -81,13 +91,15 @@ from orca.transform.subband_processing import (
     find_deep_image,
     extract_sources_to_df,
 )
+from orca.configmanager import queue_config
 from orca.resources.subband_config import (
     PEELING_PARAMS,
     AOFLAGGER_STRATEGY,
     SNAPSHOT_PARAMS,
-    SNAPSHOT_CLEAN_PARAMS,
+    SNAPSHOT_CLEAN_I_PARAMS,
     IMAGING_STEPS,
     get_pixel_size,
+    get_pixel_scale,
     NVME_BASE_DIR,
     LUSTRE_ARCHIVE_DIR,
     VLSSR_CATALOG,
@@ -97,16 +109,189 @@ from orca.resources.subband_config import (
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+#  Dynamic dispatch — Redis-backed work queue
+# ---------------------------------------------------------------------------
+DYNAMIC_WORK_QUEUE = "pipeline:dynamic:{run_label}"
+
+
+def _dynamic_queue_length(run_label: str) -> int:
+    """Return the number of queued work units for a dynamic run label."""
+    import redis as _redis
+    r = _redis.Redis.from_url(queue_config.result_backend_uri)
+    key = DYNAMIC_WORK_QUEUE.format(run_label=run_label)
+    return int(r.llen(key))
+
+
+def _push_work_units(run_label: str, work_units: List[dict]) -> int:
+    """Push work units to a Redis list for dynamic dispatch.
+
+    Each work unit is a complete kwargs dict for
+    :func:`submit_subband_pipeline`.
+
+    Returns:
+        Number of work units pushed.
+    """
+    import redis as _redis
+    r = _redis.Redis.from_url(queue_config.result_backend_uri)
+    key = DYNAMIC_WORK_QUEUE.format(run_label=run_label)
+    for wu in work_units:
+        r.rpush(key, json.dumps(wu))
+    r.expire(key, 86400 * 7)  # 7-day TTL
+    logger.info(f"Pushed {len(work_units)} work units to Redis key {key}")
+    return len(work_units)
+
+
+def _pop_and_submit(run_label: str, queue: str):
+    """Pop the next work unit from Redis and submit to *queue*.
+
+    Called during initial seeding (from the submission script) and from
+    :func:`_trigger_next_and_cleanup` on the worker after each hour
+    completes.
+
+    Returns:
+        Celery ``AsyncResult`` for the submitted chord, or *None*
+        if the queue is empty.
+    """
+    import redis as _redis
+    r = _redis.Redis.from_url(queue_config.result_backend_uri)
+    key = DYNAMIC_WORK_QUEUE.format(run_label=run_label)
+
+    raw = r.lpop(key)
+    if not raw:
+        remaining = r.llen(key)
+        logger.info(
+            f"Dynamic dispatch: queue empty for {run_label} — node idle"
+        )
+        return None
+
+    work = json.loads(raw)
+    remaining = r.llen(key)
+    logger.info(
+        f"Dynamic dispatch: popped {work.get('subband')} "
+        f"{work.get('lst_label')} → queue {queue} "
+        f"({remaining} remaining in queue)"
+    )
+
+    # Route to the specified node and propagate dynamic mode
+    work['queue_override'] = queue
+    work['dynamic_run_label'] = run_label
+    return submit_subband_pipeline(remaining_hours=None, **work)
+
+
+@app.task(
+    bind=True,
+    name='orca.tasks.subband_tasks.on_chord_error',
+    acks_late=True,
+)
+def on_chord_error(
+    self,
+    task_id=None,
+    exc=None,
+    traceback_str=None,
+    dynamic_run_label: Optional[str] = None,
+    work_dir: Optional[str] = None,
+    cleanup_nvme: bool = False,
+    subband: str = '',
+    lst_label: str = '',
+):
+    """Error callback for Phase 1 task failures.
+
+    Attached via ``link_error`` on each individual Phase 1 task.  When all
+    retries are exhausted for *any* MS in the chord, Celery fires this
+    callback.  The chord itself may still complete (other MS tasks succeed)
+    and Phase 2 runs normally.  But if enough tasks fail that the chord
+    never fires Phase 2, this ensures the dynamic dispatch chain continues.
+
+    A Redis ``SETNX`` lock (60 min TTL) prevents duplicate pops when
+    multiple Phase 1 tasks in the same chord all fail.
+    """
+    import redis as _redis
+
+    node = socket.gethostname()
+    logger.error(
+        f"Phase 1 task {task_id} FAILED for {subband} {lst_label} on "
+        f"{node}: {exc}"
+    )
+
+    if not dynamic_run_label:
+        return
+
+    # Dedup: only one error callback per (subband, lst_label) should pop.
+    # Use a Redis lock with 60-min TTL so it auto-expires.
+    try:
+        r = _redis.Redis.from_url(queue_config.result_backend_uri)
+        lock_key = f"pipeline:chord_error_lock:{dynamic_run_label}:{subband}:{lst_label}"
+        acquired = r.set(lock_key, "1", nx=True, ex=3600)
+        if not acquired:
+            logger.info(
+                f"Chord error handler already fired for {subband} {lst_label} "
+                f"— skipping duplicate pop"
+            )
+            return
+    except Exception as e:
+        logger.warning(f"Could not acquire dedup lock: {e} — popping anyway")
+
+    # Wait briefly: the chord may still succeed if other MS tasks complete.
+    # Phase 2's finally block would then handle dispatch normally.
+    # 90s is enough for Phase 2 to start if it's going to.
+    import time as _time
+    _time.sleep(90)
+
+    # Check if Phase 2 already ran by seeing if the work_dir was cleaned
+    # or if archive products exist.  If so, dispatch already happened.
+    archive_marker = os.path.join(
+        LUSTRE_ARCHIVE_DIR, lst_label, '*', '*', subband,
+    )
+    if work_dir and not os.path.isdir(work_dir) and glob.glob(archive_marker):
+        logger.info(
+            f"Phase 2 appears to have run for {subband} {lst_label} "
+            f"— skipping error-handler dispatch"
+        )
+        return
+
+    logger.info(
+        f"Phase 2 did not fire for {subband} {lst_label} — "
+        f"error handler triggering next work unit"
+    )
+    _trigger_next_and_cleanup(
+        remaining_hours=None,
+        work_dir=work_dir or '',
+        cleanup_nvme=cleanup_nvme,
+        subband=subband,
+        lst_label=lst_label,
+        dynamic_run_label=dynamic_run_label,
+    )
+
 
 def _trigger_next_and_cleanup(
     remaining_hours, work_dir, cleanup_nvme, subband, lst_label,
+    dynamic_run_label=None,
 ):
     """Trigger the next hour in the sequential chain and optionally clean NVMe.
 
     Called from the ``finally`` block of ``process_subband_task`` so that the
     chain **always** continues even when the current hour fails.
+
+    Also called from :func:`on_chord_error` when Phase 1 fails entirely
+    (all retries exhausted), ensuring the node picks up the next work unit
+    instead of going idle.
+
+    In **dynamic mode** (``dynamic_run_label`` is set), the next work unit is
+    popped from the Redis work queue instead of using ``remaining_hours``.
+    This allows any subband/hour to be dispatched to whichever node finishes
+    first.
     """
-    if remaining_hours:
+    if dynamic_run_label:
+        # Dynamic mode: pop next work unit from Redis
+        queue = socket.gethostname().replace('lwa', '')
+        try:
+            _pop_and_submit(dynamic_run_label, queue)
+        except Exception as e:
+            logger.error(f"Dynamic dispatch failed: {e}")
+            traceback.print_exc()
+    elif remaining_hours:
+        # Static chaining mode
         next_hour = remaining_hours[0]
         rest = remaining_hours[1:] or None
         next_label = next_hour.get('lst_label', '?')
@@ -115,8 +300,6 @@ def _trigger_next_and_cleanup(
             f"({len(remaining_hours) - 1} hours remaining after)"
         )
         try:
-            # Avoid circular import: submit_subband_pipeline is defined later
-            # in this module, so call it directly.
             submit_subband_pipeline(remaining_hours=rest, **next_hour)
         except Exception as e:
             logger.error(f"Failed to trigger next hour {next_label}: {e}")
@@ -131,6 +314,191 @@ def _trigger_next_and_cleanup(
             pass
 
 
+def _generate_local_movies(work_dir: str, freq_str: str) -> None:
+    """Generate raw + filtered MP4 movies from pilot snapshot FITS images.
+
+    Produces up to three movies inside ``<work_dir>/Movies/``:
+
+    * ``<freq>_I_Raw.mp4``      — Stokes I time-lapse (grayscale)
+    * ``<freq>_V_Raw.mp4``      — Stokes V time-lapse (grayscale)
+    * ``<freq>_I_Filtered.mp4`` — Stokes I median-subtracted (highlights transients)
+
+    Uses ``matplotlib.animation`` + ``ffmpeg``.  If either is unavailable the
+    step is silently skipped.
+
+    Args:
+        work_dir: NVMe working directory (must contain a ``snapshots/`` subfolder).
+        freq_str: Frequency label, e.g. ``'73MHz'``.
+    """
+    if animation is None:
+        logger.warning("matplotlib.animation not available — skipping movie generation.")
+        return
+
+    logger.info("Generating movies from pilot snapshots...")
+    movie_dir = os.path.join(work_dir, "Movies")
+    os.makedirs(movie_dir, exist_ok=True)
+    snap_dir = os.path.join(work_dir, "snapshots")
+
+    for pol in ['I', 'V']:
+        files = sorted(glob.glob(os.path.join(snap_dir, f"*{pol}-image*.fits")))
+        if len(files) < 10:
+            logger.info(f"Only {len(files)} {pol} snapshot frames — skipping movie.")
+            continue
+
+        frames = []
+        for f in files[:150]:
+            try:
+                frames.append(fits.getdata(f).squeeze())
+            except Exception:
+                pass
+
+        if not frames:
+            continue
+
+        try:
+            cube = np.array(frames)
+            mid = len(cube) // 2
+
+            # 1. Raw movie (both I and V) — grayscale
+            if pol == 'V':
+                rms = np.nanstd(cube[mid])
+                vmin, vmax = -5 * rms, 5 * rms
+            else:
+                vmin, vmax = np.nanpercentile(cube[mid], [1, 99.5])
+
+            fig = plt.figure(figsize=(8, 8))
+            ax = fig.add_axes([0, 0, 1, 1])
+            ax.axis('off')
+            ims = [[ax.imshow(fr, animated=True, origin='lower', cmap='gray',
+                              vmin=vmin, vmax=vmax)] for fr in cube]
+            ani = animation.ArtistAnimation(fig, ims, interval=100, blit=True)
+            raw_path = os.path.join(movie_dir, f"{freq_str}_{pol}_Raw.mp4")
+            ani.save(raw_path, writer='ffmpeg', dpi=150)
+            plt.close(fig)
+            logger.info(f"Saved {raw_path}")
+
+            # 2. Filtered movie (Stokes I only — median subtraction)
+            if pol == 'I':
+                med = np.median(cube, axis=0)
+                diff = cube - med
+                rms = np.std(diff)
+                fig = plt.figure(figsize=(8, 8))
+                ax = fig.add_axes([0, 0, 1, 1])
+                ax.axis('off')
+                ims = [[ax.imshow(fr, animated=True, origin='lower', cmap='gray',
+                                  vmin=-3 * rms, vmax=5 * rms)] for fr in diff]
+                ani = animation.ArtistAnimation(fig, ims, interval=100, blit=True)
+                filt_path = os.path.join(movie_dir, f"{freq_str}_{pol}_Filtered.mp4")
+                ani.save(filt_path, writer='ffmpeg', dpi=150)
+                plt.close(fig)
+                logger.info(f"Saved {filt_path}")
+
+        except Exception as e:
+            logger.error(f"Movie generation failed for {pol}: {e}")
+            traceback.print_exc()
+
+
+def _cleanup_psf_files(work_dir: str) -> int:
+    """Delete PSF FITS files from snapshots/, keeping only the first one.
+
+    WSClean produces a ``*-psf.fits`` for every snapshot interval.  These are
+    large and rarely needed after QA — keep just the first as a reference and
+    remove the rest to save space before archiving.
+
+    Returns:
+        Number of PSF files removed.
+    """
+    snap_dir = os.path.join(work_dir, "snapshots")
+    psf_files = sorted(glob.glob(os.path.join(snap_dir, "*-psf.fits")))
+    if len(psf_files) <= 1:
+        return 0
+    removed = 0
+    for psf in psf_files[1:]:
+        try:
+            os.remove(psf)
+            removed += 1
+        except OSError:
+            pass
+    logger.info(
+        f"PSF cleanup: kept {os.path.basename(psf_files[0])}, "
+        f"removed {removed}/{len(psf_files) - 1}"
+    )
+    return removed
+
+
+def _compress_snapshot_fits(work_dir: str) -> int:
+    """Compress all FITS files in ``snapshots/`` using fpack.
+
+    Each ``*.fits`` file is compressed to ``*.fits.fz`` by fpack, then
+    renamed to ``*.fits.fs``.  The original uncompressed FITS is deleted.
+
+    Only snapshot images are compressed — deep images in ``I/`` and ``V/``
+    are left as-is.
+
+    Looks for ``fpack`` in this order:
+
+    1. ``$FPACK_BIN`` environment variable
+    2. Direct ``fpack`` on ``$PATH``
+    3. ``conda run -n development fpack`` (fallback)
+
+    Returns:
+        Number of files successfully compressed.
+    """
+    return _compress_snapshot_fits_dir(os.path.join(work_dir, "snapshots"))
+
+
+def _compress_snapshot_fits_dir(snap_dir: str) -> int:
+    """Compress all ``*.fits`` in *snap_dir* via fpack → ``.fits.fs``.
+
+    Returns:
+        Number of files successfully compressed.
+    """
+    # Resolve fpack binary / command prefix
+    fpack_env = os.environ.get('FPACK_BIN')
+    fpack_direct = shutil.which('fpack')
+    conda_bin = shutil.which('conda')
+
+    if fpack_env and os.path.isfile(fpack_env):
+        fpack_cmd = [fpack_env]
+    elif fpack_direct:
+        fpack_cmd = [fpack_direct]
+    elif conda_bin:
+        # Fall back to running fpack inside the 'development' conda env
+        fpack_cmd = [conda_bin, 'run', '-n', 'development', 'fpack']
+        logger.info("Using fpack via 'conda run -n development'")
+    else:
+        logger.warning("fpack not found (PATH, $FPACK_BIN, or conda development env) — skipping compression.")
+        return 0
+
+    fits_files = sorted(glob.glob(os.path.join(snap_dir, "*.fits")))
+    if not fits_files:
+        return 0
+
+    compressed = 0
+    for fpath in fits_files:
+        fz_path = fpath + ".fz"
+        fs_path = fpath + ".fs"
+        try:
+            subprocess.run(
+                fpack_cmd + ["-v", fpath],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                check=True,
+            )
+            if os.path.exists(fz_path):
+                os.rename(fz_path, fs_path)
+                os.remove(fpath)
+                compressed += 1
+            else:
+                logger.warning(f"fpack did not produce {fz_path}")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"fpack failed on {os.path.basename(fpath)}: {e}")
+        except OSError as e:
+            logger.error(f"Compress file error {os.path.basename(fpath)}: {e}")
+
+    logger.info(f"Compressed {compressed}/{len(fits_files)} snapshot FITS → .fs")
+    return compressed
+
+
 def _patch_size_args(args: list, npix: int) -> list:
     """Return a copy of *args* with ``-size W H`` replaced by *npix npix*."""
     args = list(args)  # don't mutate the config
@@ -138,6 +506,17 @@ def _patch_size_args(args: list, npix: int) -> list:
         idx = args.index('-size')
         args[idx + 1] = str(npix)
         args[idx + 2] = str(npix)
+    except (ValueError, IndexError):
+        pass
+    return args
+
+
+def _patch_scale_arg(args: list, scale: float) -> list:
+    """Return a copy of *args* with ``-scale V`` replaced by *scale*."""
+    args = list(args)
+    try:
+        idx = args.index('-scale')
+        args[idx + 1] = str(scale)
     except (ValueError, IndexError):
         pass
     return args
@@ -287,10 +666,15 @@ def process_subband_task(
     cleanup_nvme: bool = False,
     targets: Optional[List[str]] = None,
     catalog: Optional[str] = None,
-    snapshot_clean: bool = False,
+    clean_snapshots: bool = False,
+    clean_reduced_pixels: bool = False,
     reduced_pixels: bool = False,
     skip_science: bool = False,
+    compress_snapshots: bool = False,
     remaining_hours: Optional[List[dict]] = None,
+    dynamic_run_label: Optional[str] = None,
+    bp_table: Optional[str] = None,
+    xy_table: Optional[str] = None,
 ) -> str:
     """Phase 2: concatenate, image, run science, and archive one subband.
 
@@ -300,6 +684,11 @@ def process_subband_task(
     When *remaining_hours* is provided (by ``submit_subband_pipeline_chained``),
     this task will submit the next hour's chord upon successful completion,
     ensuring hours are processed **sequentially** on the same node.
+
+    When *dynamic_run_label* is set, the task operates in **dynamic dispatch**
+    mode: instead of chaining to the next hour of the same subband, it pops
+    the next (subband, hour) work unit from a Redis queue.  This lets any
+    free node pick up whatever work is available.
 
     Args:
         ms_paths: NVMe paths returned by prepare_one_ms_task (via chord).
@@ -313,14 +702,23 @@ def process_subband_task(
         cleanup_nvme: If True, remove the entire NVMe work_dir after archiving.
         targets: List of target-list file paths for photometry.
         catalog: Path to BDSF catalog for transient search masking.
-        snapshot_clean: If True, use CLEAN imaging for pilot snapshots.
+        clean_snapshots: If True, produce CLEANed Stokes-I snapshots in
+            ``snapshots_clean/`` in addition to the dirty pilots in
+            ``snapshots/``.  Always fpack-compressed.
+        clean_reduced_pixels: If True, scale clean snapshot pixel count
+            by subband frequency (1024/2048/4096).  Only affects clean
+            snapshots, not dirty pilots or science imaging.
         skip_science: If True, skip all science phases (dewarping, photometry,
             transient search, flux check) after PB correction. Products
             are still archived to Lustre.
+        compress_snapshots: If True, fpack-compress all snapshot FITS to .fs
+            and remove the originals.  Deep images are not compressed.
         remaining_hours: List of kwarg dicts for subsequent hours.
             Each dict contains the arguments for ``submit_subband_pipeline``.
             The first entry is submitted after this hour completes, with
             the rest forwarded as its own ``remaining_hours``.
+        dynamic_run_label: If set, enables dynamic dispatch mode using
+            this run label as the Redis work-queue key.
 
     Returns:
         Path to the Lustre archive directory with final products.
@@ -350,6 +748,7 @@ def process_subband_task(
         logger.error(f"No valid MS files for {subband} in {lst_label}")
         _trigger_next_and_cleanup(
             remaining_hours, work_dir, cleanup_nvme, subband, lst_label,
+            dynamic_run_label=dynamic_run_label,
         )
         raise RuntimeError(f"No valid MS files for {subband}")
 
@@ -359,8 +758,70 @@ def process_subband_task(
 
     try:
         for d in ['I/deep', 'V/deep', 'I/10min', 'V/10min', 'snapshots', 'QA',
-                  'samples', 'detections', 'Dewarp_Diagnostics']:
+                  'samples', 'detections', 'Dewarp_Diagnostics', 'Movies']:
             os.makedirs(os.path.join(work_dir, d), exist_ok=True)
+    
+        # ------------------------------------------------------------------
+        #  0. Write provenance metadata
+        # ------------------------------------------------------------------
+        try:
+            import orca as _orca
+            provenance = {
+                'pipeline_version': getattr(_orca, '__git_version__', 'unknown'),
+                'pipeline_branch': getattr(_orca, '__git_branch__', 'unknown'),
+                'package_version': getattr(_orca, '__version__', 'unknown'),
+                'task_id': self.request.id,
+                'worker_node': node,
+                'started_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                'subband': subband,
+                'obs_date': obs_date,
+                'lst_label': lst_label,
+                'run_label': run_label,
+                'dynamic_run_label': dynamic_run_label,
+                'bp_table': bp_table,
+                'xy_table': xy_table,
+                'n_ms_files': len(ms_paths),
+                'n_valid_ms': len([p for p in ms_paths if p and os.path.isdir(p)]),
+                'flags': {
+                    'hot_baselines': hot_baselines,
+                    'skip_cleanup': skip_cleanup,
+                    'cleanup_nvme': cleanup_nvme,
+                    'clean_snapshots': clean_snapshots,
+                    'clean_reduced_pixels': clean_reduced_pixels,
+                    'reduced_pixels': reduced_pixels,
+                    'skip_science': skip_science,
+                    'compress_snapshots': compress_snapshots,
+                },
+                'imaging': {
+                    'pixel_size': get_pixel_size(subband) if reduced_pixels else 4096,
+                    'clean_pixel_size': get_pixel_size(subband) if (clean_snapshots and clean_reduced_pixels) else (get_pixel_size(subband) if reduced_pixels else 4096),
+                    'clean_pixel_scale': get_pixel_scale(subband) if (clean_snapshots and clean_reduced_pixels) else 0.03125,
+                    'wsclean_j': get_image_resources(subband)[2],
+                    'wsclean_bin': os.environ.get('WSCLEAN_BIN', '/opt/bin/wsclean'),
+                    'snapshot_dirty': SNAPSHOT_PARAMS,
+                    'snapshot_clean_i': {
+                        'suffix': SNAPSHOT_CLEAN_I_PARAMS['suffix'],
+                        'args': _patch_scale_arg(
+                            _patch_size_args(
+                                SNAPSHOT_CLEAN_I_PARAMS['args'],
+                                get_pixel_size(subband) if clean_reduced_pixels else 4096,
+                            ),
+                            get_pixel_scale(subband) if clean_reduced_pixels else 0.03125,
+                        ),
+                    } if clean_snapshots else None,
+                    'science_steps': [
+                        {'suffix': s['suffix'], 'pol': s['pol'],
+                         'category': s['category'], 'args': s['args']}
+                        for s in IMAGING_STEPS
+                    ],
+                },
+            }
+            prov_path = os.path.join(work_dir, 'provenance.json')
+            with open(prov_path, 'w') as f:
+                json.dump(provenance, f, indent=2)
+            logger.info(f"Provenance written to {prov_path}")
+        except Exception as e:
+            logger.warning(f"Failed to write provenance.json: {e}")
     
         # ------------------------------------------------------------------
         #  1. Concatenation  (skip if concat MS already exists from prior attempt)
@@ -426,7 +887,6 @@ def process_subband_task(
         pilot_name = f"{subband}-{SNAPSHOT_PARAMS['suffix']}"
         pilot_path = os.path.join(work_dir, "snapshots", pilot_name)
     
-        snapshot_cfg = SNAPSHOT_CLEAN_PARAMS if snapshot_clean else SNAPSHOT_PARAMS
         wsclean_bin = os.environ.get('WSCLEAN_BIN', '/opt/bin/wsclean')
         _, _, wsclean_j = get_image_resources(subband)
         npix = get_pixel_size(subband) if reduced_pixels else 4096
@@ -434,7 +894,7 @@ def process_subband_task(
         cmd_pilot = (
             [wsclean_bin]
             + ['-j', str(wsclean_j)]
-            + _patch_size_args(snapshot_cfg['args'], npix)
+            + _patch_size_args(SNAPSHOT_PARAMS['args'], npix)
             + ['-name', pilot_path, '-intervals-out', str(n_ints), concat_ms]
         )
         run_subprocess(cmd_pilot, "Pilot snapshot imaging")
@@ -464,6 +924,57 @@ def process_subband_task(
                 logger.error(f"Hot baseline diagnostics failed: {e}")
                 traceback.print_exc()
             logger.info(f"[TIMER] hot_baselines: {time.time() - _t:.1f}s")
+    
+        # ------------------------------------------------------------------
+        #  6b. CLEANed Stokes-I snapshots (optional, in addition to dirty)
+        # ------------------------------------------------------------------
+        if clean_snapshots:
+            _t = time.time()
+            try:
+                clean_snap_dir = os.path.join(work_dir, "snapshots_clean")
+                os.makedirs(clean_snap_dir, exist_ok=True)
+
+                # Frequency-dependent pixel scaling for clean snapshots
+                npix_clean = get_pixel_size(subband) if clean_reduced_pixels else npix
+                scale_clean = get_pixel_scale(subband) if clean_reduced_pixels else 0.03125
+                logger.info(
+                    f"Clean snapshot pixels for {subband}: {npix_clean}x{npix_clean}, "
+                    f"scale={scale_clean} deg/px "
+                    f"(clean_reduced_pixels={clean_reduced_pixels})"
+                )
+
+                clean_name = f"{subband}-{SNAPSHOT_CLEAN_I_PARAMS['suffix']}"
+                clean_path = os.path.join(clean_snap_dir, clean_name)
+
+                _clean_args = _patch_size_args(SNAPSHOT_CLEAN_I_PARAMS['args'], npix_clean)
+                _clean_args = _patch_scale_arg(_clean_args, scale_clean)
+                cmd_clean_snap = (
+                    [wsclean_bin]
+                    + ['-j', str(wsclean_j)]
+                    + _clean_args
+                    + ['-name', clean_path,
+                       '-intervals-out', str(n_ints), concat_ms]
+                )
+                run_subprocess(cmd_clean_snap, "Clean Stokes-I snapshot imaging")
+
+                add_timestamps_to_images(
+                    clean_snap_dir, clean_name, concat_ms, n_ints,
+                )
+
+                # Remove PSF, model, and residual files (not needed after CLEAN)
+                for pattern in ['*-psf.fits', '*-model.fits', '*-residual.fits']:
+                    for f in glob.glob(os.path.join(clean_snap_dir, pattern)):
+                        try:
+                            os.remove(f)
+                        except OSError:
+                            pass
+
+                # Always fpack-compress clean snapshots
+                _compress_snapshot_fits_dir(clean_snap_dir)
+            except Exception as e:
+                logger.error(f"Clean snapshot imaging failed: {e}")
+                traceback.print_exc()
+            logger.info(f"[TIMER] clean_snapshots: {time.time() - _t:.1f}s")
     
         # ------------------------------------------------------------------
         #  7. Science imaging + PB correction
@@ -501,16 +1012,94 @@ def process_subband_task(
         logger.info(f"[TIMER] imaging_all: {time.time() - _t_imaging_all:.1f}s")
     
         # ------------------------------------------------------------------
-        #  7b. SCIENCE PHASES (all on NVMe)
+        #  7a. Movie generation from pilot snapshots
         # ------------------------------------------------------------------
-        if skip_science:
-            logger.info("--skip_science: skipping dewarping, photometry, transients, flux check")
-    
+        _t = time.time()
+        try:
+            _generate_local_movies(work_dir, subband)
+        except Exception as e:
+            logger.error(f"Movie generation failed: {e}")
+            traceback.print_exc()
+        logger.info(f"[TIMER] movie_generation: {time.time() - _t:.1f}s")
+
+        # ------------------------------------------------------------------
+        #  7b-pre. Lightweight image QA (runs ALWAYS, even with --skip_science)
+        # ------------------------------------------------------------------
         try:
             freq_mhz = float(subband.replace('MHz', ''))
         except Exception:
             freq_mhz = 50.0
-    
+
+        # --- i. Per-subband noise RMS (Stokes V deep + Stokes I deep) ---
+        _t = time.time()
+        try:
+            from orca.transform.post_process_science import get_inner_rms
+
+            v_deep_dir = os.path.join(work_dir, "V", "deep")
+            i_deep_dir = os.path.join(work_dir, "I", "deep")
+
+            # Stokes V: raw image (not pbcorr)
+            v_candidates = sorted(glob.glob(
+                os.path.join(v_deep_dir, f"*V-Taper-Deep*image*.fits")))
+            v_candidates = [f for f in v_candidates
+                            if "pbcorr" not in f and "dewarped" not in f]
+            v_rms = float(get_inner_rms(v_candidates[0])) if v_candidates else None
+
+            # Stokes I: pbcorr preferred, raw fallback
+            i_candidates = sorted(glob.glob(
+                os.path.join(i_deep_dir, f"*I-Deep-Taper-Robust-0.75*pbcorr*.fits")))
+            i_candidates = [f for f in i_candidates if "dewarped" not in f]
+            if not i_candidates:
+                i_candidates = sorted(glob.glob(
+                    os.path.join(i_deep_dir, f"*I-Deep-Taper-Robust-0.75*image*.fits")))
+                i_candidates = [f for f in i_candidates
+                                if "pbcorr" not in f and "dewarped" not in f]
+            i_rms = float(get_inner_rms(i_candidates[0])) if i_candidates else None
+
+            # Write CSV (append-friendly: one row per subband-hour)
+            import csv
+            from datetime import datetime as _dt
+            qa_csv = os.path.join(work_dir, "QA", "image_noise.csv")
+            write_header = not os.path.exists(qa_csv)
+            with open(qa_csv, "a", newline="") as fh:
+                writer = csv.writer(fh)
+                if write_header:
+                    writer.writerow([
+                        "subband", "freq_mhz", "lst_label",
+                        "v_deep_rms", "i_deep_rms", "timestamp",
+                    ])
+                writer.writerow([
+                    subband, freq_mhz, lst_label,
+                    f"{v_rms:.6e}" if v_rms else "",
+                    f"{i_rms:.6e}" if i_rms else "",
+                    _dt.utcnow().isoformat(),
+                ])
+            logger.info(
+                f"Image noise QA: V_rms={v_rms:.4e}, I_rms={i_rms:.4e}"
+                if v_rms and i_rms else
+                f"Image noise QA: V_rms={v_rms}, I_rms={i_rms}"
+            )
+        except Exception as e:
+            logger.warning(f"Image noise QA failed (non-fatal): {e}")
+        logger.info(f"[TIMER] image_noise_qa: {time.time() - _t:.1f}s")
+
+        # --- ii. Flux scale check (runs on PB-corrected images, no dewarping needed) ---
+        _t = time.time()
+        try:
+            from orca.transform.flux_check_cutout import run_flux_check
+            run_flux_check(work_dir, logger=logger)
+        except ImportError as e:
+            logger.warning(f"flux_check_cutout not available — skipping: {e}")
+        except Exception as e:
+            logger.warning(f"Flux check failed (non-fatal): {e}")
+        logger.info(f"[TIMER] image_flux_check_qa: {time.time() - _t:.1f}s")
+
+        # ------------------------------------------------------------------
+        #  7b. SCIENCE PHASES (all on NVMe)
+        # ------------------------------------------------------------------
+        if skip_science:
+            logger.info("--skip_science: skipping dewarping, photometry, transients, flux check")
+
         # --- A. Ionospheric Dewarping (VLSSr cross-match) ---
         _t = time.time()
         if not skip_science:
@@ -751,20 +1340,21 @@ def process_subband_task(
             else:
                 logger.info("No catalog specified — skipping transient search.")
         logger.info(f"[TIMER] science_transient_search: {time.time() - _t:.1f}s")
-    
+
         # --- D. Flux Scale Check ---
+        # NOTE: flux check now runs unconditionally in step 7b-pre (above),
+        # so it no longer needs the skip_science guard.  The timer tag is
+        # kept for backwards compatibility with log parsers.
+        logger.info(f"[TIMER] science_flux_check: 0.0s")
+    
+        # ------------------------------------------------------------------
+        #  7c. Snapshot cleanup + optional compression
+        # ------------------------------------------------------------------
         _t = time.time()
-        if not skip_science:
-            logger.info("--- Science D: Flux Scale Check ---")
-            try:
-                from orca.transform.flux_check_cutout import run_flux_check
-                run_flux_check(work_dir, logger=logger)
-            except ImportError as e:
-                logger.warning(f"flux_check_cutout not available — skipping: {e}")
-            except Exception as e:
-                logger.error(f"Flux check failed: {e}")
-                traceback.print_exc()
-        logger.info(f"[TIMER] science_flux_check: {time.time() - _t:.1f}s")
+        _cleanup_psf_files(work_dir)
+        if compress_snapshots:
+            _compress_snapshot_fits(work_dir)
+        logger.info(f"[TIMER] snapshot_cleanup_compress: {time.time() - _t:.1f}s")
     
         # ------------------------------------------------------------------
         #  8. Archive to Lustre
@@ -811,6 +1401,7 @@ def process_subband_task(
         # ------------------------------------------------------------------
         _trigger_next_and_cleanup(
             remaining_hours, work_dir, cleanup_nvme, subband, lst_label,
+            dynamic_run_label=dynamic_run_label,
         )
         logger.info(f"[TIMER] phase2_total: {time.time() - _p2_t0:.1f}s")
         if _phase2_failed:
@@ -848,10 +1439,13 @@ def submit_subband_pipeline(
     queue_override: Optional[str] = None,
     targets: Optional[List[str]] = None,
     catalog: Optional[str] = None,
-    snapshot_clean: bool = False,
+    clean_snapshots: bool = False,
+    clean_reduced_pixels: bool = False,
     reduced_pixels: bool = False,
     skip_science: bool = False,
+    compress_snapshots: bool = False,
     remaining_hours: Optional[List[dict]] = None,
+    dynamic_run_label: Optional[str] = None,
 ) -> 'celery.result.AsyncResult':
     """Submit the full two-phase subband pipeline as a Celery chord.
 
@@ -875,9 +1469,12 @@ def submit_subband_pipeline(
             default node.  E.g. 'calim08' to run 18MHz on calim08.
         targets: List of target-list file paths for photometry.
         catalog: Path to BDSF catalog for transient search masking.
-        snapshot_clean: If True, use CLEAN imaging for pilot snapshots.
+        clean_snapshots: If True, produce CLEANed Stokes-I snapshots.
+        clean_reduced_pixels: Scale clean snapshot pixels by frequency.
         reduced_pixels: If True, scale pixel count by subband frequency.
         skip_science: If True, skip science phases after PB correction.
+        compress_snapshots: If True, fpack-compress snapshot FITS.
+        dynamic_run_label: If set, enables dynamic dispatch mode.
 
     Returns:
         Celery AsyncResult for the chord (Phase 2 result).
@@ -914,11 +1511,30 @@ def submit_subband_pipeline(
         cleanup_nvme=cleanup_nvme,
         targets=targets,
         catalog=catalog,
-        snapshot_clean=snapshot_clean,
+        clean_snapshots=clean_snapshots,
+        clean_reduced_pixels=clean_reduced_pixels,
         reduced_pixels=reduced_pixels,
         skip_science=skip_science,
+        compress_snapshots=compress_snapshots,
         remaining_hours=remaining_hours,
+        dynamic_run_label=dynamic_run_label,
+        bp_table=bp_table,
+        xy_table=xy_table,
     ).set(queue=queue)
+
+    # Error handler: if all Phase 1 retries fail the chord never fires
+    # Phase 2, so this callback ensures the dispatch chain continues.
+    # Attach link_error to each individual Phase 1 task (Celery 4.x
+    # compatible — cannot pass link_error to chord() directly).
+    error_sig = on_chord_error.si(
+        dynamic_run_label=dynamic_run_label,
+        work_dir=nvme_work_dir,
+        cleanup_nvme=cleanup_nvme,
+        subband=subband,
+        lst_label=lst_label,
+    ).set(queue=queue)
+    for t in phase1_tasks:
+        t.link_error = [error_sig]
 
     # chord(Phase1)(Phase2) — Phase2 receives list of Phase1 return values
     pipeline = chord(phase1_tasks)(phase2_callback)
@@ -988,9 +1604,11 @@ def submit_subband_pipeline_chained(
     queue_override: Optional[str] = None,
     targets: Optional[List[str]] = None,
     catalog: Optional[str] = None,
-    snapshot_clean: bool = False,
+    clean_snapshots: bool = False,
+    clean_reduced_pixels: bool = False,
     reduced_pixels: bool = False,
     skip_science: bool = False,
+    compress_snapshots: bool = False,
 ) -> 'celery.result.AsyncResult':
     """Submit multiple LST-hours for one subband as a sequential chain.
 
@@ -1022,9 +1640,11 @@ def submit_subband_pipeline_chained(
         queue_override: Force routing to this queue.
         targets: Target-list file paths for photometry.
         catalog: BDSF catalog for transient search masking.
-        snapshot_clean: Use CLEAN imaging for pilot snapshots.
+        clean_snapshots: Produce CLEANed Stokes-I snapshots.
+        clean_reduced_pixels: Scale clean snapshot pixels by frequency.
         reduced_pixels: Scale pixel count by subband frequency.
         skip_science: Skip science phases after PB correction.
+        compress_snapshots: fpack-compress snapshot FITS.
 
     Returns:
         Celery AsyncResult for the first hour's chord (only the first
@@ -1054,9 +1674,11 @@ def submit_subband_pipeline_chained(
             queue_override=queue_override,
             targets=targets,
             catalog=catalog,
-            snapshot_clean=snapshot_clean,
+            clean_snapshots=clean_snapshots,
+            clean_reduced_pixels=clean_reduced_pixels,
             reduced_pixels=reduced_pixels,
             skip_science=skip_science,
+            compress_snapshots=compress_snapshots,
         )
         all_hour_kwargs.append(kwargs)
 

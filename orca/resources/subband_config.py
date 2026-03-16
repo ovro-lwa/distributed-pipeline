@@ -31,7 +31,7 @@ NODE_SUBBAND_MAP = {
     '69MHz': 'lwacalim07',
     '73MHz': 'lwacalim08',
     '78MHz': 'lwacalim09',
-    '82MHz': 'lwacalim10',
+    '82MHz': 'lwacalim00',
 }
 
 # Reverse map: node → list of subbands
@@ -41,6 +41,16 @@ for _sb, _node in NODE_SUBBAND_MAP.items():
 
 # All unique calim nodes
 CALIM_NODES = sorted(set(NODE_SUBBAND_MAP.values()))
+
+# ---------------------------------------------------------------------------
+#  Dynamic dispatch — node pool
+#  Used with ``--dynamic`` mode.  Any node in this list can process any
+#  subband.  Edit this list to match currently active nodes.
+# ---------------------------------------------------------------------------
+DYNAMIC_NODE_POOL = [
+    'calim00', 'calim01', 'calim03', 'calim04',
+    'calim05', 'calim06', 'calim07', 'calim08', 'calim09',
+]
 
 def get_queue_for_subband(subband: str) -> str:
     """Return the Celery queue name for a given subband.
@@ -150,20 +160,24 @@ SNAPSHOT_PARAMS = {
     ],
 }
 
-# Snapshot CLEAN params: same as SNAPSHOT_PARAMS but with niter=50000
-# for higher-quality snapshot images (used with --snapshot_clean)
-SNAPSHOT_CLEAN_PARAMS = {
-    'suffix': 'Pilot-Snapshot',
+# Stokes-I-only CLEANed snapshots (produced IN ADDITION to dirty pilots).
+# Optimised per Marin Torchiarolo's wsclean benchmarks:
+#   auto-mask=5 (sweet spot), mgain=0.9999 (~2 major cycles),
+#   auto-threshold=1 (safe floor, negligible time impact).
+# Output goes to snapshots_clean/ and is always fpack-compressed.
+SNAPSHOT_CLEAN_I_PARAMS = {
+    'suffix': 'Clean-Snapshot',
     'args': [
         '-log-time',
-        '-pol', 'IV',
+        '-pol', 'I',
         '-niter', '50000',
-        '-mgain', '0.95',
+        '-mgain', '0.9999',
+        '-auto-mask', '5',
+        '-auto-threshold', '1',
+        '-local-rms',
         '-horizon-mask', '10deg',
         '-mem', '50',
-        '-auto-threshold', '1',
-        '-auto-mask', '5',
-        '-local-rms',
+        '-no-dirty',
         '-size', '4096', '4096',
         '-scale', '0.03125',
         '-taper-inner-tukey', '30',
@@ -275,6 +289,14 @@ _SUBBAND_PIXEL_SIZE = {
     '64MHz': 4096, '69MHz': 4096, '73MHz': 4096, '78MHz': 4096, '82MHz': 4096,
 }
 
+# Pixel scale (deg/pixel) paired with _SUBBAND_PIXEL_SIZE so that
+# npix * scale = const  (≈128°), preserving full FoV at every tier.
+_SUBBAND_PIXEL_SCALE = {
+    '18MHz': 0.125,  '23MHz': 0.125,  '27MHz': 0.125,  '32MHz': 0.125,  '36MHz': 0.125,
+    '41MHz': 0.0625, '46MHz': 0.0625, '50MHz': 0.0625, '55MHz': 0.0625, '59MHz': 0.0625,
+    '64MHz': 0.03125,'69MHz': 0.03125,'73MHz': 0.03125,'78MHz': 0.03125,'82MHz': 0.03125,
+}
+
 def get_pixel_size(subband: str) -> int:
     """Return the image pixel dimension for a given subband.
 
@@ -292,11 +314,31 @@ def get_pixel_size(subband: str) -> int:
     return _SUBBAND_PIXEL_SIZE.get(subband, 4096)
 
 
+def get_pixel_scale(subband: str) -> float:
+    """Return the pixel scale (deg/pixel) paired with :func:`get_pixel_size`.
+
+    The product ``get_pixel_size(sb) * get_pixel_scale(sb)`` is constant
+    (~128°) so that the field-of-view is preserved across frequency tiers.
+
+      18-36 MHz  →  0.125    (0.03125 * 4)
+      41-59 MHz  →  0.0625   (0.03125 * 2)
+      64-82 MHz  →  0.03125
+
+    Args:
+        subband: e.g. '55MHz'
+
+    Returns:
+        Pixel scale in degrees.
+    """
+    return _SUBBAND_PIXEL_SCALE.get(subband, 0.03125)
+
+
 def get_image_resources(subband: str):
     """Return (cpus, mem_gb, wsclean_j) for a given subband.
 
-    On nodes that serve two subbands the resources are halved to avoid
-    contention when both subbands process simultaneously.
+    In dynamic dispatch mode any subband can land on any node, so we
+    always allocate full node resources (44 cores).  The old dual-node
+    halving (22 cores) is no longer used.
 
     Args:
         subband: e.g. '73MHz'
@@ -304,7 +346,4 @@ def get_image_resources(subband: str):
     Returns:
         Tuple of (cpus: int, mem_gb: int, wsclean_j: int).
     """
-    node = NODE_SUBBAND_MAP.get(subband)
-    if node in _DUAL_SUBBAND_NODES:
-        return 22, 60, 22
     return 44, 120, 44

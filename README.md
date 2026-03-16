@@ -94,9 +94,16 @@ Now you can submit tasks to the application from another session (e.g., IPython,
 Celery admin notes are in [docs/celery_deployment.md](docs/celery_deployment.md). The submission session will show some logging, but the celery application process will show more.
 
 ## Code Structure
-`orca` is where the wrappers and functions that do single units of work sit.
 
-`pipeline` is where the pipelines live and serve as useful examples for how to use celery.
+| Directory | Description |
+|-----------|-------------|
+| `orca/` | Core library — wrappers and functions that do single units of work |
+| `pipeline/` | Pipeline submission scripts (Celery chord/chain orchestration) |
+| `deploy/` | Worker management scripts (see [docs/worker-management.md](docs/worker-management.md)) |
+| `tools/` | Standalone utilities (e.g. QA imaging) — not part of the core pipeline |
+| `tests/` | Unit and integration tests |
+| `docs/` | Sphinx documentation and guides |
+| `notebooks/` | Jupyter notebooks for examples and monitoring |
 
 ## Developer & Testing Guide
 
@@ -126,12 +133,20 @@ The Celery-based subband pipeline processes OVRO-LWA data on the calim cluster u
 # Start workers on all available calim nodes (from any calim node):
 ./deploy/manage-workers.sh start
 
-# Submit a pipeline run:
+# Submit a pipeline run (static mode — subband pinned to its default node):
 python pipeline/subband_celery.py \
   --range 04-05 --date 2026-01-31 \
   --bp_table /path/to/bandpass.B.flagged \
   --xy_table /path/to/xyphase.Xf \
   --subbands 73MHz --peel_sky --peel_rfi
+
+# Submit with dynamic scheduling (any free node picks up work):
+python pipeline/subband_celery.py \
+  --range 00-24 --date 2026-01-31 \
+  --bp_table /path/to/bandpass.B.flagged \
+  --xy_table /path/to/xyphase.Xf \
+  --peel_sky --peel_rfi --hot_baselines \
+  --cleanup_nvme --compress_snapshots --dynamic
 
 # After code changes — deploy to all nodes in one command:
 ./deploy/manage-workers.sh deploy
