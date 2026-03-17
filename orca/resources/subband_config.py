@@ -161,7 +161,7 @@ SNAPSHOT_PARAMS = {
 }
 
 # Stokes-I-only CLEANed snapshots (produced IN ADDITION to dirty pilots).
-# Optimised per Marin Torchiarolo's wsclean benchmarks:
+# Optimised per wsclean benchmarks:
 #   auto-mask=5 (sweet spot), mgain=0.9999 (~2 major cycles),
 #   auto-threshold=1 (safe floor, negligible time impact).
 # Output goes to snapshots_clean/ and is always fpack-compressed.
@@ -279,31 +279,36 @@ _DUAL_SUBBAND_NODES = {
 }
 
 # ---------------------------------------------------------------------------
-#  Per-subband pixel scaling
-#  Lower-frequency subbands have wider beams → fewer pixels needed.
-#  This speeds up imaging significantly for the lowest bands.
+#  Per-subband pixel scaling  (wsclean resolution benchmarks, March 2026)
+#
+#  Pixel count and scale derived from wsclean resolution benchmarks so that
+#  each subband tier is Nyquist-sampled while keeping images as small as
+#  possible.  The product  npix * scale  is approximately constant (~115°)
+#  to preserve full FoV at every tier.
+#
+#  Group 1 (64–82 MHz) →  3122 px,  0.037  deg/px
+#  Group 2 (41–59 MHz) →  2357 px,  0.049  deg/px
+#  Group 3 (18–36 MHz) →  1507 px,  0.0767 deg/px
 # ---------------------------------------------------------------------------
 _SUBBAND_PIXEL_SIZE = {
-    '18MHz': 1024, '23MHz': 1024, '27MHz': 1024, '32MHz': 1024, '36MHz': 1024,
-    '41MHz': 2048, '46MHz': 2048, '50MHz': 2048, '55MHz': 2048, '59MHz': 2048,
-    '64MHz': 4096, '69MHz': 4096, '73MHz': 4096, '78MHz': 4096, '82MHz': 4096,
+    '18MHz': 1507, '23MHz': 1507, '27MHz': 1507, '32MHz': 1507, '36MHz': 1507,
+    '41MHz': 2357, '46MHz': 2357, '50MHz': 2357, '55MHz': 2357, '59MHz': 2357,
+    '64MHz': 3122, '69MHz': 3122, '73MHz': 3122, '78MHz': 3122, '82MHz': 3122,
 }
 
-# Pixel scale (deg/pixel) paired with _SUBBAND_PIXEL_SIZE so that
-# npix * scale = const  (≈128°), preserving full FoV at every tier.
 _SUBBAND_PIXEL_SCALE = {
-    '18MHz': 0.125,  '23MHz': 0.125,  '27MHz': 0.125,  '32MHz': 0.125,  '36MHz': 0.125,
-    '41MHz': 0.0625, '46MHz': 0.0625, '50MHz': 0.0625, '55MHz': 0.0625, '59MHz': 0.0625,
-    '64MHz': 0.03125,'69MHz': 0.03125,'73MHz': 0.03125,'78MHz': 0.03125,'82MHz': 0.03125,
+    '18MHz': 0.0767, '23MHz': 0.0767, '27MHz': 0.0767, '32MHz': 0.0767, '36MHz': 0.0767,
+    '41MHz': 0.049,  '46MHz': 0.049,  '50MHz': 0.049,  '55MHz': 0.049,  '59MHz': 0.049,
+    '64MHz': 0.037,  '69MHz': 0.037,  '73MHz': 0.037,  '78MHz': 0.037,  '82MHz': 0.037,
 }
 
 def get_pixel_size(subband: str) -> int:
     """Return the image pixel dimension for a given subband.
 
-    Lower subbands use fewer pixels (wider beam → coarser resolution):
-      18-36 MHz  →  1024  (4096/4)
-      41-59 MHz  →  2048  (4096/2)
-      64-82 MHz  →  4096
+    Derived from wsclean resolution benchmarks:
+      18-36 MHz  →  1507
+      41-59 MHz  →  2357
+      64-82 MHz  →  3122
 
     Args:
         subband: e.g. '55MHz'
@@ -311,18 +316,18 @@ def get_pixel_size(subband: str) -> int:
     Returns:
         Pixel dimension (square images: NxN).
     """
-    return _SUBBAND_PIXEL_SIZE.get(subband, 4096)
+    return _SUBBAND_PIXEL_SIZE.get(subband, 3122)
 
 
 def get_pixel_scale(subband: str) -> float:
     """Return the pixel scale (deg/pixel) paired with :func:`get_pixel_size`.
 
-    The product ``get_pixel_size(sb) * get_pixel_scale(sb)`` is constant
-    (~128°) so that the field-of-view is preserved across frequency tiers.
+    The product ``get_pixel_size(sb) * get_pixel_scale(sb)`` is approximately
+    constant (~115°) so that the field-of-view is preserved across tiers.
 
-      18-36 MHz  →  0.125    (0.03125 * 4)
-      41-59 MHz  →  0.0625   (0.03125 * 2)
-      64-82 MHz  →  0.03125
+      18-36 MHz  →  0.0767
+      41-59 MHz  →  0.049
+      64-82 MHz  →  0.037
 
     Args:
         subband: e.g. '55MHz'
@@ -330,7 +335,7 @@ def get_pixel_scale(subband: str) -> float:
     Returns:
         Pixel scale in degrees.
     """
-    return _SUBBAND_PIXEL_SCALE.get(subband, 0.03125)
+    return _SUBBAND_PIXEL_SCALE.get(subband, 0.037)
 
 
 def get_image_resources(subband: str):

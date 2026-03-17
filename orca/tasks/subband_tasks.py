@@ -787,31 +787,41 @@ def process_subband_task(
                     'skip_cleanup': skip_cleanup,
                     'cleanup_nvme': cleanup_nvme,
                     'clean_snapshots': clean_snapshots,
-                    'clean_reduced_pixels': clean_reduced_pixels,
-                    'reduced_pixels': reduced_pixels,
                     'skip_science': skip_science,
                     'compress_snapshots': compress_snapshots,
                 },
                 'imaging': {
-                    'pixel_size': get_pixel_size(subband) if reduced_pixels else 4096,
-                    'clean_pixel_size': get_pixel_size(subband) if (clean_snapshots and clean_reduced_pixels) else (get_pixel_size(subband) if reduced_pixels else 4096),
-                    'clean_pixel_scale': get_pixel_scale(subband) if (clean_snapshots and clean_reduced_pixels) else 0.03125,
+                    'pixel_size': get_pixel_size(subband),
+                    'pixel_scale': get_pixel_scale(subband),
                     'wsclean_j': get_image_resources(subband)[2],
                     'wsclean_bin': os.environ.get('WSCLEAN_BIN', '/opt/bin/wsclean'),
-                    'snapshot_dirty': SNAPSHOT_PARAMS,
+                    'snapshot_dirty': {
+                        'suffix': SNAPSHOT_PARAMS['suffix'],
+                        'args': _patch_scale_arg(
+                            _patch_size_args(
+                                SNAPSHOT_PARAMS['args'],
+                                get_pixel_size(subband),
+                            ),
+                            get_pixel_scale(subband),
+                        ),
+                    },
                     'snapshot_clean_i': {
                         'suffix': SNAPSHOT_CLEAN_I_PARAMS['suffix'],
                         'args': _patch_scale_arg(
                             _patch_size_args(
                                 SNAPSHOT_CLEAN_I_PARAMS['args'],
-                                get_pixel_size(subband) if clean_reduced_pixels else 4096,
+                                get_pixel_size(subband),
                             ),
-                            get_pixel_scale(subband) if clean_reduced_pixels else 0.03125,
+                            get_pixel_scale(subband),
                         ),
                     } if clean_snapshots else None,
                     'science_steps': [
                         {'suffix': s['suffix'], 'pol': s['pol'],
-                         'category': s['category'], 'args': s['args']}
+                         'category': s['category'],
+                         'args': _patch_scale_arg(
+                             _patch_size_args(s['args'], get_pixel_size(subband)),
+                             get_pixel_scale(subband)),
+                         }
                         for s in IMAGING_STEPS
                     ],
                 },
@@ -889,12 +899,14 @@ def process_subband_task(
     
         wsclean_bin = os.environ.get('WSCLEAN_BIN', '/opt/bin/wsclean')
         _, _, wsclean_j = get_image_resources(subband)
-        npix = get_pixel_size(subband) if reduced_pixels else 4096
-        logger.info(f"Pixel size for {subband}: {npix}x{npix} (reduced_pixels={reduced_pixels})")
+        npix = get_pixel_size(subband)
+        scale = get_pixel_scale(subband)
+        logger.info(f"Pixel size for {subband}: {npix}x{npix}, scale={scale} deg/px")
         cmd_pilot = (
             [wsclean_bin]
             + ['-j', str(wsclean_j)]
-            + _patch_size_args(SNAPSHOT_PARAMS['args'], npix)
+            + _patch_scale_arg(
+                _patch_size_args(SNAPSHOT_PARAMS['args'], npix), scale)
             + ['-name', pilot_path, '-intervals-out', str(n_ints), concat_ms]
         )
         run_subprocess(cmd_pilot, "Pilot snapshot imaging")
@@ -934,13 +946,12 @@ def process_subband_task(
                 clean_snap_dir = os.path.join(work_dir, "snapshots_clean")
                 os.makedirs(clean_snap_dir, exist_ok=True)
 
-                # Frequency-dependent pixel scaling for clean snapshots
-                npix_clean = get_pixel_size(subband) if clean_reduced_pixels else npix
-                scale_clean = get_pixel_scale(subband) if clean_reduced_pixels else 0.03125
+                # Per-subband pixel scaling for clean snapshots
+                npix_clean = get_pixel_size(subband)
+                scale_clean = get_pixel_scale(subband)
                 logger.info(
                     f"Clean snapshot pixels for {subband}: {npix_clean}x{npix_clean}, "
-                    f"scale={scale_clean} deg/px "
-                    f"(clean_reduced_pixels={clean_reduced_pixels})"
+                    f"scale={scale_clean} deg/px"
                 )
 
                 clean_name = f"{subband}-{SNAPSHOT_CLEAN_I_PARAMS['suffix']}"
@@ -989,7 +1000,7 @@ def process_subband_task(
             base = f"{subband}-{step['suffix']}"
             full_path = os.path.join(target_dir, base)
     
-            cmd = [wsclean_bin] + ['-j', str(wsclean_j)] + _patch_size_args(step['args'], npix) + ['-name', full_path]
+            cmd = [wsclean_bin] + ['-j', str(wsclean_j)] + _patch_scale_arg(_patch_size_args(step['args'], npix), scale) + ['-name', full_path]
     
             if step.get('per_integration'):
                 n_out = n_ints

@@ -185,16 +185,15 @@ def main():
                              'wsclean params (auto-mask=5, mgain=0.9999). '
                              'Compressed with fpack automatically.')
     parser.add_argument('--clean_reduced_pixels', action='store_true',
-                        help='Scale clean-snapshot pixel count by subband frequency: '
-                             '1024 (18-36MHz), 2048 (41-59MHz), 4096 (64-82MHz). '
-                             'Only affects --clean_snapshots imaging, not dirty '
-                             'snapshots or science imaging.')
+                        help='(Deprecated, no-op) Per-subband pixel scaling is '
+                             'now always applied to all imaging.')
     parser.add_argument('--skip_science', action='store_true',
                         help='Stop after imaging + PB correction; skip dewarping, '
                              'photometry, transient search, flux check. '
                              'Still archives products to Lustre.')
     parser.add_argument('--reduced_pixels', action='store_true',
-                        help='Scale image pixels by subband: 1024 (18-36MHz), 2048 (41-59MHz), 4096 (64-82MHz)')
+                        help='(Deprecated, no-op) Per-subband pixel scaling is '
+                             'now always applied to all imaging.')
     parser.add_argument('--compress_snapshots', action='store_true',
                         help='Compress snapshot FITS with fpack (.fits → .fits.fs). '
                              'Originals are deleted. Deep images are NOT compressed.')
