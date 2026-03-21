@@ -314,10 +314,13 @@ def _trigger_next_and_cleanup(
             pass
 
 
-def _generate_local_movies(work_dir: str, freq_str: str) -> None:
-    """Generate raw + filtered MP4 movies from pilot snapshot FITS images.
+def _generate_local_movies(
+    work_dir: str, freq_str: str,
+    snap_dir: str = None, pols: list = None,
+) -> None:
+    """Generate raw + filtered MP4 movies from snapshot FITS images.
 
-    Produces up to three movies inside ``<work_dir>/Movies/``:
+    Produces movies inside ``<work_dir>/Movies/``:
 
     * ``<freq>_I_Raw.mp4``      — Stokes I time-lapse (grayscale)
     * ``<freq>_V_Raw.mp4``      — Stokes V time-lapse (grayscale)
@@ -327,19 +330,26 @@ def _generate_local_movies(work_dir: str, freq_str: str) -> None:
     step is silently skipped.
 
     Args:
-        work_dir: NVMe working directory (must contain a ``snapshots/`` subfolder).
+        work_dir: NVMe working directory.
         freq_str: Frequency label, e.g. ``'73MHz'``.
+        snap_dir: Directory containing snapshot FITS files.
+            Defaults to ``<work_dir>/snapshots/``.
+        pols: List of Stokes parameters to generate movies for.
+            Defaults to ``['I', 'V']``.
     """
     if animation is None:
         logger.warning("matplotlib.animation not available — skipping movie generation.")
         return
 
-    logger.info("Generating movies from pilot snapshots...")
+    logger.info("Generating movies from snapshots...")
     movie_dir = os.path.join(work_dir, "Movies")
     os.makedirs(movie_dir, exist_ok=True)
-    snap_dir = os.path.join(work_dir, "snapshots")
+    if snap_dir is None:
+        snap_dir = os.path.join(work_dir, "snapshots")
+    if pols is None:
+        pols = ['I', 'V']
 
-    for pol in ['I', 'V']:
+    for pol in pols:
         files = sorted(glob.glob(os.path.join(snap_dir, f"*{pol}-image*.fits")))
         if len(files) < 10:
             logger.info(f"Only {len(files)} {pol} snapshot frames — skipping movie.")
@@ -980,6 +990,16 @@ def process_subband_task(
                         except OSError:
                             pass
 
+                # Generate Stokes-I movies from clean snapshots before compression
+                try:
+                    _generate_local_movies(
+                        work_dir, subband,
+                        snap_dir=clean_snap_dir, pols=['I'],
+                    )
+                except Exception as e:
+                    logger.error(f"Clean snapshot I movie generation failed: {e}")
+                    traceback.print_exc()
+
                 # Always fpack-compress clean snapshots
                 _compress_snapshot_fits_dir(clean_snap_dir)
             except Exception as e:
@@ -1023,11 +1043,11 @@ def process_subband_task(
         logger.info(f"[TIMER] imaging_all: {time.time() - _t_imaging_all:.1f}s")
     
         # ------------------------------------------------------------------
-        #  7a. Movie generation from pilot snapshots
+        #  7a. Movie generation from dirty V snapshots
         # ------------------------------------------------------------------
         _t = time.time()
         try:
-            _generate_local_movies(work_dir, subband)
+            _generate_local_movies(work_dir, subband, pols=['V'])
         except Exception as e:
             logger.error(f"Movie generation failed: {e}")
             traceback.print_exc()

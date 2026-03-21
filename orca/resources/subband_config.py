@@ -147,7 +147,7 @@ SNAPSHOT_PARAMS = {
     'suffix': 'Pilot-Snapshot',
     'args': [
         '-log-time',
-        '-pol', 'IV',
+        '-pol', 'V',
         '-niter', '0',
         '-mem', '20',
         '-size', '4096', '4096',
