@@ -370,15 +370,21 @@ def _generate_local_movies(
             continue
 
         try:
-            cube = np.array(frames)
-            mid = len(cube) // 2
+            cube = np.array(frames, dtype=np.float32)
+            # Replace exact zeros (wsclean fill value) with NaN so they
+            # don't bias statistics or appear as valid data.
+            cube[cube == 0] = np.nan
+
+            # Use the median-across-time image for scaling so that a single
+            # bad (RFI-corrupted / all-NaN) frame doesn't set the colour scale.
+            ref_frame = np.nanmedian(cube, axis=0)
 
             # 1. Raw movie (both I and V) — grayscale
             if pol == 'V':
-                rms = np.nanstd(cube[mid])
+                rms = np.nanstd(ref_frame)
                 vmin, vmax = -5 * rms, 5 * rms
             else:
-                vmin, vmax = np.nanpercentile(cube[mid], [1, 99.5])
+                vmin, vmax = np.nanpercentile(ref_frame[np.isfinite(ref_frame)], [1, 99.5])
 
             fig = plt.figure(figsize=(8, 8))
             ax = fig.add_axes([0, 0, 1, 1])
@@ -392,10 +398,12 @@ def _generate_local_movies(
             logger.info(f"Saved {raw_path}")
 
             # 2. Filtered movie (Stokes I only — median subtraction)
+            # Use nanmedian so that bad frames don't corrupt every pixel of
+            # the median, and nanstd so the colour scale is robust.
             if pol == 'I':
-                med = np.median(cube, axis=0)
+                med = np.nanmedian(cube, axis=0)
                 diff = cube - med
-                rms = np.std(diff)
+                rms = np.nanstd(diff)
                 fig = plt.figure(figsize=(8, 8))
                 ax = fig.add_axes([0, 0, 1, 1])
                 ax.axis('off')
