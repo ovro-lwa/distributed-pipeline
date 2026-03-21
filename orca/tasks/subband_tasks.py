@@ -350,7 +350,11 @@ def _generate_local_movies(
         pols = ['I', 'V']
 
     for pol in pols:
-        files = sorted(glob.glob(os.path.join(snap_dir, f"*{pol}-image*.fits")))
+        # WSClean drops the pol identifier when imaging a single polarization,
+        # so files are named *-image.fits (not *-V-image.fits or *-I-image.fits).
+        # The snap_dir already only contains the relevant polarization, so
+        # glob for all image files regardless of pol label.
+        files = sorted(glob.glob(os.path.join(snap_dir, "*-image*.fits")))
         if len(files) < 10:
             logger.info(f"Only {len(files)} {pol} snapshot frames — skipping movie.")
             continue
@@ -926,7 +930,7 @@ def process_subband_task(
         )
     
         pilot_v = sorted(glob.glob(
-            os.path.join(work_dir, "snapshots", f"{pilot_name}*-V-image*.fits")
+            os.path.join(work_dir, "snapshots", f"{pilot_name}*-image*.fits")
         ))
         bad_idx, stats = analyze_snapshot_quality(pilot_v)
         plot_snapshot_diagnostics(stats, bad_idx, work_dir, subband)
