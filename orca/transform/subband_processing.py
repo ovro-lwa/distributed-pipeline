@@ -13,6 +13,7 @@ import glob
 import shutil
 import logging
 import subprocess
+import tarfile
 import traceback
 import json
 import numpy as np
@@ -75,26 +76,33 @@ def find_archive_files_for_subband(
     Returns:
         Sorted list of absolute paths to matching ``.ms`` directories.
     """
+    # Match both .ms directories and .ms.tar archives
     filename_pattern = re.compile(
-        r'(\d{8})_(\d{6})_' + re.escape(subband) + r'(?:|_averaged)\.ms'
+        r'(\d{8})_(\d{6})_' + re.escape(subband) + r'(?:|_averaged)\.ms(?:\.tar)?$'
     )
     file_list: List[str] = []
 
-    if input_dir:
-        search_pattern = os.path.join(input_dir, f'*{subband}*.ms')
-        for f_path in glob.glob(search_pattern):
-            filename = os.path.basename(f_path)
-            match = filename_pattern.search(filename)
-            if match:
-                date_str_file, time_str_file = match.groups()
-                try:
-                    file_start_dt = datetime.strptime(
-                        date_str_file + time_str_file, '%Y%m%d%H%M%S'
-                    )
-                    if start_dt <= (file_start_dt + timedelta(seconds=5)) < end_dt:
+    def _try_add(f_path: str, filename: str) -> None:
+        match = filename_pattern.search(filename)
+        if match:
+            date_str_file, time_str_file = match.groups()
+            try:
+                file_start_dt = datetime.strptime(
+                    date_str_file + time_str_file, '%Y%m%d%H%M%S'
+                )
+                if start_dt <= (file_start_dt + timedelta(seconds=5)) < end_dt:
+                    # Prefer .ms over .ms.tar when both exist
+                    ms_path = f_path.removesuffix('.tar') if f_path.endswith('.tar') else f_path
+                    tar_path = f_path if f_path.endswith('.tar') else f_path + '.tar'
+                    if ms_path not in file_list and tar_path not in file_list:
                         file_list.append(f_path)
-                except ValueError:
-                    pass
+            except ValueError:
+                pass
+
+    if input_dir:
+        for ext in ('*.ms', '*.ms.tar'):
+            for f_path in glob.glob(os.path.join(input_dir, f'*{subband}*{ext}')):
+                _try_add(f_path, os.path.basename(f_path))
     else:
         base_dir = '/lustre/pipeline/night-time/averaged/'
         current_hour = start_dt.replace(minute=0, second=0, microsecond=0)
@@ -105,17 +113,7 @@ def find_archive_files_for_subband(
             target_dir = os.path.join(base_dir, subband, date_str, hour_str)
             if os.path.isdir(target_dir):
                 for f in os.listdir(target_dir):
-                    match = filename_pattern.search(f)
-                    if match:
-                        date_str_file, time_str_file = match.groups()
-                        try:
-                            file_start_dt = datetime.strptime(
-                                date_str_file + time_str_file, '%Y%m%d%H%M%S'
-                            )
-                            if start_dt <= (file_start_dt + timedelta(seconds=5)) < end_dt:
-                                file_list.append(os.path.join(target_dir, f))
-                        except ValueError:
-                            pass
+                    _try_add(os.path.join(target_dir, f), f)
             current_hour += timedelta(hours=1)
 
     return sorted(file_list)
@@ -125,21 +123,39 @@ def find_archive_files_for_subband(
 #  Copy MS files to NVMe
 # ---------------------------------------------------------------------------
 def copy_ms_to_nvme(src_ms: str, nvme_work_dir: str) -> str:
-    """Copy a single MS directory to the NVMe work directory.
+    """Copy a single MS (directory or .ms.tar archive) to the NVMe work directory.
+
+    If *src_ms* is a ``.ms.tar`` file, it is extracted on NVMe and the path to
+    the extracted ``.ms`` directory is returned.
 
     Args:
-        src_ms: Source path on Lustre.
+        src_ms: Source path on Lustre (``.ms`` dir or ``.ms.tar`` file).
         nvme_work_dir: Target directory on local NVMe.
 
     Returns:
-        Path to the copied MS on NVMe.
+        Path to the ``.ms`` directory on NVMe.
     """
-    dest = os.path.join(nvme_work_dir, os.path.basename(src_ms))
-    if os.path.exists(dest):
-        shutil.rmtree(dest)
-    shutil.copytree(src_ms, dest)
-    logger.info(f"Copied {src_ms} → {dest}")
-    return dest
+    if src_ms.endswith('.ms.tar'):
+        # Extract tar archive to NVMe
+        ms_name = os.path.basename(src_ms).removesuffix('.tar')  # e.g. foo.ms
+        dest = os.path.join(nvme_work_dir, ms_name)
+        if os.path.exists(dest):
+            shutil.rmtree(dest)
+        with tarfile.open(src_ms, 'r') as tf:
+            tf.extractall(path=nvme_work_dir)
+        if not os.path.isdir(dest):
+            raise FileNotFoundError(
+                f"Expected {dest} after extracting {src_ms}, but it does not exist"
+            )
+        logger.info(f"Extracted {src_ms} → {dest}")
+        return dest
+    else:
+        dest = os.path.join(nvme_work_dir, os.path.basename(src_ms))
+        if os.path.exists(dest):
+            shutil.rmtree(dest)
+        shutil.copytree(src_ms, dest)
+        logger.info(f"Copied {src_ms} → {dest}")
+        return dest
 
 
 # ---------------------------------------------------------------------------
