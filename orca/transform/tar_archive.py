@@ -81,7 +81,7 @@ def untar_ms_archive(tar_path: str, dry_run: bool = False) -> bool:
 
     Returns True on success or skip, False on failure.
     """
-    ms_path = tar_path.removesuffix('.tar')
+    ms_path = tar_path[:-4]  # strip '.tar'
     parent = os.path.dirname(tar_path)
 
     if os.path.isdir(ms_path):

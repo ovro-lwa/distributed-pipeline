@@ -92,7 +92,7 @@ def find_archive_files_for_subband(
                 )
                 if start_dt <= (file_start_dt + timedelta(seconds=5)) < end_dt:
                     # Prefer .ms over .ms.tar when both exist
-                    ms_path = f_path.removesuffix('.tar') if f_path.endswith('.tar') else f_path
+                    ms_path = f_path[:-4] if f_path.endswith('.tar') else f_path
                     tar_path = f_path if f_path.endswith('.tar') else f_path + '.tar'
                     if ms_path not in file_list and tar_path not in file_list:
                         file_list.append(f_path)
@@ -137,7 +137,7 @@ def copy_ms_to_nvme(src_ms: str, nvme_work_dir: str) -> str:
     """
     if src_ms.endswith('.ms.tar'):
         # Extract tar archive to NVMe
-        ms_name = os.path.basename(src_ms).removesuffix('.tar')  # e.g. foo.ms
+        ms_name = os.path.basename(src_ms)[:-4]  # e.g. foo.ms
         dest = os.path.join(nvme_work_dir, ms_name)
         if os.path.exists(dest):
             shutil.rmtree(dest)
