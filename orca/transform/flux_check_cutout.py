@@ -95,13 +95,19 @@ def process_cutout(img_path, source_name, source_data, temp_dir):
 
             imfit_flux, imfit_err = np.nan, np.nan
             if CASA_TASKS_AVAILABLE:
-                try:
-                    fit = imfit(imagename=temp_path, box=box)
-                    if fit and fit.get('converged') and 'results' in fit:
-                        imfit_flux = fit['results']['component0']['flux']['value'][0]
-                        imfit_err = fit['results']['component0']['flux']['error'][0]
-                except Exception:
-                    pass
+                # Guard: imfit will SIGABRT (C++ terminate) if the image
+                # has no beam or the box region is entirely NaN/zero.
+                has_beam = all(kw in cut_header for kw in ('BMAJ', 'BMIN', 'BPA'))
+                box_data = cutout.data[y1:y2+1, x1:x2+1]
+                has_valid = np.any(np.isfinite(box_data) & (box_data != 0))
+                if has_beam and has_valid:
+                    try:
+                        fit = imfit(imagename=temp_path, box=box)
+                        if fit and fit.get('converged') and 'results' in fit:
+                            imfit_flux = fit['results']['component0']['flux']['value'][0]
+                            imfit_err = fit['results']['component0']['flux']['error'][0]
+                    except Exception:
+                        pass
 
             return {'imfit_flux': imfit_flux, 'imfit_err': imfit_err, 'elevation': el}
     except Exception:
