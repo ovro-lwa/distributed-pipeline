@@ -197,6 +197,10 @@ def main():
     parser.add_argument('--compress_snapshots', action='store_true',
                         help='Compress snapshot FITS with fpack (.fits → .fits.fs). '
                              'Originals are deleted. Deep images are NOT compressed.')
+    parser.add_argument('--snapshot_only', action='store_true',
+                        help='Lightweight mode: skip pilot V, deep imaging, V movies, '
+                             'QA, and science. Only produce clean Stokes-I snapshots '
+                             'and I movies (Raw + Filtered). For reprocessing old dates.')
     parser.add_argument('--remap', nargs='+', default=None, metavar='SUBBAND=NODE',
                         help='Override node routing, e.g. --remap 18MHz=calim08 23MHz=calim08')
     parser.add_argument('--dynamic', action='store_true',
@@ -319,6 +323,7 @@ def main():
                     'reduced_pixels': args.reduced_pixels,
                     'skip_science': args.skip_science,
                     'compress_snapshots': args.compress_snapshots,
+                    'snapshot_only': args.snapshot_only,
                 })
 
         if not all_work_units:
@@ -469,6 +474,7 @@ def main():
             reduced_pixels=args.reduced_pixels,
             skip_science=args.skip_science,
             compress_snapshots=args.compress_snapshots,
+            snapshot_only=args.snapshot_only,
         )
         results.append({
             'subband': subband,
