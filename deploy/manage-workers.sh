@@ -19,8 +19,16 @@ AVAILABLE_NODES=(calim00 calim01 calim03 calim04 calim05 calim06 calim07 calim08
 
 REPO_DIR="/opt/devel/nkosogor/nkosogor/distributed-pipeline"
 CONDA_ENV="/opt/devel/pipeline/envs/py38_orca_nkosogor"
-CONCURRENCY=45
+CONCURRENCY=45   # default for calim00 calim01 calim03 calim04
 LOGLEVEL="INFO"
+
+# Per-node concurrency overrides (lower for nodes with less RAM/CPU)
+declare -A CONCURRENCY_MAP
+CONCURRENCY_MAP[calim05]=20
+CONCURRENCY_MAP[calim06]=20
+CONCURRENCY_MAP[calim07]=20
+CONCURRENCY_MAP[calim08]=20
+CONCURRENCY_MAP[calim09]=20
 
 # PID and log file locations (no sudo needed — user-writable dirs)
 PID_DIR="${REPO_DIR}/deploy/pids"
@@ -83,6 +91,7 @@ cmd_start() {
 
         echo "Starting worker on ${node}..."
         ssh_cmd "$node" "mkdir -p ${PID_DIR} ${LOG_DIR}"
+        local node_concurrency=${CONCURRENCY_MAP[$node]:-$CONCURRENCY}
         ssh_cmd "$node" bash <<EOF
             eval "\$(conda shell.bash hook)"
             conda activate ${CONDA_ENV}
@@ -91,7 +100,7 @@ cmd_start() {
             nohup celery -A orca.celery worker \\
                 -Q ${node} \\
                 --hostname=${node}@\$(hostname) \\
-                -c ${CONCURRENCY} \\
+                -c ${node_concurrency} \\
                 --loglevel=${LOGLEVEL} \\
                 --without-mingle \\
                 --pidfile=${PID_DIR}/${node}.pid \\
