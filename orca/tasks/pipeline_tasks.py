@@ -324,7 +324,7 @@ def run_cosmology_pipeline_on_nvme(
     self,
     vis: str,
     chanbin: int = 4,
-    base_output_dir: str = '/lustre/pipeline/cosmology/averaged/',
+    base_output_dir: str = '/lustre/pipeline/night-time/averaged/',
     aoflagger_strategy: str = None,
     nvme_base_dir: str = '/fast/pipeline/',
 ) -> str:
@@ -430,7 +430,7 @@ def resume_cosmology_copy_pipeline_on_nvme(
     self,
     copy_ms: str,
     chanbin: int = 4,
-    base_output_dir: str = '/lustre/pipeline/cosmology/averaged/',
+    base_output_dir: str = '/lustre/pipeline/night-time/averaged/',
     aoflagger_strategy: str = None,
     nvme_base_dir: str = '/fast/pipeline/',
 ) -> str:
