@@ -91,7 +91,7 @@ def find_archive_files_for_subband(
                     date_str_file + time_str_file, '%Y%m%d%H%M%S'
                 )
                 if start_dt <= (file_start_dt + timedelta(seconds=5)) < end_dt:
-                    # Prefer .ms over .ms.tar when both exist
+                    # Prefer .ms.tar over .ms when both exist
                     ms_path = f_path[:-4] if f_path.endswith('.tar') else f_path
                     tar_path = f_path if f_path.endswith('.tar') else f_path + '.tar'
                     if ms_path not in file_list and tar_path not in file_list:
@@ -100,7 +100,7 @@ def find_archive_files_for_subband(
                 pass
 
     if input_dir:
-        for ext in ('*.ms', '*.ms.tar'):
+        for ext in ('*.ms.tar', '*.ms'):
             for f_path in glob.glob(os.path.join(input_dir, f'*{subband}*{ext}')):
                 _try_add(f_path, os.path.basename(f_path))
     else:
@@ -112,7 +112,11 @@ def find_archive_files_for_subband(
             hour_str = current_hour.strftime('%H')
             target_dir = os.path.join(base_dir, subband, date_str, hour_str)
             if os.path.isdir(target_dir):
-                for f in os.listdir(target_dir):
+                # Sort reverse so .ms.tar is encountered before .ms for the
+                # same timestamp ('.ms.tar' > '.ms' lexicographically),
+                # guaranteeing the .ms.tar archive is preferred when both
+                # coexist.
+                for f in sorted(os.listdir(target_dir), reverse=True):
                     _try_add(os.path.join(target_dir, f), f)
             current_hour += timedelta(hours=1)
 
