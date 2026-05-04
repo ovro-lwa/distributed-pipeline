@@ -36,6 +36,16 @@ execs:
 cluster: calim
 ```
 
+## Developer Tools (optional)
+
+[Claude Code](https://docs.anthropic.com/en/docs/claude-code) is installed in the conda environment as a development assistant.
+`nodejs>=18` is tracked in `environment.yaml` and installed via conda. After creating the env, install the npm package manually:
+
+```bash
+npm install -g @anthropic-ai/claude-code
+claude --version  # verify
+```
+
 ## Dependencies
 
 The full list of dependencies is in `requirements.txt`. Key packages include:
