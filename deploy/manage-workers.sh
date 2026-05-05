@@ -19,7 +19,7 @@ AVAILABLE_NODES=(calim00 calim01 calim03 calim04 calim05 calim06 calim07 calim08
 
 REPO_DIR="/opt/devel/nkosogor/nkosogor/distributed-pipeline"
 CONDA_ENV="/opt/devel/pipeline/envs/py38_orca_nkosogor"
-CONCURRENCY=45   # default for calim00 calim01 calim03 calim04
+CONCURRENCY=40   # default for calim00 calim01 calim03 calim04
 LOGLEVEL="INFO"
 
 # Per-node concurrency overrides (lower for nodes with less RAM/CPU)
