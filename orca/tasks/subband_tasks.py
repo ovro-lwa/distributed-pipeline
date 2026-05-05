@@ -90,6 +90,7 @@ from orca.transform.subband_processing import (
     apply_pb_correction_to_images,
     find_deep_image,
     extract_sources_to_df,
+    stage_refs_to_nvme,
 )
 from orca.configmanager import queue_config
 from orca.resources.subband_config import (
@@ -590,6 +591,25 @@ def prepare_one_ms_task(
     os.makedirs(nvme_work_dir, exist_ok=True)
     redirect_casa_log(nvme_work_dir)
 
+    # 0. Stage Lustre reference files (cal tables + peel models) onto NVMe.
+    #    Idempotent and flock-protected, so concurrent Phase-1 tasks for the
+    #    same (subband, hour) work unit copy each ref exactly once per node.
+    _t = time.time()
+    staged = stage_refs_to_nvme(
+        nvme_work_dir,
+        {
+            'bp_table': bp_table,
+            'xy_table': xy_table,
+            'sky_model': PEELING_PARAMS['sky_model'] if peel_sky else None,
+            'rfi_model': PEELING_PARAMS['rfi_model'] if peel_rfi else None,
+        },
+    )
+    bp_table_nvme = staged['bp_table']
+    xy_table_nvme = staged['xy_table']
+    sky_model_nvme = staged['sky_model']
+    rfi_model_nvme = staged['rfi_model']
+    logger.info(f"[TIMER] stage_refs: {time.time() - _t:.1f}s")
+
     # 1. Copy to NVMe
     _t = time.time()
     nvme_ms = copy_ms_to_nvme(src_ms, nvme_work_dir)
@@ -600,9 +620,9 @@ def prepare_one_ms_task(
     flag_bad_antennas(nvme_ms)
     logger.info(f"[TIMER] flag_bad_antennas: {time.time() - _t:.1f}s")
 
-    # 3. Apply calibration (bandpass + XY-phase)
+    # 3. Apply calibration (bandpass + XY-phase) — read from NVMe copies
     _t = time.time()
-    cal_ok = apply_calibration(nvme_ms, bp_table, xy_table)
+    cal_ok = apply_calibration(nvme_ms, bp_table_nvme, xy_table_nvme)
     logger.info(f"[TIMER] apply_calibration: {time.time() - _t:.1f}s")
     if not cal_ok:
         logger.error(f"Calibration failed for {os.path.basename(nvme_ms)}; removing")
@@ -615,7 +635,7 @@ def prepare_one_ms_task(
         logger.info(f"Peeling sky model on {os.path.basename(nvme_ms)}")
         zest_with_ttcal(
             ms=nvme_ms,
-            sources=PEELING_PARAMS['sky_model'],
+            sources=sky_model_nvme,
             beam=PEELING_PARAMS['beam'],
             minuvw=PEELING_PARAMS['minuvw'],
             maxiter=PEELING_PARAMS['maxiter'],
@@ -638,7 +658,7 @@ def prepare_one_ms_task(
             peel_env["OMP_NUM_THREADS"] = "8"
             cmd = (
                 f"source ~/.bashrc && conda activate {rfi_env} && "
-                f"ttcal.jl zest {nvme_ms} {PEELING_PARAMS['rfi_model']} "
+                f"ttcal.jl zest {nvme_ms} {rfi_model_nvme} "
                 f"{PEELING_PARAMS['args']}"
             )
             import subprocess
@@ -649,7 +669,7 @@ def prepare_one_ms_task(
         else:
             zest_with_ttcal(
                 ms=nvme_ms,
-                sources=PEELING_PARAMS['rfi_model'],
+                sources=rfi_model_nvme,
                 beam=PEELING_PARAMS['beam'],
                 minuvw=PEELING_PARAMS['minuvw'],
                 maxiter=PEELING_PARAMS['maxiter'],
@@ -907,9 +927,14 @@ def process_subband_task(
         # ------------------------------------------------------------------
         _t = time.time()
         aoflagger_bin = os.environ.get('AOFLAGGER_BIN', '/opt/bin/aoflagger')
-        logger.info(f"Running AOFlagger with strategy {AOFLAGGER_STRATEGY}")
+        # Stage the strategy lua to NVMe (re-uses existing copy if already
+        # placed there by Phase 1 of this work unit).
+        aoflagger_strategy_nvme = stage_refs_to_nvme(
+            work_dir, {'aoflagger_strategy': AOFLAGGER_STRATEGY},
+        )['aoflagger_strategy']
+        logger.info(f"Running AOFlagger with strategy {aoflagger_strategy_nvme}")
         run_subprocess(
-            [aoflagger_bin, '-strategy', AOFLAGGER_STRATEGY, concat_ms],
+            [aoflagger_bin, '-strategy', aoflagger_strategy_nvme, concat_ms],
             "AOFlagger (Post-Concat)",
         )
         logger.info(f"[TIMER] aoflagger: {time.time() - _t:.1f}s")

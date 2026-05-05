@@ -16,6 +16,7 @@ import subprocess
 import tarfile
 import traceback
 import json
+import fcntl
 import numpy as np
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple, Dict
@@ -160,6 +161,67 @@ def copy_ms_to_nvme(src_ms: str, nvme_work_dir: str) -> str:
         shutil.copytree(src_ms, dest)
         logger.info(f"Copied {src_ms} → {dest}")
         return dest
+
+
+# ---------------------------------------------------------------------------
+#  Reference-file staging Lustre → NVMe
+# ---------------------------------------------------------------------------
+def stage_refs_to_nvme(
+    work_dir: str, refs: Dict[str, Optional[str]],
+) -> Dict[str, Optional[str]]:
+    """Stage Lustre reference files / cal tables to ``<work_dir>/refs/``.
+
+    Used to avoid hammering Lustre on every per-MS task: each reference is
+    copied once per node-per-work_dir, then all subsequent tasks read from
+    NVMe. Concurrent-safe via a per-work_dir ``flock``; idempotent (re-uses
+    existing copies). Handles both files (peel JSONs, AOFlagger lua) and
+    directory trees (CASA cal tables).
+
+    Args:
+        work_dir: NVMe work directory; a ``refs`` sub-dir is created inside.
+        refs: mapping of logical name → source path on Lustre. Values that
+            are ``None`` or empty pass through unchanged (lets callers skip
+            optional references cleanly).
+
+    Returns:
+        Same keys mapped to the NVMe path (or the original ``None``).
+    """
+    refs_dir = os.path.join(work_dir, 'refs')
+    os.makedirs(refs_dir, exist_ok=True)
+    lock_path = os.path.join(refs_dir, '.stage.lock')
+    out: Dict[str, Optional[str]] = {}
+    with open(lock_path, 'w') as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            for name, src in refs.items():
+                if not src:
+                    out[name] = src
+                    continue
+                base = os.path.basename(src.rstrip('/'))
+                dst = os.path.join(refs_dir, base)
+                if not os.path.exists(dst):
+                    tmp = dst + '.partial'
+                    if os.path.lexists(tmp):
+                        if os.path.isdir(tmp) and not os.path.islink(tmp):
+                            shutil.rmtree(tmp)
+                        else:
+                            os.remove(tmp)
+                    if os.path.isdir(src):
+                        shutil.copytree(src, tmp)
+                        os.rename(tmp, dst)
+                        logger.info(f"Staged ref dir  {src} → {dst}")
+                    elif os.path.isfile(src):
+                        shutil.copy2(src, tmp)
+                        os.rename(tmp, dst)
+                        logger.info(f"Staged ref file {src} → {dst}")
+                    else:
+                        raise FileNotFoundError(
+                            f"Reference path not found on Lustre: {src}"
+                        )
+                out[name] = dst
+        finally:
+            fcntl.flock(lk, fcntl.LOCK_UN)
+    return out
 
 
 # ---------------------------------------------------------------------------
