@@ -195,7 +195,7 @@ def main():
                         help='(Deprecated, no-op) Per-subband pixel scaling is '
                              'now always applied to all imaging.')
     parser.add_argument('--compress_snapshots', action='store_true',
-                        help='Compress snapshot FITS with fpack (.fits → .fits.fs). '
+                        help='Compress snapshot FITS with fpack (.fits → .fits.fz). '
                              'Originals are deleted. Deep images are NOT compressed.')
     parser.add_argument('--snapshot_only', action='store_true',
                         help='Lightweight mode: skip pilot V, deep imaging, V movies, '

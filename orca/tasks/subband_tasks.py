@@ -452,8 +452,8 @@ def _cleanup_psf_files(work_dir: str) -> int:
 def _compress_snapshot_fits(work_dir: str) -> int:
     """Compress all FITS files in ``snapshots/`` using fpack.
 
-    Each ``*.fits`` file is compressed to ``*.fits.fz`` by fpack, then
-    renamed to ``*.fits.fs``.  The original uncompressed FITS is deleted.
+    Each ``*.fits`` file is compressed to ``*.fits.fz`` by fpack.
+    The original uncompressed FITS is deleted.
 
     Only snapshot images are compressed — deep images in ``I/`` and ``V/``
     are left as-is.
@@ -471,7 +471,7 @@ def _compress_snapshot_fits(work_dir: str) -> int:
 
 
 def _compress_snapshot_fits_dir(snap_dir: str) -> int:
-    """Compress all ``*.fits`` in *snap_dir* via fpack → ``.fits.fs``.
+    """Compress all ``*.fits`` in *snap_dir* via fpack → ``.fits.fz``.
 
     Returns:
         Number of files successfully compressed.
@@ -500,7 +500,6 @@ def _compress_snapshot_fits_dir(snap_dir: str) -> int:
     compressed = 0
     for fpath in fits_files:
         fz_path = fpath + ".fz"
-        fs_path = fpath + ".fs"
         try:
             subprocess.run(
                 fpack_cmd + ["-v", fpath],
@@ -508,7 +507,6 @@ def _compress_snapshot_fits_dir(snap_dir: str) -> int:
                 check=True,
             )
             if os.path.exists(fz_path):
-                os.rename(fz_path, fs_path)
                 os.remove(fpath)
                 compressed += 1
             else:
@@ -518,7 +516,7 @@ def _compress_snapshot_fits_dir(snap_dir: str) -> int:
         except OSError as e:
             logger.error(f"Compress file error {os.path.basename(fpath)}: {e}")
 
-    logger.info(f"Compressed {compressed}/{len(fits_files)} snapshot FITS → .fs")
+    logger.info(f"Compressed {compressed}/{len(fits_files)} snapshot FITS → .fz")
     return compressed
 
 
@@ -754,7 +752,7 @@ def process_subband_task(
         skip_science: If True, skip all science phases (dewarping, photometry,
             transient search, flux check) after PB correction. Products
             are still archived to Lustre.
-        compress_snapshots: If True, fpack-compress all snapshot FITS to .fs
+        compress_snapshots: If True, fpack-compress all snapshot FITS to .fz
             and remove the originals.  Deep images are not compressed.
         snapshot_only: If True, skip pilot V, hot baselines, deep imaging,
             V movies, QA, and science. Only produce clean Stokes-I snapshots
