@@ -1082,22 +1082,23 @@ def archive_results(
 
         logger.info(f"Detections archived to {lustre_det_root}")
 
+    # Archive concat MS to Lustre first (before any NVMe cleanup)
+    if archive_concat_ms:
+        for ms in glob.glob(os.path.join(work_dir, "*_concat.ms")):
+            if os.path.exists(ms):
+                dest = os.path.join(archive_base, os.path.basename(ms))
+                if os.path.exists(dest):
+                    shutil.rmtree(dest)
+                shutil.copytree(ms, dest)
+                logger.info(f"Archived concat MS → {dest}")
+
     if cleanup_workdir:
         shutil.rmtree(work_dir)
         logger.info(f"Cleaned up entire work_dir: {work_dir}")
-    else:
-        if archive_concat_ms:
-            for ms in glob.glob(os.path.join(work_dir, "*_concat.ms")):
-                if os.path.exists(ms):
-                    dest = os.path.join(archive_base, os.path.basename(ms))
-                    if os.path.exists(dest):
-                        shutil.rmtree(dest)
-                    shutil.copytree(ms, dest)
-                    logger.info(f"Archived concat MS → {dest}")
-        if cleanup_concat:
-            for ms in glob.glob(os.path.join(work_dir, "*_concat.ms")):
-                if os.path.exists(ms):
-                    shutil.rmtree(ms)
-                    logger.info(f"Cleaned up {ms}")
+    elif cleanup_concat:
+        for ms in glob.glob(os.path.join(work_dir, "*_concat.ms")):
+            if os.path.exists(ms):
+                shutil.rmtree(ms)
+                logger.info(f"Cleaned up {ms}")
 
     return archive_base
