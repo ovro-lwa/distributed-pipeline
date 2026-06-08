@@ -939,6 +939,7 @@ def archive_results(
     subband: str = '',
     cleanup_concat: bool = True,
     cleanup_workdir: bool = False,
+    archive_concat_ms: bool = False,
 ) -> str:
     """Copy pipeline products from NVMe work_dir to Lustre archive.
 
@@ -955,6 +956,10 @@ def archive_results(
         cleanup_concat: Whether to remove concat MS on NVMe.
         cleanup_workdir: Whether to remove the entire work_dir after archiving.
             Supersedes cleanup_concat when True.
+        archive_concat_ms: If True, copy the concatenated MS
+            (``<subband>_concat.ms``) to ``archive_base/`` before removing
+            it from NVMe. Ignored when ``cleanup_workdir`` is True (the
+            entire work_dir is removed regardless).
 
     Returns:
         The archive_base path.
@@ -1080,10 +1085,19 @@ def archive_results(
     if cleanup_workdir:
         shutil.rmtree(work_dir)
         logger.info(f"Cleaned up entire work_dir: {work_dir}")
-    elif cleanup_concat:
-        for ms in glob.glob(os.path.join(work_dir, "*_concat.ms")):
-            if os.path.exists(ms):
-                shutil.rmtree(ms)
-                logger.info(f"Cleaned up {ms}")
+    else:
+        if archive_concat_ms:
+            for ms in glob.glob(os.path.join(work_dir, "*_concat.ms")):
+                if os.path.exists(ms):
+                    dest = os.path.join(archive_base, os.path.basename(ms))
+                    if os.path.exists(dest):
+                        shutil.rmtree(dest)
+                    shutil.copytree(ms, dest)
+                    logger.info(f"Archived concat MS → {dest}")
+        if cleanup_concat:
+            for ms in glob.glob(os.path.join(work_dir, "*_concat.ms")):
+                if os.path.exists(ms):
+                    shutil.rmtree(ms)
+                    logger.info(f"Cleaned up {ms}")
 
     return archive_base

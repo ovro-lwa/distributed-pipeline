@@ -197,6 +197,10 @@ def main():
     parser.add_argument('--compress_snapshots', action='store_true',
                         help='Compress snapshot FITS with fpack (.fits → .fits.fz). '
                              'Originals are deleted. Deep images are NOT compressed.')
+    parser.add_argument('--archive_concat_ms', action='store_true',
+                        help='Copy the concatenated MS (<subband>_concat.ms) to the '
+                             'Lustre archive directory before removing it from NVMe. '
+                             'Ignored when --cleanup_nvme is set (entire work_dir removed).')
     parser.add_argument('--snapshot_only', action='store_true',
                         help='Lightweight mode: skip pilot V, deep imaging, V movies, '
                              'QA, and science. Only produce clean Stokes-I snapshots '
@@ -324,6 +328,7 @@ def main():
                     'skip_science': args.skip_science,
                     'compress_snapshots': args.compress_snapshots,
                     'snapshot_only': args.snapshot_only,
+                    'archive_concat_ms': args.archive_concat_ms,
                 })
 
         if not all_work_units:
@@ -475,6 +480,7 @@ def main():
             skip_science=args.skip_science,
             compress_snapshots=args.compress_snapshots,
             snapshot_only=args.snapshot_only,
+            archive_concat_ms=args.archive_concat_ms,
         )
         results.append({
             'subband': subband,

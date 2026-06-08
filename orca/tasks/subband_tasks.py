@@ -712,6 +712,7 @@ def process_subband_task(
     skip_science: bool = False,
     compress_snapshots: bool = False,
     snapshot_only: bool = False,
+    archive_concat_ms: bool = False,
     remaining_hours: Optional[List[dict]] = None,
     dynamic_run_label: Optional[str] = None,
     bp_table: Optional[str] = None,
@@ -839,6 +840,7 @@ def process_subband_task(
                     'clean_snapshots': clean_snapshots,
                     'skip_science': skip_science,
                     'compress_snapshots': compress_snapshots,
+                    'archive_concat_ms': archive_concat_ms,
                 },
                 'imaging': {
                     'pixel_size': get_pixel_size(subband),
@@ -1453,6 +1455,7 @@ def process_subband_task(
             subband=subband,
             cleanup_concat=not skip_cleanup,
             cleanup_workdir=cleanup_nvme,
+            archive_concat_ms=archive_concat_ms,
         )
         logger.info(f"[TIMER] archive_to_lustre: {time.time() - _t:.1f}s")
     
@@ -1474,6 +1477,7 @@ def process_subband_task(
                 subband=subband,
                 cleanup_concat=not skip_cleanup,
                 cleanup_workdir=False,
+                archive_concat_ms=archive_concat_ms,
             )
             logger.info(f"Partial archive saved to {archive_base}")
         except Exception as archive_exc:
@@ -1529,6 +1533,7 @@ def submit_subband_pipeline(
     skip_science: bool = False,
     compress_snapshots: bool = False,
     snapshot_only: bool = False,
+    archive_concat_ms: bool = False,
     remaining_hours: Optional[List[dict]] = None,
     dynamic_run_label: Optional[str] = None,
 ) -> 'celery.result.AsyncResult':
@@ -1603,6 +1608,7 @@ def submit_subband_pipeline(
         skip_science=skip_science,
         compress_snapshots=compress_snapshots,
         snapshot_only=snapshot_only,
+        archive_concat_ms=archive_concat_ms,
         remaining_hours=remaining_hours,
         dynamic_run_label=dynamic_run_label,
         bp_table=bp_table,
@@ -1697,6 +1703,7 @@ def submit_subband_pipeline_chained(
     skip_science: bool = False,
     compress_snapshots: bool = False,
     snapshot_only: bool = False,
+    archive_concat_ms: bool = False,
 ) -> 'celery.result.AsyncResult':
     """Submit multiple LST-hours for one subband as a sequential chain.
 
@@ -1769,6 +1776,7 @@ def submit_subband_pipeline_chained(
             skip_science=skip_science,
             compress_snapshots=compress_snapshots,
             snapshot_only=snapshot_only,
+            archive_concat_ms=archive_concat_ms,
         )
         all_hour_kwargs.append(kwargs)
 
