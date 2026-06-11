@@ -563,6 +563,7 @@ def prepare_one_ms_task(
     xy_table: str,
     peel_sky: bool = False,
     peel_rfi: bool = False,
+    peel_maxiter: Optional[int] = None,
 ) -> str:
     """Copy one MS to NVMe, flag, calibrate, and optionally peel.
 
@@ -576,6 +577,7 @@ def prepare_one_ms_task(
         xy_table: XY-phase calibration table path.
         peel_sky: Run TTCal zest with sky model.
         peel_rfi: Run TTCal zest with RFI model.
+        peel_maxiter: Override max iterations for peeling (default: PEELING_PARAMS['maxiter']).
 
     Returns:
         Path to the processed MS on NVMe.
@@ -628,15 +630,16 @@ def prepare_one_ms_task(
         raise RuntimeError(f"Calibration failed for {src_ms}")
 
     # 4. Peeling
+    _peel_maxiter = peel_maxiter if peel_maxiter is not None else PEELING_PARAMS['maxiter']
     if peel_sky:
         _t = time.time()
-        logger.info(f"Peeling sky model on {os.path.basename(nvme_ms)}")
+        logger.info(f"Peeling sky model on {os.path.basename(nvme_ms)} (maxiter={_peel_maxiter})")
         zest_with_ttcal(
             ms=nvme_ms,
             sources=sky_model_nvme,
             beam=PEELING_PARAMS['beam'],
             minuvw=PEELING_PARAMS['minuvw'],
-            maxiter=PEELING_PARAMS['maxiter'],
+            maxiter=_peel_maxiter,
             tolerance=PEELING_PARAMS['tolerance'],
         )
         logger.info(f"[TIMER] peel_sky: {time.time() - _t:.1f}s")
@@ -654,10 +657,14 @@ def prepare_one_ms_task(
             # Shell-based invocation matching process_subband.py
             peel_env = os.environ.copy()
             peel_env["OMP_NUM_THREADS"] = "8"
+            _rfi_args = PEELING_PARAMS['args'].replace(
+                f"--maxiter {PEELING_PARAMS['maxiter']}",
+                f"--maxiter {_peel_maxiter}",
+            )
             cmd = (
                 f"source ~/.bashrc && conda activate {rfi_env} && "
                 f"ttcal.jl zest {nvme_ms} {rfi_model_nvme} "
-                f"{PEELING_PARAMS['args']}"
+                f"{_rfi_args}"
             )
             import subprocess
             subprocess.run(
@@ -670,7 +677,7 @@ def prepare_one_ms_task(
                 sources=rfi_model_nvme,
                 beam=PEELING_PARAMS['beam'],
                 minuvw=PEELING_PARAMS['minuvw'],
-                maxiter=PEELING_PARAMS['maxiter'],
+                maxiter=_peel_maxiter,
                 tolerance=PEELING_PARAMS['tolerance'],
             )
         logger.info(f"[TIMER] peel_rfi: {time.time() - _t:.1f}s")
@@ -717,6 +724,7 @@ def process_subband_task(
     dynamic_run_label: Optional[str] = None,
     bp_table: Optional[str] = None,
     xy_table: Optional[str] = None,
+    peel_maxiter: Optional[int] = None,
 ) -> str:
     """Phase 2: concatenate, image, run science, and archive one subband.
 
@@ -841,6 +849,7 @@ def process_subband_task(
                     'skip_science': skip_science,
                     'compress_snapshots': compress_snapshots,
                     'archive_concat_ms': archive_concat_ms,
+                    'peel_maxiter': peel_maxiter,
                 },
                 'imaging': {
                     'pixel_size': get_pixel_size(subband),
@@ -1520,6 +1529,7 @@ def submit_subband_pipeline(
     run_label: str,
     peel_sky: bool = False,
     peel_rfi: bool = False,
+    peel_maxiter: Optional[int] = None,
     hot_baselines: bool = False,
     skip_cleanup: bool = False,
     cleanup_nvme: bool = False,
@@ -1586,6 +1596,7 @@ def submit_subband_pipeline(
             xy_table=xy_table,
             peel_sky=peel_sky,
             peel_rfi=peel_rfi,
+            peel_maxiter=peel_maxiter,
         ).set(queue=queue)
         for ms in ms_files
     ]
@@ -1613,6 +1624,7 @@ def submit_subband_pipeline(
         dynamic_run_label=dynamic_run_label,
         bp_table=bp_table,
         xy_table=xy_table,
+        peel_maxiter=peel_maxiter,
     ).set(queue=queue)
 
     # Error handler: if all Phase 1 retries fail the chord never fires
@@ -1691,6 +1703,7 @@ def submit_subband_pipeline_chained(
     run_label: str,
     peel_sky: bool = False,
     peel_rfi: bool = False,
+    peel_maxiter: Optional[int] = None,
     hot_baselines: bool = False,
     skip_cleanup: bool = False,
     cleanup_nvme: bool = False,
@@ -1764,6 +1777,7 @@ def submit_subband_pipeline_chained(
             run_label=run_label,
             peel_sky=peel_sky,
             peel_rfi=peel_rfi,
+            peel_maxiter=peel_maxiter,
             hot_baselines=hot_baselines,
             skip_cleanup=skip_cleanup,
             cleanup_nvme=cleanup_nvme,
