@@ -146,4 +146,4 @@ timm==0.9.16
 einops>=0.6
 tqdm
 reportlab
-healpy==1.16.6
+healpy==1.16.5  # last release supporting Python 3.8 (1.16.6+ requires >=3.9)
