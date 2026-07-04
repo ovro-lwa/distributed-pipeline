@@ -146,3 +146,4 @@ timm==0.9.16
 einops>=0.6
 tqdm
 reportlab
+healpy==1.16.6
