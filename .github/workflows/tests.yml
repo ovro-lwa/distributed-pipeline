@@ -14,19 +14,19 @@ jobs:
     
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           lfs: true  # Fetch LFS files (test data)
 
       - name: Cache conda environment
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         id: cache-conda
         with:
           path: ~/conda_pkgs_dir
           key: conda-${{ runner.os }}-${{ hashFiles('environment.yaml', 'requirements.txt') }}
 
       - name: Set up Miniconda
-        uses: conda-incubator/setup-miniconda@v3
+        uses: conda-incubator/setup-miniconda@v4
         with:
           activate-environment: orca-env
           environment-file: environment.yaml
@@ -44,11 +44,11 @@ jobs:
       - name: Run tests
         shell: bash -el {0}
         run: |
-          pytest tests/ --cov=orca --cov-report=xml -v --tb=short
+          python -m pytest tests/ --cov=orca --cov-report=xml -v --tb=short
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        if: always()
+        uses: codecov/codecov-action@v6
+        if: ${{ hashFiles('coverage.xml') != '' }}
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
