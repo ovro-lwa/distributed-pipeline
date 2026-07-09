@@ -90,6 +90,7 @@ from orca.transform.subband_processing import (
     apply_pb_correction_to_images,
     find_deep_image,
     extract_sources_to_df,
+    stage_refs_to_nvme,
 )
 from orca.configmanager import queue_config
 from orca.resources.subband_config import (
@@ -314,10 +315,13 @@ def _trigger_next_and_cleanup(
             pass
 
 
-def _generate_local_movies(work_dir: str, freq_str: str) -> None:
-    """Generate raw + filtered MP4 movies from pilot snapshot FITS images.
+def _generate_local_movies(
+    work_dir: str, freq_str: str,
+    snap_dir: str = None, pols: list = None,
+) -> None:
+    """Generate raw + filtered MP4 movies from snapshot FITS images.
 
-    Produces up to three movies inside ``<work_dir>/Movies/``:
+    Produces movies inside ``<work_dir>/Movies/``:
 
     * ``<freq>_I_Raw.mp4``      — Stokes I time-lapse (grayscale)
     * ``<freq>_V_Raw.mp4``      — Stokes V time-lapse (grayscale)
@@ -327,20 +331,31 @@ def _generate_local_movies(work_dir: str, freq_str: str) -> None:
     step is silently skipped.
 
     Args:
-        work_dir: NVMe working directory (must contain a ``snapshots/`` subfolder).
+        work_dir: NVMe working directory.
         freq_str: Frequency label, e.g. ``'73MHz'``.
+        snap_dir: Directory containing snapshot FITS files.
+            Defaults to ``<work_dir>/snapshots/``.
+        pols: List of Stokes parameters to generate movies for.
+            Defaults to ``['I', 'V']``.
     """
     if animation is None:
         logger.warning("matplotlib.animation not available — skipping movie generation.")
         return
 
-    logger.info("Generating movies from pilot snapshots...")
+    logger.info("Generating movies from snapshots...")
     movie_dir = os.path.join(work_dir, "Movies")
     os.makedirs(movie_dir, exist_ok=True)
-    snap_dir = os.path.join(work_dir, "snapshots")
+    if snap_dir is None:
+        snap_dir = os.path.join(work_dir, "snapshots")
+    if pols is None:
+        pols = ['I', 'V']
 
-    for pol in ['I', 'V']:
-        files = sorted(glob.glob(os.path.join(snap_dir, f"*{pol}-image*.fits")))
+    for pol in pols:
+        # WSClean drops the pol identifier when imaging a single polarization,
+        # so files are named *-image.fits (not *-V-image.fits or *-I-image.fits).
+        # The snap_dir already only contains the relevant polarization, so
+        # glob for all image files regardless of pol label.
+        files = sorted(glob.glob(os.path.join(snap_dir, "*-image*.fits")))
         if len(files) < 10:
             logger.info(f"Only {len(files)} {pol} snapshot frames — skipping movie.")
             continue
@@ -356,15 +371,21 @@ def _generate_local_movies(work_dir: str, freq_str: str) -> None:
             continue
 
         try:
-            cube = np.array(frames)
-            mid = len(cube) // 2
+            cube = np.array(frames, dtype=np.float32)
+            # Replace exact zeros (wsclean fill value) with NaN so they
+            # don't bias statistics or appear as valid data.
+            cube[cube == 0] = np.nan
+
+            # Use the median-across-time image for scaling so that a single
+            # bad (RFI-corrupted / all-NaN) frame doesn't set the colour scale.
+            ref_frame = np.nanmedian(cube, axis=0)
 
             # 1. Raw movie (both I and V) — grayscale
             if pol == 'V':
-                rms = np.nanstd(cube[mid])
+                rms = np.nanstd(ref_frame)
                 vmin, vmax = -5 * rms, 5 * rms
             else:
-                vmin, vmax = np.nanpercentile(cube[mid], [1, 99.5])
+                vmin, vmax = np.nanpercentile(ref_frame[np.isfinite(ref_frame)], [1, 99.5])
 
             fig = plt.figure(figsize=(8, 8))
             ax = fig.add_axes([0, 0, 1, 1])
@@ -378,10 +399,12 @@ def _generate_local_movies(work_dir: str, freq_str: str) -> None:
             logger.info(f"Saved {raw_path}")
 
             # 2. Filtered movie (Stokes I only — median subtraction)
+            # Use nanmedian so that bad frames don't corrupt every pixel of
+            # the median, and nanstd so the colour scale is robust.
             if pol == 'I':
-                med = np.median(cube, axis=0)
+                med = np.nanmedian(cube, axis=0)
                 diff = cube - med
-                rms = np.std(diff)
+                rms = np.nanstd(diff)
                 fig = plt.figure(figsize=(8, 8))
                 ax = fig.add_axes([0, 0, 1, 1])
                 ax.axis('off')
@@ -429,8 +452,8 @@ def _cleanup_psf_files(work_dir: str) -> int:
 def _compress_snapshot_fits(work_dir: str) -> int:
     """Compress all FITS files in ``snapshots/`` using fpack.
 
-    Each ``*.fits`` file is compressed to ``*.fits.fz`` by fpack, then
-    renamed to ``*.fits.fs``.  The original uncompressed FITS is deleted.
+    Each ``*.fits`` file is compressed to ``*.fits.fz`` by fpack.
+    The original uncompressed FITS is deleted.
 
     Only snapshot images are compressed — deep images in ``I/`` and ``V/``
     are left as-is.
@@ -448,7 +471,7 @@ def _compress_snapshot_fits(work_dir: str) -> int:
 
 
 def _compress_snapshot_fits_dir(snap_dir: str) -> int:
-    """Compress all ``*.fits`` in *snap_dir* via fpack → ``.fits.fs``.
+    """Compress all ``*.fits`` in *snap_dir* via fpack → ``.fits.fz``.
 
     Returns:
         Number of files successfully compressed.
@@ -477,7 +500,6 @@ def _compress_snapshot_fits_dir(snap_dir: str) -> int:
     compressed = 0
     for fpath in fits_files:
         fz_path = fpath + ".fz"
-        fs_path = fpath + ".fs"
         try:
             subprocess.run(
                 fpack_cmd + ["-v", fpath],
@@ -485,7 +507,6 @@ def _compress_snapshot_fits_dir(snap_dir: str) -> int:
                 check=True,
             )
             if os.path.exists(fz_path):
-                os.rename(fz_path, fs_path)
                 os.remove(fpath)
                 compressed += 1
             else:
@@ -495,7 +516,7 @@ def _compress_snapshot_fits_dir(snap_dir: str) -> int:
         except OSError as e:
             logger.error(f"Compress file error {os.path.basename(fpath)}: {e}")
 
-    logger.info(f"Compressed {compressed}/{len(fits_files)} snapshot FITS → .fs")
+    logger.info(f"Compressed {compressed}/{len(fits_files)} snapshot FITS → .fz")
     return compressed
 
 
@@ -542,6 +563,7 @@ def prepare_one_ms_task(
     xy_table: str,
     peel_sky: bool = False,
     peel_rfi: bool = False,
+    peel_maxiter: Optional[int] = None,
 ) -> str:
     """Copy one MS to NVMe, flag, calibrate, and optionally peel.
 
@@ -555,6 +577,7 @@ def prepare_one_ms_task(
         xy_table: XY-phase calibration table path.
         peel_sky: Run TTCal zest with sky model.
         peel_rfi: Run TTCal zest with RFI model.
+        peel_maxiter: Override max iterations for peeling (default: PEELING_PARAMS['maxiter']).
 
     Returns:
         Path to the processed MS on NVMe.
@@ -568,6 +591,25 @@ def prepare_one_ms_task(
     os.makedirs(nvme_work_dir, exist_ok=True)
     redirect_casa_log(nvme_work_dir)
 
+    # 0. Stage Lustre reference files (cal tables + peel models) onto NVMe.
+    #    Idempotent and flock-protected, so concurrent Phase-1 tasks for the
+    #    same (subband, hour) work unit copy each ref exactly once per node.
+    _t = time.time()
+    staged = stage_refs_to_nvme(
+        nvme_work_dir,
+        {
+            'bp_table': bp_table,
+            'xy_table': xy_table,
+            'sky_model': PEELING_PARAMS['sky_model'] if peel_sky else None,
+            'rfi_model': PEELING_PARAMS['rfi_model'] if peel_rfi else None,
+        },
+    )
+    bp_table_nvme = staged['bp_table']
+    xy_table_nvme = staged['xy_table']
+    sky_model_nvme = staged['sky_model']
+    rfi_model_nvme = staged['rfi_model']
+    logger.info(f"[TIMER] stage_refs: {time.time() - _t:.1f}s")
+
     # 1. Copy to NVMe
     _t = time.time()
     nvme_ms = copy_ms_to_nvme(src_ms, nvme_work_dir)
@@ -578,9 +620,9 @@ def prepare_one_ms_task(
     flag_bad_antennas(nvme_ms)
     logger.info(f"[TIMER] flag_bad_antennas: {time.time() - _t:.1f}s")
 
-    # 3. Apply calibration (bandpass + XY-phase)
+    # 3. Apply calibration (bandpass + XY-phase) — read from NVMe copies
     _t = time.time()
-    cal_ok = apply_calibration(nvme_ms, bp_table, xy_table)
+    cal_ok = apply_calibration(nvme_ms, bp_table_nvme, xy_table_nvme)
     logger.info(f"[TIMER] apply_calibration: {time.time() - _t:.1f}s")
     if not cal_ok:
         logger.error(f"Calibration failed for {os.path.basename(nvme_ms)}; removing")
@@ -588,15 +630,16 @@ def prepare_one_ms_task(
         raise RuntimeError(f"Calibration failed for {src_ms}")
 
     # 4. Peeling
+    _peel_maxiter = peel_maxiter if peel_maxiter is not None else PEELING_PARAMS['maxiter']
     if peel_sky:
         _t = time.time()
-        logger.info(f"Peeling sky model on {os.path.basename(nvme_ms)}")
+        logger.info(f"Peeling sky model on {os.path.basename(nvme_ms)} (maxiter={_peel_maxiter})")
         zest_with_ttcal(
             ms=nvme_ms,
-            sources=PEELING_PARAMS['sky_model'],
+            sources=sky_model_nvme,
             beam=PEELING_PARAMS['beam'],
             minuvw=PEELING_PARAMS['minuvw'],
-            maxiter=PEELING_PARAMS['maxiter'],
+            maxiter=_peel_maxiter,
             tolerance=PEELING_PARAMS['tolerance'],
         )
         logger.info(f"[TIMER] peel_sky: {time.time() - _t:.1f}s")
@@ -614,10 +657,14 @@ def prepare_one_ms_task(
             # Shell-based invocation matching process_subband.py
             peel_env = os.environ.copy()
             peel_env["OMP_NUM_THREADS"] = "8"
+            _rfi_args = PEELING_PARAMS['args'].replace(
+                f"--maxiter {PEELING_PARAMS['maxiter']}",
+                f"--maxiter {_peel_maxiter}",
+            )
             cmd = (
                 f"source ~/.bashrc && conda activate {rfi_env} && "
-                f"ttcal.jl zest {nvme_ms} {PEELING_PARAMS['rfi_model']} "
-                f"{PEELING_PARAMS['args']}"
+                f"ttcal.jl zest {nvme_ms} {rfi_model_nvme} "
+                f"{_rfi_args}"
             )
             import subprocess
             subprocess.run(
@@ -627,10 +674,10 @@ def prepare_one_ms_task(
         else:
             zest_with_ttcal(
                 ms=nvme_ms,
-                sources=PEELING_PARAMS['rfi_model'],
+                sources=rfi_model_nvme,
                 beam=PEELING_PARAMS['beam'],
                 minuvw=PEELING_PARAMS['minuvw'],
-                maxiter=PEELING_PARAMS['maxiter'],
+                maxiter=_peel_maxiter,
                 tolerance=PEELING_PARAMS['tolerance'],
             )
         logger.info(f"[TIMER] peel_rfi: {time.time() - _t:.1f}s")
@@ -671,10 +718,13 @@ def process_subband_task(
     reduced_pixels: bool = False,
     skip_science: bool = False,
     compress_snapshots: bool = False,
+    snapshot_only: bool = False,
+    archive_concat_ms: bool = False,
     remaining_hours: Optional[List[dict]] = None,
     dynamic_run_label: Optional[str] = None,
     bp_table: Optional[str] = None,
     xy_table: Optional[str] = None,
+    peel_maxiter: Optional[int] = None,
 ) -> str:
     """Phase 2: concatenate, image, run science, and archive one subband.
 
@@ -711,8 +761,11 @@ def process_subband_task(
         skip_science: If True, skip all science phases (dewarping, photometry,
             transient search, flux check) after PB correction. Products
             are still archived to Lustre.
-        compress_snapshots: If True, fpack-compress all snapshot FITS to .fs
+        compress_snapshots: If True, fpack-compress all snapshot FITS to .fz
             and remove the originals.  Deep images are not compressed.
+        snapshot_only: If True, skip pilot V, hot baselines, deep imaging,
+            V movies, QA, and science. Only produce clean Stokes-I snapshots
+            and I movies. Useful for reprocessing old dates.
         remaining_hours: List of kwarg dicts for subsequent hours.
             Each dict contains the arguments for ``submit_subband_pipeline``.
             The first entry is submitted after this hour completes, with
@@ -732,6 +785,12 @@ def process_subband_task(
 
     os.chdir(work_dir)
     redirect_casa_log(work_dir)
+
+    # snapshot_only implies clean_snapshots, skip_science, and no pilot/deep
+    if snapshot_only:
+        clean_snapshots = True
+        skip_science = True
+        logger.info("snapshot_only mode: will produce clean I snapshots + I movies only")
 
     # Filter out any Nones (from failed Phase 1 tasks that were retried and
     # still returned nothing — shouldn't happen with autoretry, but be safe).
@@ -787,31 +846,43 @@ def process_subband_task(
                     'skip_cleanup': skip_cleanup,
                     'cleanup_nvme': cleanup_nvme,
                     'clean_snapshots': clean_snapshots,
-                    'clean_reduced_pixels': clean_reduced_pixels,
-                    'reduced_pixels': reduced_pixels,
                     'skip_science': skip_science,
                     'compress_snapshots': compress_snapshots,
+                    'archive_concat_ms': archive_concat_ms,
+                    'peel_maxiter': peel_maxiter,
                 },
                 'imaging': {
-                    'pixel_size': get_pixel_size(subband) if reduced_pixels else 4096,
-                    'clean_pixel_size': get_pixel_size(subband) if (clean_snapshots and clean_reduced_pixels) else (get_pixel_size(subband) if reduced_pixels else 4096),
-                    'clean_pixel_scale': get_pixel_scale(subband) if (clean_snapshots and clean_reduced_pixels) else 0.03125,
+                    'pixel_size': get_pixel_size(subband),
+                    'pixel_scale': get_pixel_scale(subband),
                     'wsclean_j': get_image_resources(subband)[2],
                     'wsclean_bin': os.environ.get('WSCLEAN_BIN', '/opt/bin/wsclean'),
-                    'snapshot_dirty': SNAPSHOT_PARAMS,
+                    'snapshot_dirty': {
+                        'suffix': SNAPSHOT_PARAMS['suffix'],
+                        'args': _patch_scale_arg(
+                            _patch_size_args(
+                                SNAPSHOT_PARAMS['args'],
+                                get_pixel_size(subband),
+                            ),
+                            get_pixel_scale(subband),
+                        ),
+                    },
                     'snapshot_clean_i': {
                         'suffix': SNAPSHOT_CLEAN_I_PARAMS['suffix'],
                         'args': _patch_scale_arg(
                             _patch_size_args(
                                 SNAPSHOT_CLEAN_I_PARAMS['args'],
-                                get_pixel_size(subband) if clean_reduced_pixels else 4096,
+                                get_pixel_size(subband),
                             ),
-                            get_pixel_scale(subband) if clean_reduced_pixels else 0.03125,
+                            get_pixel_scale(subband),
                         ),
                     } if clean_snapshots else None,
                     'science_steps': [
                         {'suffix': s['suffix'], 'pol': s['pol'],
-                         'category': s['category'], 'args': s['args']}
+                         'category': s['category'],
+                         'args': _patch_scale_arg(
+                             _patch_size_args(s['args'], get_pixel_size(subband)),
+                             get_pixel_scale(subband)),
+                         }
                         for s in IMAGING_STEPS
                     ],
                 },
@@ -865,9 +936,14 @@ def process_subband_task(
         # ------------------------------------------------------------------
         _t = time.time()
         aoflagger_bin = os.environ.get('AOFLAGGER_BIN', '/opt/bin/aoflagger')
-        logger.info(f"Running AOFlagger with strategy {AOFLAGGER_STRATEGY}")
+        # Stage the strategy lua to NVMe (re-uses existing copy if already
+        # placed there by Phase 1 of this work unit).
+        aoflagger_strategy_nvme = stage_refs_to_nvme(
+            work_dir, {'aoflagger_strategy': AOFLAGGER_STRATEGY},
+        )['aoflagger_strategy']
+        logger.info(f"Running AOFlagger with strategy {aoflagger_strategy_nvme}")
         run_subprocess(
-            [aoflagger_bin, '-strategy', AOFLAGGER_STRATEGY, concat_ms],
+            [aoflagger_bin, '-strategy', aoflagger_strategy_nvme, concat_ms],
             "AOFlagger (Post-Concat)",
         )
         logger.info(f"[TIMER] aoflagger: {time.time() - _t:.1f}s")
@@ -884,39 +960,45 @@ def process_subband_task(
         except Exception:
             n_ints = 357
     
-        pilot_name = f"{subband}-{SNAPSHOT_PARAMS['suffix']}"
-        pilot_path = os.path.join(work_dir, "snapshots", pilot_name)
-    
         wsclean_bin = os.environ.get('WSCLEAN_BIN', '/opt/bin/wsclean')
         _, _, wsclean_j = get_image_resources(subband)
-        npix = get_pixel_size(subband) if reduced_pixels else 4096
-        logger.info(f"Pixel size for {subband}: {npix}x{npix} (reduced_pixels={reduced_pixels})")
-        cmd_pilot = (
-            [wsclean_bin]
-            + ['-j', str(wsclean_j)]
-            + _patch_size_args(SNAPSHOT_PARAMS['args'], npix)
-            + ['-name', pilot_path, '-intervals-out', str(n_ints), concat_ms]
-        )
-        run_subprocess(cmd_pilot, "Pilot snapshot imaging")
+        npix = get_pixel_size(subband)
+        scale = get_pixel_scale(subband)
+        logger.info(f"Pixel size for {subband}: {npix}x{npix}, scale={scale} deg/px")
+
+        if not snapshot_only:
+            pilot_name = f"{subband}-{SNAPSHOT_PARAMS['suffix']}"
+            pilot_path = os.path.join(work_dir, "snapshots", pilot_name)
     
-        add_timestamps_to_images(
-            os.path.join(work_dir, "snapshots"), pilot_name, concat_ms, n_ints,
-        )
+            cmd_pilot = (
+                [wsclean_bin]
+                + ['-j', str(wsclean_j)]
+                + _patch_scale_arg(
+                    _patch_size_args(SNAPSHOT_PARAMS['args'], npix), scale)
+                + ['-name', pilot_path, '-intervals-out', str(n_ints), concat_ms]
+            )
+            run_subprocess(cmd_pilot, "Pilot snapshot imaging")
     
-        pilot_v = sorted(glob.glob(
-            os.path.join(work_dir, "snapshots", f"{pilot_name}*-V-image*.fits")
-        ))
-        bad_idx, stats = analyze_snapshot_quality(pilot_v)
-        plot_snapshot_diagnostics(stats, bad_idx, work_dir, subband)
+            add_timestamps_to_images(
+                os.path.join(work_dir, "snapshots"), pilot_name, concat_ms, n_ints,
+            )
     
-        if bad_idx:
-            flag_bad_integrations(concat_ms, bad_idx, n_ints)
+            pilot_v = sorted(glob.glob(
+                os.path.join(work_dir, "snapshots", f"{pilot_name}*-image*.fits")
+            ))
+            bad_idx, stats = analyze_snapshot_quality(pilot_v)
+            plot_snapshot_diagnostics(stats, bad_idx, work_dir, subband)
+    
+            if bad_idx:
+                flag_bad_integrations(concat_ms, bad_idx, n_ints)
+        else:
+            logger.info("snapshot_only: skipping pilot V snapshots + QA")
         logger.info(f"[TIMER] pilot_snapshots_qa: {time.time() - _t:.1f}s")
     
         # ------------------------------------------------------------------
         #  6. Hot baseline removal (optional)
         # ------------------------------------------------------------------
-        if hot_baselines:
+        if hot_baselines and not snapshot_only:
             _t = time.time()
             try:
                 _run_hot_baseline_diagnostics(concat_ms, work_dir)
@@ -934,13 +1016,12 @@ def process_subband_task(
                 clean_snap_dir = os.path.join(work_dir, "snapshots_clean")
                 os.makedirs(clean_snap_dir, exist_ok=True)
 
-                # Frequency-dependent pixel scaling for clean snapshots
-                npix_clean = get_pixel_size(subband) if clean_reduced_pixels else npix
-                scale_clean = get_pixel_scale(subband) if clean_reduced_pixels else 0.03125
+                # Per-subband pixel scaling for clean snapshots
+                npix_clean = get_pixel_size(subband)
+                scale_clean = get_pixel_scale(subband)
                 logger.info(
                     f"Clean snapshot pixels for {subband}: {npix_clean}x{npix_clean}, "
-                    f"scale={scale_clean} deg/px "
-                    f"(clean_reduced_pixels={clean_reduced_pixels})"
+                    f"scale={scale_clean} deg/px"
                 )
 
                 clean_name = f"{subband}-{SNAPSHOT_CLEAN_I_PARAMS['suffix']}"
@@ -969,6 +1050,16 @@ def process_subband_task(
                         except OSError:
                             pass
 
+                # Generate Stokes-I movies from clean snapshots before compression
+                try:
+                    _generate_local_movies(
+                        work_dir, subband,
+                        snap_dir=clean_snap_dir, pols=['I'],
+                    )
+                except Exception as e:
+                    logger.error(f"Clean snapshot I movie generation failed: {e}")
+                    traceback.print_exc()
+
                 # Always fpack-compress clean snapshots
                 _compress_snapshot_fits_dir(clean_snap_dir)
             except Exception as e:
@@ -979,120 +1070,124 @@ def process_subband_task(
         # ------------------------------------------------------------------
         #  7. Science imaging + PB correction
         # ------------------------------------------------------------------
-        _t_imaging_all = time.time()
-        logger.info(f"Starting Science Imaging for {subband}...")
-        logger.info(f"wsclean binary: {wsclean_bin}, thread limit: -j {wsclean_j}")
+        if snapshot_only:
+            logger.info("snapshot_only: skipping deep imaging, V movies, QA, science")
+        else:
+            _t_imaging_all = time.time()
+            logger.info(f"Starting Science Imaging for {subband}...")
+            logger.info(f"wsclean binary: {wsclean_bin}, thread limit: -j {wsclean_j}")
     
-        for step in IMAGING_STEPS:
-            _t_step = time.time()
-            target_dir = os.path.join(work_dir, step['pol'], step['category'])
-            base = f"{subband}-{step['suffix']}"
-            full_path = os.path.join(target_dir, base)
+            for step in IMAGING_STEPS:
+                _t_step = time.time()
+                target_dir = os.path.join(work_dir, step['pol'], step['category'])
+                base = f"{subband}-{step['suffix']}"
+                full_path = os.path.join(target_dir, base)
     
-            cmd = [wsclean_bin] + ['-j', str(wsclean_j)] + _patch_size_args(step['args'], npix) + ['-name', full_path]
+                cmd = [wsclean_bin] + ['-j', str(wsclean_j)] + _patch_scale_arg(_patch_size_args(step['args'], npix), scale) + ['-name', full_path]
     
-            if step.get('per_integration'):
-                n_out = n_ints
-                cmd += ['-intervals-out', str(n_ints)]
-            elif '-intervals-out' in step['args']:
-                idx = step['args'].index('-intervals-out')
-                n_out = int(step['args'][idx + 1])
-            else:
-                n_out = 1
+                if step.get('per_integration'):
+                    n_out = n_ints
+                    cmd += ['-intervals-out', str(n_ints)]
+                elif '-intervals-out' in step['args']:
+                    idx = step['args'].index('-intervals-out')
+                    n_out = int(step['args'][idx + 1])
+                else:
+                    n_out = 1
     
-            cmd.append(concat_ms)
-            run_subprocess(cmd, f"Imaging {step['suffix']}")
-            add_timestamps_to_images(target_dir, base, concat_ms, n_out)
+                cmd.append(concat_ms)
+                run_subprocess(cmd, f"Imaging {step['suffix']}")
+                add_timestamps_to_images(target_dir, base, concat_ms, n_out)
     
-            # Apply Primary Beam Correction to all images from this step
-            pb_count = apply_pb_correction_to_images(target_dir, base)
-            if pb_count > 0:
-                logger.info(f"PB corrected {pb_count} images for {step['suffix']}")
-            logger.info(f"[TIMER] imaging_{step['suffix']}: {time.time() - _t_step:.1f}s")
-        logger.info(f"[TIMER] imaging_all: {time.time() - _t_imaging_all:.1f}s")
+                # Apply Primary Beam Correction to all images from this step
+                pb_count = apply_pb_correction_to_images(target_dir, base)
+                if pb_count > 0:
+                    logger.info(f"PB corrected {pb_count} images for {step['suffix']}")
+                logger.info(f"[TIMER] imaging_{step['suffix']}: {time.time() - _t_step:.1f}s")
+            logger.info(f"[TIMER] imaging_all: {time.time() - _t_imaging_all:.1f}s")
     
-        # ------------------------------------------------------------------
-        #  7a. Movie generation from pilot snapshots
-        # ------------------------------------------------------------------
-        _t = time.time()
-        try:
-            _generate_local_movies(work_dir, subband)
-        except Exception as e:
-            logger.error(f"Movie generation failed: {e}")
-            traceback.print_exc()
-        logger.info(f"[TIMER] movie_generation: {time.time() - _t:.1f}s")
+            # ------------------------------------------------------------------
+            #  7a. Movie generation from dirty V snapshots
+            # ------------------------------------------------------------------
+            _t = time.time()
+            try:
+                _generate_local_movies(work_dir, subband, pols=['V'])
+            except Exception as e:
+                logger.error(f"Movie generation failed: {e}")
+                traceback.print_exc()
+            logger.info(f"[TIMER] movie_generation: {time.time() - _t:.1f}s")
 
         # ------------------------------------------------------------------
-        #  7b-pre. Lightweight image QA (runs ALWAYS, even with --skip_science)
+        #  7b-pre. Lightweight image QA (runs unless snapshot_only)
         # ------------------------------------------------------------------
-        try:
-            freq_mhz = float(subband.replace('MHz', ''))
-        except Exception:
-            freq_mhz = 50.0
+        if not snapshot_only:
+            try:
+                freq_mhz = float(subband.replace('MHz', ''))
+            except Exception:
+                freq_mhz = 50.0
 
-        # --- i. Per-subband noise RMS (Stokes V deep + Stokes I deep) ---
-        _t = time.time()
-        try:
-            from orca.transform.post_process_science import get_inner_rms
+            # --- i. Per-subband noise RMS (Stokes V deep + Stokes I deep) ---
+            _t = time.time()
+            try:
+                from orca.transform.post_process_science import get_inner_rms
 
-            v_deep_dir = os.path.join(work_dir, "V", "deep")
-            i_deep_dir = os.path.join(work_dir, "I", "deep")
+                v_deep_dir = os.path.join(work_dir, "V", "deep")
+                i_deep_dir = os.path.join(work_dir, "I", "deep")
 
-            # Stokes V: raw image (not pbcorr)
-            v_candidates = sorted(glob.glob(
-                os.path.join(v_deep_dir, f"*V-Taper-Deep*image*.fits")))
-            v_candidates = [f for f in v_candidates
-                            if "pbcorr" not in f and "dewarped" not in f]
-            v_rms = float(get_inner_rms(v_candidates[0])) if v_candidates else None
-
-            # Stokes I: pbcorr preferred, raw fallback
-            i_candidates = sorted(glob.glob(
-                os.path.join(i_deep_dir, f"*I-Deep-Taper-Robust-0.75*pbcorr*.fits")))
-            i_candidates = [f for f in i_candidates if "dewarped" not in f]
-            if not i_candidates:
-                i_candidates = sorted(glob.glob(
-                    os.path.join(i_deep_dir, f"*I-Deep-Taper-Robust-0.75*image*.fits")))
-                i_candidates = [f for f in i_candidates
+                # Stokes V: raw image (not pbcorr)
+                v_candidates = sorted(glob.glob(
+                    os.path.join(v_deep_dir, f"*V-Taper-Deep*image*.fits")))
+                v_candidates = [f for f in v_candidates
                                 if "pbcorr" not in f and "dewarped" not in f]
-            i_rms = float(get_inner_rms(i_candidates[0])) if i_candidates else None
+                v_rms = float(get_inner_rms(v_candidates[0])) if v_candidates else None
 
-            # Write CSV (append-friendly: one row per subband-hour)
-            import csv
-            from datetime import datetime as _dt
-            qa_csv = os.path.join(work_dir, "QA", "image_noise.csv")
-            write_header = not os.path.exists(qa_csv)
-            with open(qa_csv, "a", newline="") as fh:
-                writer = csv.writer(fh)
-                if write_header:
+                # Stokes I: pbcorr preferred, raw fallback
+                i_candidates = sorted(glob.glob(
+                    os.path.join(i_deep_dir, f"*I-Deep-Taper-Robust-0.75*pbcorr*.fits")))
+                i_candidates = [f for f in i_candidates if "dewarped" not in f]
+                if not i_candidates:
+                    i_candidates = sorted(glob.glob(
+                        os.path.join(i_deep_dir, f"*I-Deep-Taper-Robust-0.75*image*.fits")))
+                    i_candidates = [f for f in i_candidates
+                                    if "pbcorr" not in f and "dewarped" not in f]
+                i_rms = float(get_inner_rms(i_candidates[0])) if i_candidates else None
+
+                # Write CSV (append-friendly: one row per subband-hour)
+                import csv
+                from datetime import datetime as _dt
+                qa_csv = os.path.join(work_dir, "QA", "image_noise.csv")
+                write_header = not os.path.exists(qa_csv)
+                with open(qa_csv, "a", newline="") as fh:
+                    writer = csv.writer(fh)
+                    if write_header:
+                        writer.writerow([
+                            "subband", "freq_mhz", "lst_label",
+                            "v_deep_rms", "i_deep_rms", "timestamp",
+                        ])
                     writer.writerow([
-                        "subband", "freq_mhz", "lst_label",
-                        "v_deep_rms", "i_deep_rms", "timestamp",
+                        subband, freq_mhz, lst_label,
+                        f"{v_rms:.6e}" if v_rms else "",
+                        f"{i_rms:.6e}" if i_rms else "",
+                        _dt.utcnow().isoformat(),
                     ])
-                writer.writerow([
-                    subband, freq_mhz, lst_label,
-                    f"{v_rms:.6e}" if v_rms else "",
-                    f"{i_rms:.6e}" if i_rms else "",
-                    _dt.utcnow().isoformat(),
-                ])
-            logger.info(
-                f"Image noise QA: V_rms={v_rms:.4e}, I_rms={i_rms:.4e}"
-                if v_rms and i_rms else
-                f"Image noise QA: V_rms={v_rms}, I_rms={i_rms}"
-            )
-        except Exception as e:
-            logger.warning(f"Image noise QA failed (non-fatal): {e}")
-        logger.info(f"[TIMER] image_noise_qa: {time.time() - _t:.1f}s")
+                logger.info(
+                    f"Image noise QA: V_rms={v_rms:.4e}, I_rms={i_rms:.4e}"
+                    if v_rms and i_rms else
+                    f"Image noise QA: V_rms={v_rms}, I_rms={i_rms}"
+                )
+            except Exception as e:
+                logger.warning(f"Image noise QA failed (non-fatal): {e}")
+            logger.info(f"[TIMER] image_noise_qa: {time.time() - _t:.1f}s")
 
-        # --- ii. Flux scale check (runs on PB-corrected images, no dewarping needed) ---
-        _t = time.time()
-        try:
-            from orca.transform.flux_check_cutout import run_flux_check
-            run_flux_check(work_dir, logger=logger)
-        except ImportError as e:
-            logger.warning(f"flux_check_cutout not available — skipping: {e}")
-        except Exception as e:
-            logger.warning(f"Flux check failed (non-fatal): {e}")
-        logger.info(f"[TIMER] image_flux_check_qa: {time.time() - _t:.1f}s")
+            # --- ii. Flux scale check (runs on PB-corrected images, no dewarping needed) ---
+            _t = time.time()
+            try:
+                from orca.transform.flux_check_cutout import run_flux_check
+                run_flux_check(work_dir, logger=logger)
+            except ImportError as e:
+                logger.warning(f"flux_check_cutout not available — skipping: {e}")
+            except Exception as e:
+                logger.warning(f"Flux check failed (non-fatal): {e}")
+            logger.info(f"[TIMER] image_flux_check_qa: {time.time() - _t:.1f}s")
 
         # ------------------------------------------------------------------
         #  7b. SCIENCE PHASES (all on NVMe)
@@ -1369,6 +1464,7 @@ def process_subband_task(
             subband=subband,
             cleanup_concat=not skip_cleanup,
             cleanup_workdir=cleanup_nvme,
+            archive_concat_ms=archive_concat_ms,
         )
         logger.info(f"[TIMER] archive_to_lustre: {time.time() - _t:.1f}s")
     
@@ -1390,6 +1486,7 @@ def process_subband_task(
                 subband=subband,
                 cleanup_concat=not skip_cleanup,
                 cleanup_workdir=False,
+                archive_concat_ms=archive_concat_ms,
             )
             logger.info(f"Partial archive saved to {archive_base}")
         except Exception as archive_exc:
@@ -1432,6 +1529,7 @@ def submit_subband_pipeline(
     run_label: str,
     peel_sky: bool = False,
     peel_rfi: bool = False,
+    peel_maxiter: Optional[int] = None,
     hot_baselines: bool = False,
     skip_cleanup: bool = False,
     cleanup_nvme: bool = False,
@@ -1444,6 +1542,8 @@ def submit_subband_pipeline(
     reduced_pixels: bool = False,
     skip_science: bool = False,
     compress_snapshots: bool = False,
+    snapshot_only: bool = False,
+    archive_concat_ms: bool = False,
     remaining_hours: Optional[List[dict]] = None,
     dynamic_run_label: Optional[str] = None,
 ) -> 'celery.result.AsyncResult':
@@ -1474,6 +1574,7 @@ def submit_subband_pipeline(
         reduced_pixels: If True, scale pixel count by subband frequency.
         skip_science: If True, skip science phases after PB correction.
         compress_snapshots: If True, fpack-compress snapshot FITS.
+        snapshot_only: If True, only produce clean I snapshots + I movies.
         dynamic_run_label: If set, enables dynamic dispatch mode.
 
     Returns:
@@ -1495,6 +1596,7 @@ def submit_subband_pipeline(
             xy_table=xy_table,
             peel_sky=peel_sky,
             peel_rfi=peel_rfi,
+            peel_maxiter=peel_maxiter,
         ).set(queue=queue)
         for ms in ms_files
     ]
@@ -1516,10 +1618,13 @@ def submit_subband_pipeline(
         reduced_pixels=reduced_pixels,
         skip_science=skip_science,
         compress_snapshots=compress_snapshots,
+        snapshot_only=snapshot_only,
+        archive_concat_ms=archive_concat_ms,
         remaining_hours=remaining_hours,
         dynamic_run_label=dynamic_run_label,
         bp_table=bp_table,
         xy_table=xy_table,
+        peel_maxiter=peel_maxiter,
     ).set(queue=queue)
 
     # Error handler: if all Phase 1 retries fail the chord never fires
@@ -1598,6 +1703,7 @@ def submit_subband_pipeline_chained(
     run_label: str,
     peel_sky: bool = False,
     peel_rfi: bool = False,
+    peel_maxiter: Optional[int] = None,
     hot_baselines: bool = False,
     skip_cleanup: bool = False,
     cleanup_nvme: bool = False,
@@ -1609,6 +1715,8 @@ def submit_subband_pipeline_chained(
     reduced_pixels: bool = False,
     skip_science: bool = False,
     compress_snapshots: bool = False,
+    snapshot_only: bool = False,
+    archive_concat_ms: bool = False,
 ) -> 'celery.result.AsyncResult':
     """Submit multiple LST-hours for one subband as a sequential chain.
 
@@ -1645,6 +1753,7 @@ def submit_subband_pipeline_chained(
         reduced_pixels: Scale pixel count by subband frequency.
         skip_science: Skip science phases after PB correction.
         compress_snapshots: fpack-compress snapshot FITS.
+        snapshot_only: Only produce clean I snapshots + I movies.
 
     Returns:
         Celery AsyncResult for the first hour's chord (only the first
@@ -1668,6 +1777,7 @@ def submit_subband_pipeline_chained(
             run_label=run_label,
             peel_sky=peel_sky,
             peel_rfi=peel_rfi,
+            peel_maxiter=peel_maxiter,
             hot_baselines=hot_baselines,
             skip_cleanup=skip_cleanup,
             cleanup_nvme=cleanup_nvme,
@@ -1679,6 +1789,8 @@ def submit_subband_pipeline_chained(
             reduced_pixels=reduced_pixels,
             skip_science=skip_science,
             compress_snapshots=compress_snapshots,
+            snapshot_only=snapshot_only,
+            archive_concat_ms=archive_concat_ms,
         )
         all_hour_kwargs.append(kwargs)
 

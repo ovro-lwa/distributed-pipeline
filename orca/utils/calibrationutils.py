@@ -261,8 +261,12 @@ def get_relative_path(ms_path):
         parts = ms_path.split('/fast/pipeline/', 1)
         relative_path = parts[1].strip('/')
         return relative_path
+    elif '/cosmology/' in ms_path:
+        parts = ms_path.split('/cosmology/', 1)
+        relative_path = parts[1].strip('/')
+        return relative_path
     else:
-        raise ValueError("Input MS path does not contain '/slow/', '/slow-averaged/', or '/night-time/'")
+        raise ValueError("Input MS path does not contain '/slow/', '/slow-averaged/', '/night-time/', or '/cosmology/'")
 
 def build_output_paths(ms_path, base_output_dir='/lustre/pipeline/slow-averaged/'):
     relative_path = get_relative_path(ms_path)

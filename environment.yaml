@@ -2,6 +2,7 @@ name: orca-env
 dependencies:
   - python=3.8
   - ffmpeg
+  - nodejs>=18
   - pip
   - pip:
     - -r requirements.txt

@@ -318,6 +318,235 @@ def run_entire_pipeline_on_one_cpu_nvme(vis: str, window_minutes: int=4, start_h
     return final_averaged_ms
 
 
+@app.task(bind=True, autoretry_for=(Exception,),
+          retry_kwargs={"max_retries": 2, "countdown": 30})
+def run_cosmology_pipeline_on_nvme(
+    self,
+    vis: str,
+    chanbin: int = 4,
+    base_output_dir: str = '/lustre/pipeline/night-time/averaged/',
+    aoflagger_strategy: str = None,
+    nvme_base_dir: str = '/fast/pipeline/',
+) -> str:
+    """
+    Single-CPU cosmology pipeline using NVMe scratch space.
+
+    Steps:
+      1. Copy original MS from Lustre to NVMe (``/fast/pipeline/<basename>.ms``).
+      2. Run AOFlagger in place on the NVMe MS.
+      3. Save flag metadata on NVMe.
+      4. Average frequency on NVMe -> ``<basename>_averaged.ms`` on NVMe.
+      5. Remove the unaveraged NVMe MS.
+      6. Move averaged MS and flag metadata to
+         ``base_output_dir/<subband>/<date>/<hour>/``.
+      7. Clean up any leftover NVMe artifacts.
+
+    The original Lustre MS is **never modified or removed**.
+
+    Args:
+        vis: Path to the original cosmology MS on Lustre, e.g.
+            ``/lustre/pipeline/cosmology/41MHz/2026-04-19/05/20260419_050005_41MHz.ms``.
+        chanbin: Channel binning factor for frequency averaging.
+        base_output_dir: Lustre destination root for averaged products.
+        aoflagger_strategy: Optional explicit strategy file path. Defaults to
+            the LWA strategy resolved via ``get_aoflagger_strategy``.
+        nvme_base_dir: NVMe scratch directory.
+
+    Returns:
+        Absolute path to the averaged MS on Lustre.
+    """
+    # Resolve final output paths on Lustre using the ORIGINAL vis path so
+    # build_output_paths sees '/cosmology/' (not '/fast/pipeline/').
+    final_output_dir, ms_base = build_output_paths(vis, base_output_dir=base_output_dir)
+    final_averaged_ms = os.path.join(final_output_dir, f"{ms_base}_averaged.ms")
+    final_flag_meta = os.path.join(final_output_dir, f"{ms_base}_flagmeta.bin")
+
+    # Short-circuit: if averaged output already exists, skip work.
+    if os.path.isdir(final_averaged_ms):
+        logging.info(f"[cosmology NVMe] {final_averaged_ms} already exists; skipping.")
+        return final_averaged_ms
+
+    os.makedirs(nvme_base_dir, exist_ok=True)
+    nvme_ms = os.path.join(nvme_base_dir, os.path.basename(vis))
+
+    # Pre-clean any stale NVMe artifacts from previous failed runs.
+    nvme_averaged_ms = os.path.join(nvme_base_dir, f"{ms_base}_averaged.ms")
+    nvme_meta_file = os.path.join(nvme_base_dir, f"{ms_base}_flagmeta.bin")
+    for stale in (nvme_ms, nvme_averaged_ms):
+        if os.path.isdir(stale):
+            shutil.rmtree(stale, ignore_errors=True)
+    if os.path.exists(nvme_meta_file):
+        try:
+            os.remove(nvme_meta_file)
+        except OSError:
+            pass
+
+    try:
+        # 1. Copy Lustre -> NVMe
+        logging.info(f"[cosmology NVMe] Copying {vis} -> {nvme_ms}")
+        shutil.copytree(vis, nvme_ms)
+
+        # 2. Flag on NVMe
+        strategy = aoflagger_strategy or get_aoflagger_strategy("LWA_opt_GH1.lua")
+        logging.info(f"[cosmology NVMe] Flagging {nvme_ms} with strategy {strategy}")
+        flag_with_aoflagger(ms=nvme_ms, strategy=strategy, in_memory=False, n_threads=1)
+
+        # 3. Save flag metadata on NVMe
+        save_flag_metadata(nvme_ms, output_dir=nvme_base_dir)
+
+        # 4. Average on NVMe
+        logging.info(f"[cosmology NVMe] Averaging {nvme_ms} -> {nvme_averaged_ms} (chanbin={chanbin})")
+        average_frequency(vis=nvme_ms, output_vis=nvme_averaged_ms, chanbin=chanbin)
+
+        # 5. Drop unaveraged NVMe MS
+        shutil.rmtree(nvme_ms, ignore_errors=True)
+
+        # 6. Move averaged MS + metadata back to Lustre
+        os.makedirs(final_output_dir, exist_ok=True)
+        if os.path.isdir(final_averaged_ms):
+            shutil.rmtree(final_averaged_ms, ignore_errors=True)
+        shutil.move(nvme_averaged_ms, final_averaged_ms)
+        if os.path.exists(nvme_meta_file):
+            if os.path.exists(final_flag_meta):
+                os.remove(final_flag_meta)
+            shutil.move(nvme_meta_file, final_flag_meta)
+
+        return final_averaged_ms
+    finally:
+        # 7. Clean up any leftover NVMe artifacts on success or failure.
+        for stale in (nvme_ms, nvme_averaged_ms):
+            if os.path.isdir(stale):
+                shutil.rmtree(stale, ignore_errors=True)
+        if os.path.exists(nvme_meta_file):
+            try:
+                os.remove(nvme_meta_file)
+            except OSError:
+                pass
+
+
+@app.task(bind=True, autoretry_for=(Exception,),
+          retry_kwargs={"max_retries": 2, "countdown": 30})
+def resume_cosmology_copy_pipeline_on_nvme(
+    self,
+    copy_ms: str,
+    chanbin: int = 4,
+    base_output_dir: str = '/lustre/pipeline/night-time/averaged/',
+    aoflagger_strategy: str = None,
+    nvme_base_dir: str = '/fast/pipeline/',
+) -> str:
+    """
+    Resume processing for an existing ``*_copy.ms`` file left over from a
+    previously interrupted cosmology run.
+
+    Behaviour:
+      1. **Move** ``copy_ms`` from Lustre to NVMe (so it disappears from the
+         original cosmology directory).
+      2. Run AOFlagger on the NVMe MS.
+      3. Save flag metadata on NVMe.
+      4. Frequency-average on NVMe.
+      5. Drop the unaveraged NVMe MS.
+      6. Move averaged MS + flag metadata to
+         ``base_output_dir/<subband>/<date>/<hour>/`` with the ``_copy``
+         suffix stripped from the output filename.
+      7. Clean up NVMe scratch on success or failure.
+
+    The corresponding non-``_copy`` original MS is never touched.
+
+    Args:
+        copy_ms: Lustre path to an existing ``*_copy.ms`` directory, e.g.
+            ``/lustre/pipeline/cosmology/41MHz/2026-04-19/05/20260419_050005_41MHz_copy.ms``.
+        chanbin: Frequency-averaging channel binning factor.
+        base_output_dir: Lustre destination root for averaged products.
+        aoflagger_strategy: Optional explicit AOFlagger strategy file path.
+        nvme_base_dir: NVMe scratch directory.
+
+    Returns:
+        Absolute path to the averaged MS on Lustre.
+    """
+    if not copy_ms.endswith('_copy.ms'):
+        raise ValueError(
+            f"resume_cosmology_copy_pipeline_on_nvme expects a *_copy.ms input, got: {copy_ms}"
+        )
+    if not os.path.isdir(copy_ms):
+        raise FileNotFoundError(f"Input copy MS does not exist: {copy_ms}")
+
+    # Strip _copy from the basename for output naming.
+    copy_basename = os.path.basename(copy_ms)            # 20260419_050005_41MHz_copy.ms
+    base_no_copy = copy_basename[:-len('_copy.ms')]      # 20260419_050005_41MHz
+
+    # Resolve final output paths on Lustre using the copy_ms path so
+    # build_output_paths picks up '/cosmology/'.
+    final_output_dir, _ = build_output_paths(copy_ms, base_output_dir=base_output_dir)
+    final_averaged_ms = os.path.join(final_output_dir, f"{base_no_copy}_averaged.ms")
+    final_flag_meta = os.path.join(final_output_dir, f"{base_no_copy}_flagmeta.bin")
+
+    # If averaged output already exists, just clear the lingering _copy.ms and return.
+    if os.path.isdir(final_averaged_ms):
+        logging.info(
+            f"[cosmology resume] {final_averaged_ms} already exists; removing stale {copy_ms}."
+        )
+        shutil.rmtree(copy_ms, ignore_errors=True)
+        return final_averaged_ms
+
+    os.makedirs(nvme_base_dir, exist_ok=True)
+    nvme_ms = os.path.join(nvme_base_dir, copy_basename)
+    nvme_averaged_ms = os.path.join(nvme_base_dir, f"{base_no_copy}_averaged.ms")
+    nvme_meta_file = os.path.join(nvme_base_dir, f"{copy_basename[:-3]}_flagmeta.bin")
+
+    # Pre-clean stale NVMe artifacts.
+    for stale in (nvme_ms, nvme_averaged_ms):
+        if os.path.isdir(stale):
+            shutil.rmtree(stale, ignore_errors=True)
+    if os.path.exists(nvme_meta_file):
+        try:
+            os.remove(nvme_meta_file)
+        except OSError:
+            pass
+
+    try:
+        # 1. Move (not copy) Lustre _copy.ms -> NVMe.
+        logging.info(f"[cosmology resume] Moving {copy_ms} -> {nvme_ms}")
+        shutil.move(copy_ms, nvme_ms)
+
+        # 2. AOFlagger on NVMe.
+        strategy = aoflagger_strategy or get_aoflagger_strategy("LWA_opt_GH1.lua")
+        logging.info(f"[cosmology resume] Flagging {nvme_ms} with strategy {strategy}")
+        flag_with_aoflagger(ms=nvme_ms, strategy=strategy, in_memory=False, n_threads=1)
+
+        # 3. Save flag metadata on NVMe.
+        save_flag_metadata(nvme_ms, output_dir=nvme_base_dir)
+
+        # 4. Average frequency on NVMe.
+        logging.info(
+            f"[cosmology resume] Averaging {nvme_ms} -> {nvme_averaged_ms} (chanbin={chanbin})"
+        )
+        average_frequency(vis=nvme_ms, output_vis=nvme_averaged_ms, chanbin=chanbin)
+
+        # 5. Drop the unaveraged NVMe MS.
+        shutil.rmtree(nvme_ms, ignore_errors=True)
+
+        # 6. Move averaged products back to Lustre under the cosmology/averaged tree.
+        os.makedirs(final_output_dir, exist_ok=True)
+        if os.path.isdir(final_averaged_ms):
+            shutil.rmtree(final_averaged_ms, ignore_errors=True)
+        shutil.move(nvme_averaged_ms, final_averaged_ms)
+        if os.path.exists(nvme_meta_file):
+            if os.path.exists(final_flag_meta):
+                os.remove(final_flag_meta)
+            shutil.move(nvme_meta_file, final_flag_meta)
+
+        return final_averaged_ms
+    finally:
+        # 7. Clean up any leftover NVMe artifacts.
+        for stale in (nvme_ms, nvme_averaged_ms):
+            if os.path.isdir(stale):
+                shutil.rmtree(stale, ignore_errors=True)
+        if os.path.exists(nvme_meta_file):
+            try:
+                os.remove(nvme_meta_file)
+            except OSError:
+                pass
+
 
 @app.task
 def copy_ms_to_calibration_task(original_ms: str, calibration_base_dir: str = '/lustre/pipeline/calibration/') -> str:

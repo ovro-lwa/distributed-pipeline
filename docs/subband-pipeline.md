@@ -46,7 +46,7 @@ for post-run performance analysis. Grep with `grep '\[TIMER\]' worker.log`.
 
 | File | Purpose |
 |------|---------|
-| `pipeline/subband_celery.py` | **CLI entry point.** Discovers MS files, computes LST segments, submits one chord per (subband, LST-hour) to the correct Celery queue. Key flags: `--targets`, `--catalog`, `--clean_snapshots`, `--clean_reduced_pixels`, `--reduced_pixels`, `--skip_science`, `--remap SUBBAND=NODE`, `--dynamic`, `--nodes`, `--exclude_nodes`, `--dynamic_queue_label`, `--dynamic_append_only`, `--compress_snapshots`. |
+| `pipeline/subband_celery.py` | **CLI entry point.** Discovers MS files, computes LST segments, submits one chord per (subband, LST-hour) to the correct Celery queue. Key flags: `--targets`, `--catalog`, `--clean_snapshots`, `--skip_science`, `--remap SUBBAND=NODE`, `--dynamic`, `--nodes`, `--exclude_nodes`, `--dynamic_queue_label`, `--dynamic_append_only`, `--compress_snapshots`, `--archive_concat_ms`, `--peel_maxiter`. |
 | `orca/tasks/subband_tasks.py` | **Celery task definitions.** Contains `prepare_one_ms_task` (Phase 1), `process_subband_task` (Phase 2 including science phases A–D), and `submit_subband_pipeline()` which wires them into a chord. Writes `provenance.json` per work unit and emits `[TIMER]` instrumentation. |
 | `orca/celery.py` | **Celery app configuration.** Defines broker/backend, all queues (`default`, `cosmology`, `bandpass`, `imaging`, `calim00`–`calim10`), and task include list. |
 
@@ -79,7 +79,7 @@ for post-run performance analysis. Grep with `grep '\[TIMER\]' worker.log`.
 
 | File | Purpose |
 |------|---------|
-| `orca/resources/subband_config.py` | **All pipeline configuration in one place.** Node↔subband mapping (`NODE_SUBBAND_MAP`), NVMe/Lustre directory layout, peeling parameters, AOFlagger strategy path, hot-baseline params (with `uv_window_size`), `SNAPSHOT_PARAMS` (dirty pilot snapshots) and `SNAPSHOT_CLEAN_I_PARAMS` (Stokes-I clean snapshots in `snapshots_clean/`), per-subband pixel scaling (`get_pixel_size()`, `get_pixel_scale()`, `_SUBBAND_PIXEL_SCALE`) for `--clean_reduced_pixels`, all 7 imaging steps, resource allocation per node, `CALIB_DATA` (SH12/PB17 flux models for 7 calibrators), `VLSSR_CATALOG` and `BEAM_MODEL_H5` paths. |
+| `orca/resources/subband_config.py` | **All pipeline configuration in one place.** Node↔subband mapping (`NODE_SUBBAND_MAP`), NVMe/Lustre directory layout, peeling parameters, AOFlagger strategy path, hot-baseline params (with `uv_window_size`), `SNAPSHOT_PARAMS` (dirty pilot snapshots) and `SNAPSHOT_CLEAN_I_PARAMS` (Stokes-I clean snapshots in `snapshots_clean/`), per-subband pixel scaling (`get_pixel_size()`, `get_pixel_scale()` — always active), all 7 imaging steps, resource allocation per node, `CALIB_DATA` (SH12/PB17 flux models for 7 calibrators), `VLSSR_CATALOG` and `BEAM_MODEL_H5` paths. |
 | `orca/resources/system_config.py` | **Hardware mapping.** 353-entry `SYSTEM_CONFIG` dict mapping LWA antenna numbers to correlator numbers, ARX boards, SNAP2 boards, and channel assignments. Used by `hot_baselines.py`. |
 | `orca/configmanager.py` | **Orca-wide config singleton.** Reads `~/orca-conf.yml` (or `default-orca-conf.yml`) for broker URI, backend URI, telescope params, executable paths. |
 | `orca/default-orca-conf.yml` | Default config template. Copy to `~/orca-conf.yml` and fill in credentials. |
@@ -219,7 +219,7 @@ NVMe (per-node, not shared):
 /fast/pipeline/<lst>/<date>/<run_label>/<subband>/
     ├── provenance.json          # Run metadata (git version, cal tables, flags)
     ├── *.ms                     # Individual MS files (Phase 1)
-    ├── <subband>_concat.ms      # Concatenated MS (Phase 2)
+    ├── <subband>_concat.ms      # Concatenated MS (Phase 2; archived to Lustre if --archive_concat_ms)
     ├── I/deep/                  # Stokes I deep images (+pbcorr, +dewarped)
     ├── I/10min/                 # Stokes I 10-min interval images
     ├── V/deep/                  # Stokes V deep images
@@ -250,6 +250,42 @@ Lustre (centralized cross-run aggregation):
 /lustre/pipeline/images/detections/SolarSystem/<Body>/<subband>/
 ```
 
+> **`--archive_concat_ms`**: When set, the concatenated MS (`<subband>_concat.ms`) is
+> copied to the Lustre archive directory *before* NVMe cleanup. This is safe to combine
+> with `--cleanup_nvme` — the copy happens first. Without this flag the concat MS is
+> deleted from NVMe after imaging and never archived.
+
+---
+
+## CLI Flag Reference
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--range` | required | LST range e.g. `14-15` (hours) |
+| `--date` | required | Reference date `YYYY-MM-DD` |
+| `--bp_table` | required | Bandpass calibration table path |
+| `--xy_table` | required | XY-phase calibration table path |
+| `--subbands` | all | Space-separated list of subbands to process |
+| `--peel_sky` | off | Peel sky model sources (TTCal, `julia060` env) |
+| `--peel_rfi` | off | Peel RFI model sources (TTCal, `ttcal_dev` env) |
+| `--peel_maxiter` | 5 | Override max peeling iterations (recorded in `provenance.json`) |
+| `--hot_baselines` | off | Run hot-baseline heatmap + UV diagnostics |
+| `--clean_snapshots` | off | Produce CLEANed Stokes-I snapshots in `snapshots_clean/` |
+| `--compress_snapshots` | off | fpack-compress snapshot FITS → `.fits.fz` (deep images unaffected) |
+| `--skip_science` | off | Stop after imaging + PB correction; skip dewarping, photometry, transient search |
+| `--archive_concat_ms` | off | Copy `<subband>_concat.ms` to Lustre archive before NVMe cleanup |
+| `--cleanup_nvme` | off | Remove entire NVMe work_dir after archiving to Lustre |
+| `--skip_cleanup` | off | Keep all intermediate files on NVMe (overrides `--cleanup_nvme`) |
+| `--dynamic` | off | Enable dynamic scheduling via Redis work queue |
+| `--dynamic_queue_label` | run label | Shared Redis queue label for multi-submission batches |
+| `--dynamic_append_only` | off | Push to queue without seeding nodes (use when nodes already running) |
+| `--nodes` | all active | Explicit node pool for dynamic mode |
+| `--exclude_nodes` | none | Nodes to exclude from dynamic pool |
+| `--dry_run` | off | Preview work units without submitting |
+| `--targets` | none | Target CSV files for photometry |
+| `--catalog` | none | BDSF catalog for transient search masking |
+| `--snapshot_only` | off | Only produce clean I snapshots + I movies (skip deep imaging) |
+
 ---
 
 ## Imaging Steps
@@ -266,16 +302,18 @@ The pipeline produces 7 image products per subband-hour:
 | 6 | V | deep | `V-Taper-Deep` | Dirty image, taper |
 | 7 | V | 10min | `V-Taper-10min` | Dirty image, taper, 6 intervals |
 
-All images are 4096×4096 at 0.03125° scale with primary beam correction applied.
+All images use frequency-dependent resolution (wsclean benchmarks)
+with primary beam correction applied:
 
-With `--clean_reduced_pixels`, clean snapshots use frequency-dependent resolution
-(FoV is preserved at ~128° by scaling both pixel count and pixel scale):
+| Tier | Subbands | Size | Scale (deg/px) | FoV |
+|------|----------|------|----------------|-----|
+| Lower | 18–36 MHz | 1507×1507 | 0.0767 | ~116° |
+| Middle | 41–59 MHz | 2357×2357 | 0.049  | ~116° |
+| Upper | 64–82 MHz | 3122×3122 | 0.037  | ~116° |
 
-| Tier | Subbands | Size | Scale (deg/px) |
-|------|----------|------|----------------|
-| Lower | 18–36 MHz | 1024×1024 | 0.125 |
-| Middle | 41–59 MHz | 2048×2048 | 0.0625 |
-| Upper | 64–82 MHz | 4096×4096 | 0.03125 |
+This applies to **all** imaging: dirty snapshots, clean snapshots, and the 7
+science steps.  The `--reduced_pixels` and `--clean_reduced_pixels` flags are
+deprecated no-ops; per-subband pixel scaling is always active.
 
 ---
 
@@ -300,7 +338,7 @@ These must be available on the calim worker nodes:
 
 ```
 pipeline/subband_celery.py          # User runs this
-    │  Flags: --targets, --catalog, --clean_snapshots, --skip_science, --remap SUBBAND=NODE
+    │  Flags: --targets, --catalog, --clean_snapshots, --skip_science, --dynamic, --remap SUBBAND=NODE
     │
     ├── orca.resources.subband_config   # Reads NODE_SUBBAND_MAP, queue routing
     ├── orca.transform.subband_processing.find_archive_files_for_subband()
@@ -493,3 +531,36 @@ python pipeline/subband_celery.py \
     --cleanup_nvme --compress_snapshots \
     --dynamic
 ```
+
+Archive concatenated MS to Lustre (useful for re-imaging or inspection):
+
+```bash
+python pipeline/subband_celery.py \
+    --range 06-08 --date 2024-12-27 \
+    --bp_table /lustre/pipeline/calibration/results/2024-12-27/02h/successful/20251225_093810/tables/calibration_2024-12-27_02h.B.flagged \
+    --xy_table /lustre/gh/polcal/xyphase_delay_pos_3.8643ns.Xf \
+    --subbands 18MHz 23MHz 27MHz 32MHz 36MHz 41MHz 46MHz 50MHz 55MHz 59MHz 64MHz 69MHz 73MHz 78MHz 82MHz \
+    --peel_sky --peel_rfi --hot_baselines \
+    --skip_science --cleanup_nvme --compress_snapshots --clean_snapshots \
+    --archive_concat_ms \
+    --dynamic --dynamic_queue_label Dec27 --nodes calim00 calim03 calim05
+```
+
+The concat MS lands at:
+`/lustre/pipeline/exopipe/phase1/<lst>/<date>/<run_label>/<subband>/<subband>_concat.ms`
+
+Override peeling max iterations (e.g. reduce to 2 for faster turnaround):
+
+```bash
+python pipeline/subband_celery.py \
+    --range 11-12 --date 2025-04-21 \
+    --bp_table /lustre/pipeline/calibration/results/2025-04-21/17h/successful/20260524_212310/tables/calibration_2025-04-21_17h.B.flagged \
+    --xy_table /lustre/gh/polcal/xyphase_delay_pos_3.8643ns.Xf \
+    --subbands 73MHz 78MHz 82MHz \
+    --peel_sky --peel_rfi --peel_maxiter 2 \
+    --skip_science --cleanup_nvme --compress_snapshots --clean_snapshots \
+    --dynamic --dynamic_queue_label May03 --dynamic_append_only --exclude_nodes calim02 calim06 calim10
+```
+
+The value used is recorded in `provenance.json` under `flags.peel_maxiter`
+(`null` means the default of 5 was used).

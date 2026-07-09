@@ -13,8 +13,10 @@ import glob
 import shutil
 import logging
 import subprocess
+import tarfile
 import traceback
 import json
+import fcntl
 import numpy as np
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple, Dict
@@ -75,26 +77,33 @@ def find_archive_files_for_subband(
     Returns:
         Sorted list of absolute paths to matching ``.ms`` directories.
     """
+    # Match both .ms directories and .ms.tar archives
     filename_pattern = re.compile(
-        r'(\d{8})_(\d{6})_' + re.escape(subband) + r'(?:|_averaged)\.ms'
+        r'(\d{8})_(\d{6})_' + re.escape(subband) + r'(?:|_averaged)\.ms(?:\.tar)?$'
     )
     file_list: List[str] = []
 
-    if input_dir:
-        search_pattern = os.path.join(input_dir, f'*{subband}*.ms')
-        for f_path in glob.glob(search_pattern):
-            filename = os.path.basename(f_path)
-            match = filename_pattern.search(filename)
-            if match:
-                date_str_file, time_str_file = match.groups()
-                try:
-                    file_start_dt = datetime.strptime(
-                        date_str_file + time_str_file, '%Y%m%d%H%M%S'
-                    )
-                    if start_dt <= (file_start_dt + timedelta(seconds=5)) < end_dt:
+    def _try_add(f_path: str, filename: str) -> None:
+        match = filename_pattern.search(filename)
+        if match:
+            date_str_file, time_str_file = match.groups()
+            try:
+                file_start_dt = datetime.strptime(
+                    date_str_file + time_str_file, '%Y%m%d%H%M%S'
+                )
+                if start_dt <= (file_start_dt + timedelta(seconds=5)) < end_dt:
+                    # Prefer .ms.tar over .ms when both exist
+                    ms_path = f_path[:-4] if f_path.endswith('.tar') else f_path
+                    tar_path = f_path if f_path.endswith('.tar') else f_path + '.tar'
+                    if ms_path not in file_list and tar_path not in file_list:
                         file_list.append(f_path)
-                except ValueError:
-                    pass
+            except ValueError:
+                pass
+
+    if input_dir:
+        for ext in ('*.ms.tar', '*.ms'):
+            for f_path in glob.glob(os.path.join(input_dir, f'*{subband}*{ext}')):
+                _try_add(f_path, os.path.basename(f_path))
     else:
         base_dir = '/lustre/pipeline/night-time/averaged/'
         current_hour = start_dt.replace(minute=0, second=0, microsecond=0)
@@ -104,18 +113,12 @@ def find_archive_files_for_subband(
             hour_str = current_hour.strftime('%H')
             target_dir = os.path.join(base_dir, subband, date_str, hour_str)
             if os.path.isdir(target_dir):
-                for f in os.listdir(target_dir):
-                    match = filename_pattern.search(f)
-                    if match:
-                        date_str_file, time_str_file = match.groups()
-                        try:
-                            file_start_dt = datetime.strptime(
-                                date_str_file + time_str_file, '%Y%m%d%H%M%S'
-                            )
-                            if start_dt <= (file_start_dt + timedelta(seconds=5)) < end_dt:
-                                file_list.append(os.path.join(target_dir, f))
-                        except ValueError:
-                            pass
+                # Sort reverse so .ms.tar is encountered before .ms for the
+                # same timestamp ('.ms.tar' > '.ms' lexicographically),
+                # guaranteeing the .ms.tar archive is preferred when both
+                # coexist.
+                for f in sorted(os.listdir(target_dir), reverse=True):
+                    _try_add(os.path.join(target_dir, f), f)
             current_hour += timedelta(hours=1)
 
     return sorted(file_list)
@@ -125,21 +128,100 @@ def find_archive_files_for_subband(
 #  Copy MS files to NVMe
 # ---------------------------------------------------------------------------
 def copy_ms_to_nvme(src_ms: str, nvme_work_dir: str) -> str:
-    """Copy a single MS directory to the NVMe work directory.
+    """Copy a single MS (directory or .ms.tar archive) to the NVMe work directory.
+
+    If *src_ms* is a ``.ms.tar`` file, it is extracted on NVMe and the path to
+    the extracted ``.ms`` directory is returned.
 
     Args:
-        src_ms: Source path on Lustre.
+        src_ms: Source path on Lustre (``.ms`` dir or ``.ms.tar`` file).
         nvme_work_dir: Target directory on local NVMe.
 
     Returns:
-        Path to the copied MS on NVMe.
+        Path to the ``.ms`` directory on NVMe.
     """
-    dest = os.path.join(nvme_work_dir, os.path.basename(src_ms))
-    if os.path.exists(dest):
-        shutil.rmtree(dest)
-    shutil.copytree(src_ms, dest)
-    logger.info(f"Copied {src_ms} → {dest}")
-    return dest
+    if src_ms.endswith('.ms.tar'):
+        # Extract tar archive to NVMe
+        ms_name = os.path.basename(src_ms)[:-4]  # e.g. foo.ms
+        dest = os.path.join(nvme_work_dir, ms_name)
+        if os.path.exists(dest):
+            shutil.rmtree(dest)
+        with tarfile.open(src_ms, 'r') as tf:
+            tf.extractall(path=nvme_work_dir)
+        if not os.path.isdir(dest):
+            raise FileNotFoundError(
+                f"Expected {dest} after extracting {src_ms}, but it does not exist"
+            )
+        logger.info(f"Extracted {src_ms} → {dest}")
+        return dest
+    else:
+        dest = os.path.join(nvme_work_dir, os.path.basename(src_ms))
+        if os.path.exists(dest):
+            shutil.rmtree(dest)
+        shutil.copytree(src_ms, dest)
+        logger.info(f"Copied {src_ms} → {dest}")
+        return dest
+
+
+# ---------------------------------------------------------------------------
+#  Reference-file staging Lustre → NVMe
+# ---------------------------------------------------------------------------
+def stage_refs_to_nvme(
+    work_dir: str, refs: Dict[str, Optional[str]],
+) -> Dict[str, Optional[str]]:
+    """Stage Lustre reference files / cal tables to ``<work_dir>/refs/``.
+
+    Used to avoid hammering Lustre on every per-MS task: each reference is
+    copied once per node-per-work_dir, then all subsequent tasks read from
+    NVMe. Concurrent-safe via a per-work_dir ``flock``; idempotent (re-uses
+    existing copies). Handles both files (peel JSONs, AOFlagger lua) and
+    directory trees (CASA cal tables).
+
+    Args:
+        work_dir: NVMe work directory; a ``refs`` sub-dir is created inside.
+        refs: mapping of logical name → source path on Lustre. Values that
+            are ``None`` or empty pass through unchanged (lets callers skip
+            optional references cleanly).
+
+    Returns:
+        Same keys mapped to the NVMe path (or the original ``None``).
+    """
+    refs_dir = os.path.join(work_dir, 'refs')
+    os.makedirs(refs_dir, exist_ok=True)
+    lock_path = os.path.join(refs_dir, '.stage.lock')
+    out: Dict[str, Optional[str]] = {}
+    with open(lock_path, 'w') as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            for name, src in refs.items():
+                if not src:
+                    out[name] = src
+                    continue
+                base = os.path.basename(src.rstrip('/'))
+                dst = os.path.join(refs_dir, base)
+                if not os.path.exists(dst):
+                    tmp = dst + '.partial'
+                    if os.path.lexists(tmp):
+                        if os.path.isdir(tmp) and not os.path.islink(tmp):
+                            shutil.rmtree(tmp)
+                        else:
+                            os.remove(tmp)
+                    if os.path.isdir(src):
+                        shutil.copytree(src, tmp)
+                        os.rename(tmp, dst)
+                        logger.info(f"Staged ref dir  {src} → {dst}")
+                    elif os.path.isfile(src):
+                        shutil.copy2(src, tmp)
+                        os.rename(tmp, dst)
+                        logger.info(f"Staged ref file {src} → {dst}")
+                    else:
+                        raise FileNotFoundError(
+                            f"Reference path not found on Lustre: {src}"
+                        )
+                out[name] = dst
+        finally:
+            fcntl.flock(lk, fcntl.LOCK_UN)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -857,6 +939,7 @@ def archive_results(
     subband: str = '',
     cleanup_concat: bool = True,
     cleanup_workdir: bool = False,
+    archive_concat_ms: bool = False,
 ) -> str:
     """Copy pipeline products from NVMe work_dir to Lustre archive.
 
@@ -873,6 +956,10 @@ def archive_results(
         cleanup_concat: Whether to remove concat MS on NVMe.
         cleanup_workdir: Whether to remove the entire work_dir after archiving.
             Supersedes cleanup_concat when True.
+        archive_concat_ms: If True, copy the concatenated MS
+            (``<subband>_concat.ms``) to ``archive_base/`` before removing
+            it from NVMe. Ignored when ``cleanup_workdir`` is True (the
+            entire work_dir is removed regardless).
 
     Returns:
         The archive_base path.
@@ -994,6 +1081,16 @@ def archive_results(
                                 shutil.copy(f, dest_dir)
 
         logger.info(f"Detections archived to {lustre_det_root}")
+
+    # Archive concat MS to Lustre first (before any NVMe cleanup)
+    if archive_concat_ms:
+        for ms in glob.glob(os.path.join(work_dir, "*_concat.ms")):
+            if os.path.exists(ms):
+                dest = os.path.join(archive_base, os.path.basename(ms))
+                if os.path.exists(dest):
+                    shutil.rmtree(dest)
+                shutil.copytree(ms, dest)
+                logger.info(f"Archived concat MS → {dest}")
 
     if cleanup_workdir:
         shutil.rmtree(work_dir)

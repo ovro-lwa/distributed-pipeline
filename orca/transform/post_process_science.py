@@ -101,11 +101,17 @@ def _stack_images(img_list, weights, out_path, history_str):
 
 
 def _make_3color_png(red_path, green_path, blue_path, out_png, title=""):
-    """Generate a 3-colour PNG from Red/Green/Blue FITS images."""
+    """Generate a 3-colour PNG from Red/Green/Blue FITS images.
+
+    Handles images with different pixel dimensions (e.g. from frequency-
+    dependent resolution) by resampling all channels to the largest shape
+    via bilinear interpolation.
+    """
     try:
         import matplotlib
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
+        from scipy.ndimage import zoom as _zoom
 
         channels = []
         for fpath in [red_path, green_path, blue_path]:
@@ -120,12 +126,16 @@ def _make_3color_png(red_path, green_path, blue_path, out_png, title=""):
             logger.warning(f"3-colour PNG needs ≥2 bands, got {len(valid)}")
             return
 
-        ref_shape = valid[0].shape
+        # Use the largest image as the reference shape
+        ref_shape = max((c.shape for c in valid), key=lambda s: s[0] * s[1])
         for i in range(3):
             if channels[i] is None:
                 channels[i] = np.zeros(ref_shape, dtype=np.float64)
             elif channels[i].shape != ref_shape:
-                channels[i] = np.zeros(ref_shape, dtype=np.float64)
+                # Resample to reference shape via bilinear interpolation
+                zoom_factors = (ref_shape[0] / channels[i].shape[0],
+                                ref_shape[1] / channels[i].shape[1])
+                channels[i] = _zoom(channels[i], zoom_factors, order=1)
 
         normed = []
         for ch in channels:
@@ -193,6 +203,27 @@ def run_wideband_stacking(run_dir, catalog_path=None):
 
     df_noise = pd.DataFrame(noise_data)
     df_noise.to_csv(os.path.join(wb_dir, "thermal_noise.csv"), index=False)
+
+    # --- RMS vs Subband plot ---
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+
+        df_sorted = df_noise.sort_values('freq')
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.semilogy(df_sorted['freq'], df_sorted['rms'] * 1000, 'o-',
+                     color='steelblue', markersize=6)
+        ax.set_xlabel('Frequency (MHz)', fontsize=12)
+        ax.set_ylabel('Stokes V RMS (mJy/beam)', fontsize=12)
+        ax.set_title('Thermal Noise vs Sub-band', fontsize=14)
+        ax.grid(True, alpha=0.3)
+        rms_png = os.path.join(wb_dir, "thermal_noise_vs_subband.png")
+        fig.savefig(rms_png, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        logger.info(f"Saved RMS vs subband plot: {rms_png}")
+    except Exception as e:
+        logger.warning(f"RMS vs subband plot failed (non-fatal): {e}")
 
     # --- 2. Define stacking targets ---
     transient_targets = [
@@ -498,6 +529,10 @@ def send_email_report(run_dir, report_lines, attachment_files):
                      f"(@ {df.loc[df['rms'].idxmin()]['freq']:.0f} MHz)</li>")
             body += "</ul>"
             attachment_files.append(noise_csv)
+            noise_png = os.path.join(run_dir, "Wideband",
+                                     "thermal_noise_vs_subband.png")
+            if os.path.exists(noise_png):
+                attachment_files.append(noise_png)
         except Exception:
             pass
 

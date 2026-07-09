@@ -168,6 +168,8 @@ def main():
                         help='Run label (default: auto-generated)')
     parser.add_argument('--peel_sky', action='store_true')
     parser.add_argument('--peel_rfi', action='store_true')
+    parser.add_argument('--peel_maxiter', type=int, default=None,
+                        help='Override max peeling iterations (default: 5 from config)')
     parser.add_argument('--hot_baselines', action='store_true')
     parser.add_argument('--override_range', action='store_true',
                         help='Do not split into LST-hour segments')
@@ -185,19 +187,26 @@ def main():
                              'wsclean params (auto-mask=5, mgain=0.9999). '
                              'Compressed with fpack automatically.')
     parser.add_argument('--clean_reduced_pixels', action='store_true',
-                        help='Scale clean-snapshot pixel count by subband frequency: '
-                             '1024 (18-36MHz), 2048 (41-59MHz), 4096 (64-82MHz). '
-                             'Only affects --clean_snapshots imaging, not dirty '
-                             'snapshots or science imaging.')
+                        help='(Deprecated, no-op) Per-subband pixel scaling is '
+                             'now always applied to all imaging.')
     parser.add_argument('--skip_science', action='store_true',
                         help='Stop after imaging + PB correction; skip dewarping, '
                              'photometry, transient search, flux check. '
                              'Still archives products to Lustre.')
     parser.add_argument('--reduced_pixels', action='store_true',
-                        help='Scale image pixels by subband: 1024 (18-36MHz), 2048 (41-59MHz), 4096 (64-82MHz)')
+                        help='(Deprecated, no-op) Per-subband pixel scaling is '
+                             'now always applied to all imaging.')
     parser.add_argument('--compress_snapshots', action='store_true',
-                        help='Compress snapshot FITS with fpack (.fits → .fits.fs). '
+                        help='Compress snapshot FITS with fpack (.fits → .fits.fz). '
                              'Originals are deleted. Deep images are NOT compressed.')
+    parser.add_argument('--archive_concat_ms', action='store_true',
+                        help='Copy the concatenated MS (<subband>_concat.ms) to the '
+                             'Lustre archive directory before removing it from NVMe. '
+                             'Ignored when --cleanup_nvme is set (entire work_dir removed).')
+    parser.add_argument('--snapshot_only', action='store_true',
+                        help='Lightweight mode: skip pilot V, deep imaging, V movies, '
+                             'QA, and science. Only produce clean Stokes-I snapshots '
+                             'and I movies (Raw + Filtered). For reprocessing old dates.')
     parser.add_argument('--remap', nargs='+', default=None, metavar='SUBBAND=NODE',
                         help='Override node routing, e.g. --remap 18MHz=calim08 23MHz=calim08')
     parser.add_argument('--dynamic', action='store_true',
@@ -310,6 +319,7 @@ def main():
                     'run_label': run_label,
                     'peel_sky': args.peel_sky,
                     'peel_rfi': args.peel_rfi,
+                    'peel_maxiter': args.peel_maxiter,
                     'hot_baselines': args.hot_baselines,
                     'skip_cleanup': args.skip_cleanup,
                     'cleanup_nvme': args.cleanup_nvme,
@@ -320,6 +330,8 @@ def main():
                     'reduced_pixels': args.reduced_pixels,
                     'skip_science': args.skip_science,
                     'compress_snapshots': args.compress_snapshots,
+                    'snapshot_only': args.snapshot_only,
+                    'archive_concat_ms': args.archive_concat_ms,
                 })
 
         if not all_work_units:
@@ -460,6 +472,7 @@ def main():
             peel_sky=args.peel_sky,
             peel_rfi=args.peel_rfi,
             hot_baselines=args.hot_baselines,
+            peel_maxiter=args.peel_maxiter,
             skip_cleanup=args.skip_cleanup,
             cleanup_nvme=args.cleanup_nvme,
             queue_override=queue_override,
@@ -470,6 +483,8 @@ def main():
             reduced_pixels=args.reduced_pixels,
             skip_science=args.skip_science,
             compress_snapshots=args.compress_snapshots,
+            snapshot_only=args.snapshot_only,
+            archive_concat_ms=args.archive_concat_ms,
         )
         results.append({
             'subband': subband,
