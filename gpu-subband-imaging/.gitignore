@@ -1,0 +1,37 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.DS_Store
+.env
+.venv/
+config-local/
+config-auto*/
+
+# Runtime state and logs
+logs/
+state/
+config-*/logs/
+config-*/state/
+old/config-*/logs/
+old/config-*/state/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.log
+scratch/
+
+# Pipeline data products and generated previews
+*.mp4
+*.fits
+*.fits.fz
+*.png
+*_frames.txt
+gpu_nightly/survey_movies_*/
+gpu_nightly/survey_*_results/
+old/gpu_nightly/__pycache__/
+old/gpu_nightly/survey_movies_*/
+old/gpu_nightly/survey_*_results/

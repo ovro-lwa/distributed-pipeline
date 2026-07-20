@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gpu-subband-imaging"
+version = "0.1.0"
+description = "Distributed GPU peeling and snapshot imaging for OVRO-LWA"
+requires-python = ">=3.8"
+dependencies = [
+    "numpy",
+    "astropy",
+    "PyYAML",
+]
+
+[project.optional-dependencies]
+# Installed separately in the prepared runtime environment.
+runtime = ["python-casacore", "casatasks"]
+dev = ["pytest"]
+
+[project.scripts]
+gsi = "gpu_subband_imaging.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
