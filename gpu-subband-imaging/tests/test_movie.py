@@ -5,6 +5,7 @@ from gpu_subband_imaging.stages.movie import (
     _downsample,
     _finite_rms,
     _horizon_mask,
+    _utc_label,
     robust_rms,
 )
 
@@ -34,6 +35,29 @@ def test_horizon_mask_blanks_corners_and_keeps_center():
 def test_finite_rms_ignores_nan_mask():
     a = np.array([0.0, 1.0, 2.0, np.nan])
     assert abs(_finite_rms(a) - 1.4826) < 1e-6
+
+
+def test_utc_label_uses_fits_filename_timestamp():
+    path = "/tmp/img_20260720_071206_23MHz-I-image.fits"
+    assert _utc_label(path) == "UTC time: 2026-07-20 07:12:06"
+    assert _utc_label("/tmp/no_timestamp.fits") is None
+
+
+def test_render_frame_adds_timestamp_and_colorbar(tmp_path, monkeypatch):
+    img = np.zeros((100, 100))
+    monkeypatch.setattr(movie, "_load2d", lambda path: img)
+    out = tmp_path / "frame.png"
+
+    movie.render_frame("img_20260720_071206_23MHz-I-image.fits", out,
+                       vmax=1.0, max_px=100, horizon_mask=True)
+
+    import matplotlib.image as mpimg
+    rendered = mpimg.imread(out)
+    assert rendered.shape[0] == 100
+    assert rendered.shape[1] > 100
+    assert np.max(rendered[:25, :90, :3]) > 0.9
+    assert np.max(rendered[:, 100:, :3]) > 0.9
+    assert np.max(rendered[0, -1, :3]) < 0.05
 
 
 def test_band_vmax_defaults_to_ten_rms_over_masked_disk(monkeypatch):

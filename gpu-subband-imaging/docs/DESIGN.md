@@ -38,6 +38,8 @@ at the end of the run.
 
 ## Outputs
 
-Each UTC hour has compressed Stokes I/V FITS files and one MP4. PNG frames can
-be deleted after a successful stitch. Worker logs are stored beside the date's
-products.
+Each UTC hour has compressed Stokes I/V FITS files and one MP4. PNG frames show
+the snapshot's UTC date/time and a `Jy/beam` color scale, and can be deleted
+after a successful stitch. `_metadata/<date>/run.json` records the code
+revision, configuration, calibration paths, parameters, and ledger summary.
+Worker logs are stored beside the date's products.

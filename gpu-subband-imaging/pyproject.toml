@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gpu-subband-imaging"
-version = "0.1.0"
+version = "0.2.0"
 description = "Distributed GPU peeling and snapshot imaging for OVRO-LWA"
 requires-python = ">=3.8"
 dependencies = [

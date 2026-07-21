@@ -13,6 +13,7 @@ from typing import Dict, List, Optional
 from . import dispatch, worklist
 from .config import Config, Slot
 from .ledger import DONE, SKIPPED, Job, Ledger
+from .metadata import write_run_metadata
 
 log = logging.getLogger("gsi.orchestrator")
 
@@ -104,6 +105,9 @@ class Orchestrator:
         free: List[Slot] = list(self.slots)
         running: Dict[Future, Slot] = {}
         pool = ThreadPoolExecutor(max_workers=len(self.slots) or 1)
+        self._write_metadata("running")
+        final_status = "completed"
+        error = None
         try:
             while True:
                 pending = self.ledger.pending(include_running=False)
@@ -135,9 +139,24 @@ class Orchestrator:
             self._stitch_movies()
             self._cleanup_calcache()
             self._cleanup_manifests()
+        except BaseException as exc:
+            final_status = "failed"
+            error = f"{type(exc).__name__}: {exc}"
+            raise
         finally:
             pool.shutdown(wait=True)
+            self._write_metadata(final_status, error)
             self.ledger.close()
+
+    def _write_metadata(self, status: str,
+                        error: Optional[str] = None) -> None:
+        try:
+            path = write_run_metadata(
+                self.cfg, self.config_dir, status,
+                summary=self.ledger.summary(), error=error)
+            log.info("run metadata: %s", path)
+        except Exception as exc:
+            log.warning("run metadata write failed: %s", exc)
 
     def _cleanup_calcache(self) -> None:
         """Remove calibration tables cached on worker NVMe."""

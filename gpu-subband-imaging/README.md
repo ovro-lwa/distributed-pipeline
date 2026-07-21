@@ -65,10 +65,14 @@ Products are written under:
 ```text
 <output_root>/<band>MHz/<date>/<hour>/fits/*.fits.fz
 <output_root>/<band>MHz/<date>/<hour>/<band>MHz_<date>_<hour>UTC.mp4
+<output_root>/_metadata/<date>/run.json
 ```
 
-Movie PNGs live in the hour's `images/` directory and are removed after a
-successful stitch when `movie.keep_frames` is `false`.
+Movie PNGs include the snapshot's UTC date/time and a `Jy/beam` color scale.
+They live in the hour's `images/` directory and are removed after a successful
+stitch when `movie.keep_frames` is `false`. The metadata JSON records the code
+revision, frozen configuration, calibration paths, processing parameters, and
+final ledger summary.
 
 For unattended daily runs, see `scripts/run_daily_allsubbands.py`. Deployment
 notes are in `deploy/README-deploy.md`; the scheduler design is in

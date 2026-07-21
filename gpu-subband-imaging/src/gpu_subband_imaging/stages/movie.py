@@ -1,11 +1,15 @@
 """Render masked Stokes I frames and stitch hourly H.264 movies."""
 from __future__ import annotations
 
+import re
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
 import numpy as np
+
+_STAMP_RE = re.compile(r"(?P<date>\d{8})_(?P<time>\d{6})")
 
 
 def _load2d(fits_path: str) -> np.ndarray:
@@ -43,20 +47,64 @@ def _finite_rms(a: np.ndarray) -> float:
     return float(1.4826 * np.nanmedian(np.abs(vals - np.nanmedian(vals))))
 
 
+def _utc_label(fits_path: str) -> Optional[str]:
+    match = _STAMP_RE.search(Path(fits_path).name)
+    if not match:
+        return None
+    stamp = datetime.strptime(
+        match.group("date") + match.group("time"), "%Y%m%d%H%M%S")
+    return f"UTC time: {stamp:%Y-%m-%d %H:%M:%S}"
+
+
 def render_frame(fits_i: str, out_png: Path, vmax: float, max_px: int,
                  horizon_mask: bool = False,
                  horizon_radius_fraction: float = 0.49) -> None:
     import matplotlib
     matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
     img = _downsample(_load2d(fits_i), max_px)
-    cmap = plt.get_cmap("inferno")
+    cmap = matplotlib.colormaps["inferno"]
     if horizon_mask:
         img = _horizon_mask(img, horizon_radius_fraction)
         cmap = cmap.copy()
         cmap.set_bad("black")
+
     out_png.parent.mkdir(parents=True, exist_ok=True)
-    plt.imsave(str(out_png), img, origin="lower", cmap=cmap, vmin=0, vmax=vmax)
+    height, width = img.shape
+    panel_width = max(64, round(width * 0.14))
+    if (width + panel_width) % 2:
+        panel_width += 1
+    total_width = width + panel_width
+    dpi = 100
+    fig = Figure(figsize=(total_width / dpi, height / dpi), dpi=dpi,
+                 facecolor="black", frameon=True)
+    FigureCanvasAgg(fig)
+    ax = fig.add_axes((0, 0, width / total_width, 1))
+    image = ax.imshow(img, origin="lower", cmap=cmap, vmin=0, vmax=vmax,
+                      interpolation="nearest")
+    ax.set_axis_off()
+
+    label = _utc_label(fits_i)
+    if label:
+        ax.text(0.02, 0.98, label, transform=ax.transAxes,
+                ha="left", va="top", color="white",
+                fontsize=max(8, min(12, width / 45)),
+                bbox={"facecolor": "black", "alpha": 0.6,
+                      "edgecolor": "none", "pad": 2})
+
+    cax = fig.add_axes(((width + panel_width * 0.20) / total_width,
+                        0.16,
+                        panel_width * 0.22 / total_width,
+                        0.68))
+    cax.set_facecolor("black")
+    colorbar = fig.colorbar(image, cax=cax)
+    colorbar.ax.set_title("Jy/beam", color="white", fontsize=8, pad=6)
+    colorbar.ax.tick_params(colors="white", labelsize=8, length=3)
+    colorbar.outline.set_edgecolor("white")
+
+    fig.savefig(out_png, dpi=dpi, facecolor=fig.get_facecolor(), pad_inches=0)
 
 
 def band_vmax(sample_fits: List[str], mode: str, fixed_vmax: float,

@@ -23,5 +23,14 @@ gsi dry-run --config <config-dir>
 gsi run --config <config-dir>
 ```
 
+To update the shared production copy from a clean commit:
+
+```bash
+gpu-subband-imaging/deploy/sync_to_server.sh calim0
+```
+
+The deployment writes `.gsi-version`; each run records that parent-repository
+revision in its metadata.
+
 The control host needs passwordless SSH to every configured worker. All nodes
 must see the config snapshot, manifests, inputs, calibrations, and output tree.

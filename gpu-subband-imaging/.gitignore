@@ -7,8 +7,12 @@ dist/
 .DS_Store
 .env
 .venv/
+.gsi-version
 config-local/
 config-auto*/
+/config/
+/config-*/
+/old/
 
 # Runtime state and logs
 logs/
