@@ -78,6 +78,24 @@ For unattended daily runs, see `scripts/run_daily_allsubbands.py`. Deployment
 notes are in `deploy/README-deploy.md`; the scheduler design is in
 `docs/DESIGN.md`.
 
+## Automation
+
+`scripts/run_daily_allsubbands.py` waits for a successful calibration, writes
+the date-specific configuration, and runs continuously across dates.
+`scripts/run_cosmology_backfill.py` processes matching archived dates with the
+earliest successful same-date calibration. Both launchers use a shared lock so
+only one run controls the GPU cluster at a time. Data, calibration, output,
+date, hour, and state paths can be overridden from the command line.
+
+`examples/config/` is the daily-run template. Copy it, replace the site paths
+and nodes, then launch:
+
+```bash
+cp -R examples/config config-daily
+python scripts/run_daily_allsubbands.py \
+  --date YYYY-MM-DD --template config-daily --output-config config-auto
+```
+
 ## Peeling safeguards
 
 Before peeling, workers sample the calibrated visibility data and skip snapshots

@@ -1,3 +1,6 @@
+# Template for scripts/run_daily_allsubbands.py. The launcher updates date,
+# output_root, and cal.bp; edit the remaining paths and parameters for your site.
+
 date: "2026-01-01"
 hours: ["05", "06", "07", "08", "09", "10"]
 bands: [23, 27, 32, 36, 41, 46, 50, 55, 59, 64, 69, 73, 78, 82]

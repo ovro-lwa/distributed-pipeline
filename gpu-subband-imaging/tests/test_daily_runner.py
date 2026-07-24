@@ -123,3 +123,24 @@ def test_write_config_preserves_template_yaml_style_and_edits_run_fields(tmp_pat
     assert f"  bp: {bp}\n" in text
     assert (output / "cluster.yaml").read_text() == "control:\n  state_dir: /state\n"
     assert (output / "subbands.yaml").read_text() == "subbands: {}\n"
+
+
+def test_daily_run_lock_is_exclusive(tmp_path):
+    path = tmp_path / "pipeline.lock"
+    first = daily.acquire_run_lock(path)
+
+    try:
+        import fcntl
+
+        second = path.open("a+")
+        try:
+            try:
+                fcntl.flock(second, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+            except BlockingIOError:
+                acquired = False
+            assert not acquired
+        finally:
+            second.close()
+    finally:
+        daily.release_run_lock(first)
