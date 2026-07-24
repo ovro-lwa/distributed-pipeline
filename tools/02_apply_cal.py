@@ -115,10 +115,9 @@ def get_bad_antenna_numbers(ms_path: str, conda_env: str = "development"):
     """
     try:
         import casacore.tables as pt
-        import astropy.time
         with pt.table(os.path.join(ms_path, "OBSERVATION"), ack=False) as t:
             time_range = t.getcol("TIME_RANGE")[0]
-            obs_mjd = astropy.time.Time(time_range[0], format="mjd", scale="utc").mjd
+            obs_mjd = float(time_range[0]) / 86400.0
     except Exception as e:
         logger.warning(f"Could not read observation time: {e}")
         return []
@@ -156,8 +155,16 @@ except Exception as e:
         for line in reversed(res.stdout.strip().split("\n")):
             try:
                 data = json.loads(line)
-                if data.get("bad_correlator_numbers"):
-                    return data["bad_correlator_numbers"]
+                if data is not None:
+                    bad_ants = data.get("bad_correlator_numbers", [])
+                    logger.info(
+                        "MNC antenna health: requested MJD=%.6f, "
+                        "matched MJD=%s, bad=%d",
+                        obs_mjd,
+                        data.get("data_timestamp_mjd"),
+                        len(bad_ants),
+                    )
+                    return bad_ants
             except (json.JSONDecodeError, TypeError):
                 continue
     except Exception as e:
@@ -171,6 +178,15 @@ def flag_bad_antennas(ms_path: str, conda_env: str = "development") -> bool:
     if not bad_ants:
         logger.info("No bad antennas to flag (or lookup unavailable)")
         return False
+
+    import casacore.tables as pt
+    with pt.table(os.path.join(ms_path, "ANTENNA"), ack=False) as t:
+        n_antennas = t.nrows()
+    if n_antennas and len(bad_ants) >= 0.5 * n_antennas:
+        raise RuntimeError(
+            f"Refusing to flag {len(bad_ants)}/{n_antennas} antennas "
+            f"({len(bad_ants) / n_antennas:.1%}); MNC lookup is likely invalid"
+        )
 
     bad_ant_str = ",".join(map(str, bad_ants))
     logger.info(f"Flagging bad antennas: {bad_ant_str}")

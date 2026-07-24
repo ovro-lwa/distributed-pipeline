@@ -35,6 +35,8 @@ except ImportError:
 
 import pandas as pd
 
+from orca.utils.datetimeutils import measurement_set_seconds_to_mjd
+
 logger = logging.getLogger(__name__)
 
 
@@ -342,12 +344,12 @@ def get_bad_antenna_numbers(ms_path: str) -> List[int]:
     Returns:
         List of bad correlator numbers (may be empty).
     """
-    import astropy.time
     try:
         with pt.table(os.path.join(ms_path, 'OBSERVATION'), ack=False) as t:
             time_range = t.getcol('TIME_RANGE')[0]
-            obs_mjd = astropy.time.Time(time_range[0], format='mjd', scale='utc').mjd
-    except Exception:
+            obs_mjd = measurement_set_seconds_to_mjd(time_range[0])
+    except Exception as e:
+        logger.error(f"Could not read observation time from {ms_path}: {e}")
         return []
 
     # The helper script lives in orca/utils/mnc_antennas.py; it needs the
@@ -371,8 +373,14 @@ def get_bad_antenna_numbers(ms_path: str) -> List[int]:
                 break
             except Exception:
                 continue
-        if data and data.get('bad_correlator_numbers'):
-            return data['bad_correlator_numbers']
+        if data is not None:
+            bad_ants = data.get('bad_correlator_numbers', [])
+            logger.info(
+                f"MNC antenna health: requested MJD={obs_mjd:.6f}, "
+                f"matched MJD={data.get('data_timestamp_mjd')}, "
+                f"bad={len(bad_ants)}"
+            )
+            return bad_ants
     except Exception as e:
         logger.error(f"MNC flagging helper failed: {e}")
     return []
@@ -389,6 +397,13 @@ def flag_bad_antennas(ms_path: str) -> str:
     """
     bad_ants = get_bad_antenna_numbers(ms_path)
     if bad_ants:
+        with pt.table(os.path.join(ms_path, 'ANTENNA'), ack=False) as t:
+            n_antennas = t.nrows()
+        if n_antennas and len(bad_ants) >= 0.5 * n_antennas:
+            raise RuntimeError(
+                f"Refusing to flag {len(bad_ants)}/{n_antennas} antennas "
+                f"({len(bad_ants) / n_antennas:.1%}); MNC lookup is likely invalid"
+            )
         bad_ant_str = ",".join(map(str, bad_ants))
         logger.warning(f"Flagging bad antennas: {bad_ant_str}")
         flagdata(vis=ms_path, mode='manual', antenna=bad_ant_str, flagbackup=False)

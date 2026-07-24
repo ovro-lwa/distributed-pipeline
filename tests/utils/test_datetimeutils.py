@@ -10,3 +10,13 @@ from orca.utils import datetimeutils
 ])
 def test_find_closest(pivot, datetime_list, expected_datetime):
     assert expected_datetime == datetimeutils.find_closest(pivot, datetime_list)
+
+
+@pytest.mark.parametrize('time_seconds, expected_mjd', [
+    (5250918432.966112, 60774.51890007074),
+    (5263520515.489959, 60920.37633668934),
+])
+def test_measurement_set_seconds_to_mjd(time_seconds, expected_mjd):
+    assert datetimeutils.measurement_set_seconds_to_mjd(time_seconds) == pytest.approx(
+        expected_mjd
+    )
