@@ -32,14 +32,19 @@ def test_movie_toggle_defaults_true():
     assert cfg.pipeline.movie.enabled is True
 
 
-def test_per_band_peel_overrides_inherit_defaults():
+def test_all_bands_use_safe_peel_defaults():
     cfg = Config.load(CONFIG)
 
-    assert cfg.pipeline.peel_for_band(23).maxiter == 20
-    assert cfg.pipeline.peel_for_band(32).maxiter == 20
+    assert cfg.pipeline.peel_for_band(23).maxiter == 30
+    assert cfg.pipeline.peel_for_band(32).maxiter == 30
     assert cfg.pipeline.peel_for_band(23).peeliter == 3
     assert cfg.pipeline.peel_for_band(36) == cfg.pipeline.peel
     assert cfg.pipeline.peel_for_band(36).maxiter == 30
+    assert cfg.pipeline.peel.tolerance == 1e-2
+    assert cfg.pipeline.peel.min_source_elevation_deg == 15.0
+    assert cfg.pipeline.peel.require_convergence is True
+    assert cfg.pipeline.peel.max_gain_amplitude == 100.0
+    assert cfg.pipeline.peel.min_visibility_nonzero_fraction == 0.01
 
 
 def test_unknown_band_raises():

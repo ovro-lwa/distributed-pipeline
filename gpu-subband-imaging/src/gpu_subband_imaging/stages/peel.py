@@ -1,9 +1,12 @@
 """Control the persistent Julia TTCalX peeling process."""
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
 from typing import Dict
+
+log = logging.getLogger("gsi.peel")
 
 
 class ZestDaemon:
@@ -28,6 +31,9 @@ class ZestDaemon:
         self._p.stdin.write(str(ms) + "\n")             # type: ignore[union-attr]
         self._p.stdin.flush()                           # type: ignore[union-attr]
         for line in self._p.stdout:                      # type: ignore[union-attr]
+            if line.startswith("PEEL_"):
+                log.info(line.strip())
+                continue
             if line.startswith("ZESTED "):
                 return float(line.split()[2])
             if line.startswith("FAILED "):

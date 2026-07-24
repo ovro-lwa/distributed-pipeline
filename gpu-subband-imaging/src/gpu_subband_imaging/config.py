@@ -144,9 +144,15 @@ def load_subbands(path: Union[str, Path]) -> SubbandConfig:
 @dataclass(frozen=True)
 class PeelParams:
     maxiter: int = 30
-    tolerance: float = 1e-4
+    tolerance: float = 1e-2
     minuvw: float = 10.0
     peeliter: int = 3
+    min_source_elevation_deg: float = 15.0
+    require_convergence: bool = True
+    max_gain_amplitude: float = 100.0
+    quality_sample_rows: int = 1024
+    min_visibility_amplitude: float = 1e-12
+    min_visibility_nonzero_fraction: float = 0.01
 
 
 @dataclass(frozen=True)

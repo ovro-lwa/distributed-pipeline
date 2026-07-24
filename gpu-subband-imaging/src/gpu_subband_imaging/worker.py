@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from .config import Config
-from .stages import average, calibrate, compress, flag, image, movie, stage_ms
+from .stages import average, calibrate, compress, flag, image, movie, quality, stage_ms
 from .stages.peel import ZestDaemon
 
 log = logging.getLogger("gsi.worker")
@@ -118,6 +118,25 @@ class Worker:
                     self._badants, self.cfg.pipeline.chanbin)
                 log.info("timing %sMHz batch%d stamp=%s phase=flag_cal_avg elapsed=%.2f s",
                          self.band, self.batch, stamp, time.perf_counter() - t0)
+
+            peel = self.cfg.pipeline.peel_for_band(self.band)
+            stats = quality.visibility_stats(
+                avg, "DATA", peel.quality_sample_rows,
+                peel.min_visibility_amplitude)
+            log.info(
+                "input_quality %sMHz stamp=%s sampled=%d usable=%d "
+                "nonzero_fraction=%.6g median_abs=%.6g max_abs=%.6g",
+                self.band, stamp, stats.sampled_values, stats.usable_values,
+                stats.nonzero_fraction, stats.median_amplitude,
+                stats.max_amplitude)
+            if stats.nonzero_fraction < peel.min_visibility_nonzero_fraction:
+                log.warning(
+                    "skipping %sMHz stamp=%s before peeling: visibility "
+                    "nonzero_fraction %.6g is below %.6g",
+                    self.band, stamp, stats.nonzero_fraction,
+                    peel.min_visibility_nonzero_fraction)
+                shutil.rmtree(d, ignore_errors=True)
+                return None
 
             shutil.rmtree(ms, ignore_errors=True)
             return stamp, avg

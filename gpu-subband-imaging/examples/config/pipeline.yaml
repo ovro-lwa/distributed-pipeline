@@ -20,13 +20,15 @@ do_badants: true
 
 peel:
   maxiter: 30
-  tolerance: 1.0e-4
+  tolerance: 1.0e-2
   minuvw: 10.0
   peeliter: 3
-
-peel_overrides:
-  23: {maxiter: 20}
-  32: {maxiter: 20}
+  min_source_elevation_deg: 15.0
+  require_convergence: true
+  max_gain_amplitude: 100.0
+  quality_sample_rows: 1024
+  min_visibility_amplitude: 1.0e-12
+  min_visibility_nonzero_fraction: 0.01
 
 imaging:
   weight: briggs

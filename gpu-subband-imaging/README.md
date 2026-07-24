@@ -77,3 +77,16 @@ final ledger summary.
 For unattended daily runs, see `scripts/run_daily_allsubbands.py`. Deployment
 notes are in `deploy/README-deploy.md`; the scheduler design is in
 `docs/DESIGN.md`.
+
+## Peeling safeguards
+
+Before peeling, workers sample the calibrated visibility data and skip snapshots
+that are effectively empty. Catalog sources below the configured elevation
+limit are left in the image, and unconverged, nonfinite, or extreme-gain
+solutions are rejected rather than subtracted. Source elevations and solve
+decisions are recorded in the worker logs.
+
+The defaults live under `peel` in `pipeline.yaml`: 30x3 peeling with a 15 degree
+source elevation limit, `1e-2` convergence tolerance, required convergence,
+maximum gain amplitude of 100, and a 1 percent minimum nonzero visibility
+fraction.
