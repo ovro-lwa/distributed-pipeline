@@ -1,7 +1,11 @@
 import types
+import threading
+from concurrent.futures import Future
+from pathlib import Path
 
 from gpu_subband_imaging import dispatch
 from gpu_subband_imaging.config import Slot
+from gpu_subband_imaging.ledger import Job, Ledger, RUNNING
 from gpu_subband_imaging.orchestrator import Orchestrator
 
 
@@ -57,3 +61,48 @@ def test_cleanup_manifests_removes_only_run_date(tmp_path):
 
     assert not current.exists()
     assert (other / "27_0.txt").exists()
+
+
+def test_run_claims_batch_before_worker_thread_starts(monkeypatch, tmp_path):
+    orch = Orchestrator.__new__(Orchestrator)
+    orch.cfg = types.SimpleNamespace(
+        pipeline=types.SimpleNamespace(
+            max_retries=1,
+            batch_timeout_seconds=60,
+            movie=types.SimpleNamespace(enabled=False),
+        ),
+        cluster=types.SimpleNamespace(free_core_budget=0),
+    )
+    orch.slots = [Slot("gpu-node-01", 0)]
+    orch.ledger = Ledger(Path(tmp_path) / "ledger.sqlite")
+    orch.ledger.seed([Job(27, 0, 1)])
+    orch._lock = threading.Lock()
+    orch._write_metadata = lambda *args, **kwargs: None
+    orch._stitch_movies = lambda: None
+    orch._cleanup_calcache = lambda: None
+    orch._cleanup_manifests = lambda: None
+    orch._pick_slot = lambda free: free[0]
+
+    class ImmediatePool:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def submit(self, fn, slot, job):
+            claimed = orch.ledger.all()[0]
+            assert claimed.status == RUNNING
+            assert claimed.slot == str(slot)
+            future = Future()
+            future.set_result(fn(slot, job))
+            return future
+
+        def shutdown(self, wait=True):
+            pass
+
+    monkeypatch.setattr(
+        "gpu_subband_imaging.orchestrator.ThreadPoolExecutor", ImmediatePool
+    )
+    monkeypatch.setattr(orch, "_run_one", lambda slot, job: (
+        orch.ledger.mark_done(job) or True
+    ))
+
+    orch.run(poll=0)

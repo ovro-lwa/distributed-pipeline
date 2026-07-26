@@ -78,8 +78,6 @@ class Orchestrator:
                    f"{j.band}_{j.batch}.txt")
 
     def _run_one(self, slot: Slot, j: Job) -> bool:
-        with self._lock:
-            self.ledger.mark_running(j, str(slot))
         log.info("dispatching %sMHz batch%d to %s (%d files)",
                  j.band, j.batch, slot, j.n_files)
         r = dispatch.run_worker(slot.node, slot.gpu, self.worker_sh,
@@ -125,6 +123,10 @@ class Orchestrator:
                                     j.band, j.batch, j.attempts)
                         continue
                     free.remove(slot)
+                    # Claim before submitting so the next scheduler poll cannot
+                    # select this batch again while its thread is starting.
+                    with self._lock:
+                        self.ledger.mark_running(j, str(slot))
                     fut = pool.submit(self._run_one, slot, j)
                     running[fut] = slot
                 done = [f for f in running if f.done()]
