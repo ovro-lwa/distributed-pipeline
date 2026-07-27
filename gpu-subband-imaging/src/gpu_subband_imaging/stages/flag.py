@@ -5,11 +5,12 @@ import subprocess
 from pathlib import Path
 from typing import Dict, Optional
 
+_BADANT_PREFIX = "GSI_BADANTS="
 _BADANT_SNIPPET = """
 from mnc import anthealth
 from lwa_antpos import mapping
 c, bad = anthealth.get_badants('selfcorr', time={mjd})
-print(','.join(str(x) for x in sorted(set(
+print('{prefix}' + ','.join(str(x) for x in sorted(set(
     mapping.antname_to_correlator(b.rstrip('AB')) for b in bad))))
 """
 
@@ -19,11 +20,19 @@ def badants(mjd: float, dev_python: str, cache: Optional[Dict[float, str]] = Non
     """Return bad correlator numbers as CSV, or an empty string on failure."""
     if cache is not None and mjd in cache:
         return cache[mjd]
+    val = ""
     for _ in range(2):
-        p = subprocess.run([dev_python, "-c", _BADANT_SNIPPET.format(mjd=mjd)],
+        code = _BADANT_SNIPPET.format(mjd=mjd, prefix=_BADANT_PREFIX)
+        p = subprocess.run([dev_python, "-c", code],
                            capture_output=True, text=True)
-        val = p.stdout.strip().splitlines()[-1] if p.stdout.strip() else ""
-        if val:
+        result = next(
+            (line[len(_BADANT_PREFIX):].strip()
+             for line in p.stdout.splitlines()
+             if line.startswith(_BADANT_PREFIX)),
+            None,
+        )
+        if p.returncode == 0 and result is not None:
+            val = result
             break
     if cache is not None:
         cache[mjd] = val
