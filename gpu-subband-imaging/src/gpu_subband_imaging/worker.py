@@ -36,6 +36,13 @@ def _hour(stamp: str) -> str:
     return stamp.split("_")[1][:2]
 
 
+def _require_batch_outputs(band: int, batch: int, n_input: int, n_ok: int) -> None:
+    if n_input and not n_ok:
+        raise RuntimeError(
+            f"batch {band}MHz/{batch} produced no outputs from {n_input} inputs"
+        )
+
+
 class Worker:
     def __init__(self, cfg: Config, band: int, batch: int, gpu: int):
         self.cfg, self.band, self.batch, self.gpu = cfg, band, batch, gpu
@@ -260,6 +267,7 @@ class Worker:
         if n_fail:
             log.warning("batch %sMHz/%d completed with %d failed file(s); continuing",
                         self.band, self.batch, n_fail)
+        _require_batch_outputs(self.band, self.batch, len(todo), n_ok)
 
     def _start_daemon(self) -> ZestDaemon:
         import os
