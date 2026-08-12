@@ -107,6 +107,7 @@ from orca.resources.subband_config import (
     get_queue_for_subband,
     get_image_resources,
 )
+from orca.transform.snapshot_qa import write_snapshot_qa_csv
 
 logger = logging.getLogger(__name__)
 
@@ -952,9 +953,11 @@ def process_subband_task(
         #  5. Pilot snapshots + QA
         # ------------------------------------------------------------------
         _t = time.time()
+        scan_numbers = []
         try:
             t = table(concat_ms, ack=False)
             times = t.getcol("TIME")
+            scan_numbers = sorted(set(t.getcol("SCAN_NUMBER")))
             n_ints = len(np.unique(times))
             t.close()
         except Exception:
@@ -987,6 +990,13 @@ def process_subband_task(
                 os.path.join(work_dir, "snapshots", f"{pilot_name}*-image*.fits")
             ))
             bad_idx, stats = analyze_snapshot_quality(pilot_v)
+            try:
+                qa_csv = write_snapshot_qa_csv(
+                    stats, bad_idx, scan_numbers, work_dir, subband,
+                )
+                logger.info(f"Snapshot QA data saved to {qa_csv}")
+            except Exception as e:
+                logger.error(f"Failed to save snapshot QA CSV: {e}")
             plot_snapshot_diagnostics(stats, bad_idx, work_dir, subband)
     
             if bad_idx:
