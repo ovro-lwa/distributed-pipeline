@@ -1,7 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from gpu_subband_imaging.worker import Worker, _hour
+from gpu_subband_imaging.worker import Worker, _hour, _stamp
 from gpu_subband_imaging.stages import movie
 
 
@@ -22,6 +22,11 @@ def _worker(tmp_path: Path) -> Worker:
 
 def test_hour_from_snapshot_stamp():
     assert _hour("20260707_073026") == "07"
+
+
+def test_stamp_supports_archive_and_raw_ms_paths():
+    assert _stamp("/data/20260707_073026_73MHz.ms.tar") == "20260707_073026_73MHz"
+    assert _stamp("/data/20260707_073026_73MHz.ms") == "20260707_073026_73MHz"
 
 
 def test_worker_archives_products_under_band_date_hour(tmp_path):

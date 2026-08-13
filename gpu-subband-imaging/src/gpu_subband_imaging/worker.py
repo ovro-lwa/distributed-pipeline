@@ -28,8 +28,12 @@ def _mjd(stamp: str) -> float:
     return float(Time(iso).mjd)
 
 
-def _stamp(tar: str) -> str:
-    return Path(tar).name[:-len(".ms.tar")]
+def _stamp(input_path: str) -> str:
+    name = Path(input_path).name
+    for suffix in (".ms.tar", ".ms"):
+        if name.endswith(suffix):
+            return name[:-len(suffix)]
+    raise ValueError(f"unsupported measurement-set input: {input_path}")
 
 
 def _hour(stamp: str) -> str:

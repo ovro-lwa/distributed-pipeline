@@ -64,6 +64,15 @@ def first_calibration(cal_root: Path, date: str) -> Optional[CalCandidate]:
     return candidates[0] if candidates else None
 
 
+def calibration_for_hour(cal_root: Path, date: str,
+                         hour: int) -> Optional[CalCandidate]:
+    return next(
+        (candidate for candidate in find_calibrations(cal_root, date)
+         if candidate.hour == hour),
+        None,
+    )
+
+
 def write_config(template_dir: Path, output_dir: Path, date: str, bp: Path,
                  data_root: Path, output_root: Path,
                  bands: Sequence[int], hours: Optional[Sequence[str]] = None,
@@ -147,6 +156,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         help="repeatable date glob; defaults to May and June 2026")
     parser.add_argument("--data-root", default=str(DEFAULT_DATA_ROOT))
     parser.add_argument("--cal-root", default=str(DEFAULT_CAL_ROOT))
+    parser.add_argument("--cal-hour", type=int, choices=range(24),
+                        help="require a successful calibration at this LST hour")
     parser.add_argument("--output-root", default=str(DEFAULT_OUTPUT_ROOT))
     parser.add_argument("--log-root", default=str(DEFAULT_LOG_ROOT))
     parser.add_argument("--bands", type=int, nargs="+", default=DEFAULT_BANDS)
@@ -170,10 +181,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     runnable = []
     for date in dates:
-        calibration = first_calibration(cal_root, date)
+        calibration = (calibration_for_hour(cal_root, date, args.cal_hour)
+                       if args.cal_hour is not None
+                       else first_calibration(cal_root, date))
         if calibration is None:
-            print(f"SKIP {date}: no successful same-date flagged calibration",
-                  flush=True)
+            requirement = (f" at {args.cal_hour:02d}h"
+                           if args.cal_hour is not None else "")
+            print(f"SKIP {date}: no successful same-date flagged calibration"
+                  f"{requirement}", flush=True)
             continue
         print(f"PLAN {date}: {calibration.path}", flush=True)
         runnable.append((date, calibration.path))

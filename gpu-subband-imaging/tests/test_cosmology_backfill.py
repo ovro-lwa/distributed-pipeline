@@ -47,6 +47,22 @@ def test_first_calibration_uses_earliest_successful_solution(tmp_path):
     assert selected.path != later
 
 
+def test_calibration_for_hour_selects_exact_successful_solution(tmp_path):
+    _make_cal(tmp_path, "2026-04-19", 4, "20260420_050000")
+    wanted = _make_cal(tmp_path, "2026-04-19", 17, "20260430_230000")
+
+    selected = backfill.calibration_for_hour(tmp_path, "2026-04-19", 17)
+
+    assert selected is not None
+    assert selected.path == wanted
+
+
+def test_calibration_for_hour_returns_none_when_hour_is_missing(tmp_path):
+    _make_cal(tmp_path, "2026-04-19", 4, "20260420_050000")
+
+    assert backfill.calibration_for_hour(tmp_path, "2026-04-19", 17) is None
+
+
 def test_write_config_selects_all_hours_and_cosmology_paths(tmp_path):
     template = tmp_path / "template"
     output = tmp_path / "output"
