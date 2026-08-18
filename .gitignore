@@ -107,5 +107,8 @@ venv.bak/
 
 preliminary_pipeline
 scripts
-.DS_Store*.mp4
+!gpu-subband-imaging/scripts/
+!gpu-subband-imaging/scripts/*.py
+.DS_Store
+*.mp4
 scratch

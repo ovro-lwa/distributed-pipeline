@@ -1,0 +1,20 @@
+tiers:
+  low:  {pixels: 1507, scale: 0.0767}
+  mid:  {pixels: 2357, scale: 0.049}
+  high: {pixels: 3122, scale: 0.037}
+
+bands:
+  23: low
+  27: low
+  32: low
+  36: low
+  41: mid
+  46: mid
+  50: mid
+  55: mid
+  59: mid
+  64: high
+  69: high
+  73: high
+  78: high
+  82: high

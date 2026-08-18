@@ -99,6 +99,7 @@ Celery admin notes are in [docs/celery_deployment.md](docs/celery_deployment.md)
 |-----------|-------------|
 | `orca/` | Core library — wrappers and functions that do single units of work |
 | `pipeline/` | Pipeline submission scripts (Celery chord/chain orchestration) |
+| `gpu-subband-imaging/` | Standalone SSH-scheduled GPU pipeline for calibrated FITS snapshots and hourly movies |
 | `deploy/` | Worker management scripts (see [docs/worker-management.md](docs/worker-management.md)) |
 | `tools/` | Standalone utilities (e.g. QA imaging) — not part of the core pipeline |
 | `tests/` | Unit and integration tests |

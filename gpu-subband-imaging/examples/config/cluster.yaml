@@ -1,0 +1,13 @@
+control:
+  state_dir: /products/gsi/_state
+
+defaults:
+  max_feeders: 4
+  wsclean_threads: 4
+  aoflagger_threads: 2
+  free_core_budget: 6
+  work_root: /fast/gsi
+
+nodes:
+  - {alias: gpu-node-01, gpus: [0, 1]}
+  - {alias: gpu-node-02, gpus: [0, 1], disabled_gpus: [1]}
