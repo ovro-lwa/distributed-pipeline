@@ -115,6 +115,27 @@ comparison used the `calim2` login because the `calim_nkos_2` account could not
 read an existing `ttcal_dev` compiled-cache file. No environment, package,
 permission, or production repository changes were needed for these checks.
 
+
+A subsequent full-size real-data check used independent filesystem copies of
+`/fast/nkosogor/no_peel/20240524_090003_73MHz_averaged.ms` on `lwacalim02`:
+352 antennas, 48 channels, one integration, and an existing CORRECTED_DATA column.
+The reference CLI and exporter each ran sky then RFI peeling with the repository's
+Cyg A/Cas A and RFI_B source models and the Phase 1 solver settings. After each
+stage, CORRECTED_DATA matched exactly; DATA, FLAG and FLAG_ROW remained unchanged.
+
+| Stage | Gain shape | NPZ bytes | Non-finite gain entries | Maximum visibility difference |
+| --- | --- | ---: | ---: | ---: |
+| Sky | `(2, 4, 352, 48, 1)` | 1,818,519 | 0 | 0 |
+| RFI | `(1, 4, 352, 48, 1)` | 924,231 | 0 | 0 |
+
+Before/after SHA-256 hashes, file sizes and modification times matched for all
+106 original files. All table access and peeling took place on independent
+scratch copies, with subtable references redirected to the respective copies.
+The test script, logs, NPZ products and integrity manifests are retained on the
+server in `/fast/pipeline/peelsol-real-b0JlSg/`; `results.json` summarizes the run.
+This was direct TTCal execution, with no Celery submission or full pipeline run.
+It verifies solution export and numerical equivalence, not solution reapplication.
+
 ---
 
 ## File Map
