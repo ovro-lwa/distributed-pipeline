@@ -959,7 +959,7 @@ def archive_results(
     """Copy pipeline products from NVMe work_dir to Lustre archive.
 
     Copies subdirectories I/, V/, snapshots/, QA/, samples/, detections/,
-    Movies/, Dewarp_Diagnostics/ and loose files.
+    Movies/, Dewarp_Diagnostics/, peeling_solutions/ and loose files.
     Also writes to the centralised ``samples/`` and ``detections/`` trees
     under ``LUSTRE_ARCHIVE_DIR`` so that products from many runs are
     aggregated in one place.
@@ -983,7 +983,8 @@ def archive_results(
     logger.info(f"Archiving results → {archive_base}")
 
     for top_level in ['I', 'V', 'snapshots', 'snapshots_clean', 'QA',
-                      'samples', 'detections', 'Movies', 'Dewarp_Diagnostics']:
+                      'samples', 'detections', 'Movies', 'Dewarp_Diagnostics',
+                      'peeling_solutions']:
         src = os.path.join(work_dir, top_level)
         dest = os.path.join(archive_base, top_level)
         if os.path.exists(src):

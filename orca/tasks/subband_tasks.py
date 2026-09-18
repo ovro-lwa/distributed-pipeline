@@ -630,58 +630,27 @@ def prepare_one_ms_task(
         shutil.rmtree(nvme_ms, ignore_errors=True)
         raise RuntimeError(f"Calibration failed for {src_ms}")
 
-    # 4. Peeling
+    # 4. Peeling. Keep solutions outside the MS: Phase 2 deletes input MSes.
+    solutions_dir = os.path.join(nvme_work_dir, 'peeling_solutions',
+                                 os.path.basename(nvme_ms))
     _peel_maxiter = peel_maxiter if peel_maxiter is not None else PEELING_PARAMS['maxiter']
-    if peel_sky:
+    for enabled, stage, model in ((peel_sky, 'sky', sky_model_nvme),
+                                  (peel_rfi, 'rfi', rfi_model_nvme)):
+        if not enabled:
+            continue
         _t = time.time()
-        logger.info(f"Peeling sky model on {os.path.basename(nvme_ms)} (maxiter={_peel_maxiter})")
+        logger.info(f"Peeling {stage} model on {os.path.basename(nvme_ms)} (maxiter={_peel_maxiter})")
         zest_with_ttcal(
             ms=nvme_ms,
-            sources=sky_model_nvme,
+            sources=model,
             beam=PEELING_PARAMS['beam'],
             minuvw=PEELING_PARAMS['minuvw'],
             maxiter=_peel_maxiter,
             tolerance=PEELING_PARAMS['tolerance'],
+            solutions_path=os.path.join(solutions_dir, f'{stage}.npz'),
+            julia_env=PEELING_PARAMS.get(f'{stage}_env', 'julia060'),
         )
-        logger.info(f"[TIMER] peel_sky: {time.time() - _t:.1f}s")
-
-    if peel_rfi:
-        _t = time.time()
-        logger.info(f"Peeling RFI model on {os.path.basename(nvme_ms)}")
-        # RFI peeling may use a different conda env (ttcal_dev) than sky (julia060).
-        # The orca wrapper zest_with_ttcal uses julia060 hardcoded.
-        # If the envs are different, use shell-based invocation like the
-        # Slurm pipeline does.
-        rfi_env = PEELING_PARAMS.get('rfi_env', 'julia060')
-        sky_env = PEELING_PARAMS.get('sky_env', 'julia060')
-        if rfi_env != sky_env:
-            # Shell-based invocation matching process_subband.py
-            peel_env = os.environ.copy()
-            peel_env["OMP_NUM_THREADS"] = "8"
-            _rfi_args = PEELING_PARAMS['args'].replace(
-                f"--maxiter {PEELING_PARAMS['maxiter']}",
-                f"--maxiter {_peel_maxiter}",
-            )
-            cmd = (
-                f"source ~/.bashrc && conda activate {rfi_env} && "
-                f"ttcal.jl zest {nvme_ms} {rfi_model_nvme} "
-                f"{_rfi_args}"
-            )
-            import subprocess
-            subprocess.run(
-                cmd, shell=True, check=True,
-                executable='/bin/bash', env=peel_env,
-            )
-        else:
-            zest_with_ttcal(
-                ms=nvme_ms,
-                sources=rfi_model_nvme,
-                beam=PEELING_PARAMS['beam'],
-                minuvw=PEELING_PARAMS['minuvw'],
-                maxiter=_peel_maxiter,
-                tolerance=PEELING_PARAMS['tolerance'],
-            )
-        logger.info(f"[TIMER] peel_rfi: {time.time() - _t:.1f}s")
+        logger.info(f"[TIMER] peel_{stage}: {time.time() - _t:.1f}s")
 
     logger.info(
         f"[{self.request.id}] Phase 1 DONE: {os.path.basename(nvme_ms)}"

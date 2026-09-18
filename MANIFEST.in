@@ -1,3 +1,5 @@
 include orca/resources/mountain_azel.csv
 recursive-include orca/resources/aoflagger_strategies *.lua
 include orca/resources/correlator_map.py
+
+include orca/wrapper/ttcal_solutions.jl

@@ -40,6 +40,83 @@ for post-run performance analysis. Grep with `grep '\[TIMER\]' worker.log`.
 
 ---
 
+## Phase 1 peeling solutions
+
+When sky or RFI peeling is enabled, Phase 1 saves a compressed solution product
+for each measurement set and stage:
+
+```
+<work_dir>/peeling_solutions/<MS basename>/sky.npz
+<work_dir>/peeling_solutions/<MS basename>/rfi.npz
+```
+
+`archive_results` copies this tree into the normal run archive before removing
+NVMe products. The files live outside the MS because Phase 2 deletes individual
+MSes after concatenation. No extra submission flag is needed. Only enabled stages
+produce files; a stage with no above-horizon sources produces an explicit empty
+solution array. Export failures fail Phase 1 instead of silently losing solutions.
+Each NPZ is atomically replaced after successful serialization. Retrying Phase 1
+starts from a fresh staged MS through the existing copy/calibration path.
+
+The repo-owned `orca/wrapper/ttcal_solutions.jl` adapter uses the existing TTCal
+`zest` algorithm, full polarization, three peeling passes, and configured solver
+parameters. It preserves the CLI's DATA/CORRECTED_DATA selection and leaves MS
+flags unchanged. It does not write MODEL_DATA or run a second solve. Sky uses
+`julia060`; RFI uses `ttcal_dev`. No packages or environment changes are required:
+Julia writes temporary binary/JSON exchange files, Python compresses them, and
+only the NPZ survives. The runtime account needs read access to the existing
+Julia package caches, as it does for the original TTCal CLI.
+
+Schema version 1 (load with `numpy.load(path, allow_pickle=False)`):
+
+| Key | Meaning |
+| --- | --- |
+| `gains` | complex128, axes `(source, Jones component, antenna, frequency, time)` |
+| `jones_order` | `xx, xy, yx, yy` |
+| `source_indices`, `source_names` | Zero-based indices into the original source model, and names, in the actual above-horizon solve order |
+| `antenna_indices` | Zero-based MS ANTENNA row indices |
+| `frequencies_hz`, `times_mjd_seconds` | Solver frequency/time coordinates; time uses MS UTC seconds since MJD 0 |
+| `invalid_gains` | Non-finite Jones entries, reduced over components; **not convergence flags** |
+| `metadata_json` | Schema, full input source model, MS basename, input column, solver settings, environment and array-axis definitions |
+
+These TTCal installations do not retain convergence flags in their returned
+`Calibration` objects. Metadata explicitly records this limitation. Their Dataset
+reader handles one integration per input MS; the exporter preserves that contract.
+Solutions describe the sequential sky-then-RFI subtraction on already calibrated
+data. Reusing them requires matching the antenna/frequency/time coordinates,
+source model, beam, input calibration and stage order; this change stores the
+solutions but does not add a reapplication command.
+
+Raw gain storage is `64 × Nsource × Nant × Nfreq × Ntime` bytes before compression.
+For 352 antennas and 12 channels, that is 270,336 bytes per source per integration.
+Actual compressed sizes are logged for every product; no silent size-based drop
+is applied.
+
+For a bounded server comparison without Celery or a full pipeline run:
+
+```bash
+/opt/devel/pipeline/envs/py38_orca_nkosogor/bin/python \
+  tests/integration/peeling_solutions_smoke.py "$PWD" \
+  "$PWD/tests/resources/test_data.ms" /tmp/peeling-smoke-unique
+```
+
+This creates eight-antenna copies of the test fixture and compares existing CLI
+and export-adapter visibilities in both environments, including the source-index
+mapping and MS flag preservation. Use a fresh scratch directory for each run.
+An optional trailing environment name (`julia060` or `ttcal_dev`) limits the check
+to that environment.
+
+Validated on `lwacalim02` on 2026-09-18 using the installed environments and
+synthetic sky/RFI models: both adapters matched the existing CLI's output
+visibilities exactly and preserved flags. The eight-antenna, 12-channel products
+were 8,480 bytes (sky) and 8,490 bytes (RFI). The archive retention test passed in
+`py38_orca_nkosogor`; four serialization/failure tests passed locally. The RFI
+comparison used the `calim2` login because the `calim_nkos_2` account could not
+read an existing `ttcal_dev` compiled-cache file. No environment, package,
+permission, or production repository changes were needed for these checks.
+
+---
+
 ## File Map
 
 ### Submission & Orchestration
