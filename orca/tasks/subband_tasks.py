@@ -580,6 +580,10 @@ def _peel_legacy(nvme_ms, peel_sky, peel_rfi, sky_model, rfi_model, maxiter):
         if rfi_env != sky_env:
             peel_env = os.environ.copy()
             peel_env["OMP_NUM_THREADS"] = "8"
+            _ld = PEELING_PARAMS.get('rfi_ld_library_path')
+            if _ld:
+                peel_env["LD_LIBRARY_PATH"] = ":".join(
+                    p for p in (_ld, peel_env.get("LD_LIBRARY_PATH")) if p)
             _rfi_args = PEELING_PARAMS['args'].replace(
                 f"--maxiter {PEELING_PARAMS['maxiter']}",
                 f"--maxiter {maxiter}",

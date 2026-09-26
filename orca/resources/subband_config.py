@@ -87,6 +87,12 @@ LUSTRE_PRODUCTS_DIR = '/lustre/pipeline/products'
 PEELING_PARAMS = {
     'sky_env': 'julia060',
     'rfi_env': 'ttcal_dev',
+    # Prepended to LD_LIBRARY_PATH for ttcal_dev runs.  Since 2026-09-05 the
+    # system linker cache prefers /opt/carta-casacore/lib/libcasa_*.so.7,
+    # which is ABI-incompatible with /opt/lib/libcasa_ms.so.7 that
+    # CasaCore.jl's wrapper also needs (undefined casacore::Array symbols).
+    # /opt/lib holds a complete, consistent casacore 7 set.
+    'rfi_ld_library_path': '/opt/lib',
     'sky_model': '/lustre/gh/calibration/pipeline/reference/sources/sources.json',
     'rfi_model': '/lustre/gh/calibration/pipeline/reference/sources/rfi_43.2_ver20251101.json',
     'beam': 'constant',

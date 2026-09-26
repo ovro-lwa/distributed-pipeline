@@ -84,3 +84,20 @@ def test_malformed_exchange_preserves_previous_output(tmp_path, monkeypatch):
         ttcal.zest_with_ttcal('input.ms', str(sources), solutions_path=str(output))
     assert output.read_bytes() == b'previous valid output'
     assert not list(tmp_path.glob('.peelsol-*'))
+
+
+def test_ttcal_dev_prefers_consistent_casacore(tmp_path, monkeypatch):
+    seen = {}
+
+    def solver(cmd, env=None, **kwargs):
+        seen['env'] = env
+        exchange = Path(cmd[-1].rsplit(' ', 1)[-1].strip("'"))
+        fake_solver([str(exchange)])
+
+    monkeypatch.setattr(ttcal.subprocess, 'run', solver)
+    monkeypatch.setenv('LD_LIBRARY_PATH', '/usr/local/cuda/lib64')
+    sources = tmp_path / 'sources.json'
+    sources.write_text('[{"name":"below horizon"},{"name":"visible"}]')
+    ttcal.zest_with_ttcal('input.ms', str(sources), julia_env='ttcal_dev',
+                          solutions_path=str(tmp_path / 'rfi.npz'))
+    assert seen['env']['LD_LIBRARY_PATH'] == '/opt/lib:/usr/local/cuda/lib64'

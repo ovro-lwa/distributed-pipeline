@@ -15,6 +15,8 @@ from typing import Optional
 import numpy as np
 
 TTCAL_EXEC = '/opt/devel/pipeline/envs/julia060/bin/ttcal.jl'
+# Consistent casacore 7 set for non-julia060 envs; see PEELING_PARAMS['rfi_ld_library_path'].
+TTCAL_DEV_LD_LIBRARY_PATH = '/opt/lib'
 
 def peel_with_ttcal(ms: str, sources: str):
     """Use TTCal to peel sources.
@@ -122,6 +124,8 @@ def _zest_with_solutions(ms, sources, beam, minuvw, maxiter, tolerance,
         else:
             # Preserve the existing Phase 1 RFI environment activation.
             env['OMP_NUM_THREADS'] = '8'
+            env['LD_LIBRARY_PATH'] = ':'.join(
+                p for p in (TTCAL_DEV_LD_LIBRARY_PATH, env.get('LD_LIBRARY_PATH')) if p)
             cmd = ['/bin/bash', '-c',
                    'source ~/.bashrc && conda activate ' + shlex.quote(julia_env)
                    + ' && exec ' + ' '.join(shlex.quote(arg) for arg in cmd)]
