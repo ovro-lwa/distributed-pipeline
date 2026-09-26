@@ -553,6 +553,57 @@ def _patch_scale_arg(args: list, scale: float) -> list:
     return args
 
 
+def _peel_legacy(nvme_ms, peel_sky, peel_rfi, sky_model, rfi_model, maxiter):
+    """Original ttcal.jl CLI peeling (no solutions saved)."""
+    if peel_sky:
+        _t = time.time()
+        logger.info(f"Peeling sky model on {os.path.basename(nvme_ms)} (maxiter={maxiter})")
+        zest_with_ttcal(
+            ms=nvme_ms,
+            sources=sky_model,
+            beam=PEELING_PARAMS['beam'],
+            minuvw=PEELING_PARAMS['minuvw'],
+            maxiter=maxiter,
+            tolerance=PEELING_PARAMS['tolerance'],
+        )
+        logger.info(f"[TIMER] peel_sky: {time.time() - _t:.1f}s")
+
+    if peel_rfi:
+        _t = time.time()
+        logger.info(f"Peeling RFI model on {os.path.basename(nvme_ms)}")
+        # RFI peeling may use a different conda env (ttcal_dev) than sky
+        # (julia060); zest_with_ttcal's CLI path uses julia060, so use a
+        # shell-based invocation like the Slurm pipeline when they differ.
+        rfi_env = PEELING_PARAMS.get('rfi_env', 'julia060')
+        sky_env = PEELING_PARAMS.get('sky_env', 'julia060')
+        if rfi_env != sky_env:
+            peel_env = os.environ.copy()
+            peel_env["OMP_NUM_THREADS"] = "8"
+            _rfi_args = PEELING_PARAMS['args'].replace(
+                f"--maxiter {PEELING_PARAMS['maxiter']}",
+                f"--maxiter {maxiter}",
+            )
+            cmd = (
+                f"source ~/.bashrc && conda activate {rfi_env} && "
+                f"ttcal.jl zest {nvme_ms} {rfi_model} "
+                f"{_rfi_args}"
+            )
+            subprocess.run(
+                cmd, shell=True, check=True,
+                executable='/bin/bash', env=peel_env,
+            )
+        else:
+            zest_with_ttcal(
+                ms=nvme_ms,
+                sources=rfi_model,
+                beam=PEELING_PARAMS['beam'],
+                minuvw=PEELING_PARAMS['minuvw'],
+                maxiter=maxiter,
+                tolerance=PEELING_PARAMS['tolerance'],
+            )
+        logger.info(f"[TIMER] peel_rfi: {time.time() - _t:.1f}s")
+
+
 # ============================================================================
 #  PHASE 1 — Per-MS task  (runs in parallel via Celery)
 # ============================================================================
@@ -574,6 +625,7 @@ def prepare_one_ms_task(
     peel_sky: bool = False,
     peel_rfi: bool = False,
     peel_maxiter: Optional[int] = None,
+    save_peel_solutions: bool = False,
 ) -> str:
     """Copy one MS to NVMe, flag, calibrate, and optionally peel.
 
@@ -588,6 +640,9 @@ def prepare_one_ms_task(
         peel_sky: Run TTCal zest with sky model.
         peel_rfi: Run TTCal zest with RFI model.
         peel_maxiter: Override max iterations for peeling (default: PEELING_PARAMS['maxiter']).
+        save_peel_solutions: Peel through the solution-exporting TTCal adapter
+            and write ``peeling_solutions/<ms>/{sky,rfi}.npz`` (merged per
+            stage in Phase 2).  If False, use the original ttcal.jl CLI.
 
     Returns:
         Path to the processed MS on NVMe.
@@ -639,27 +694,33 @@ def prepare_one_ms_task(
         shutil.rmtree(nvme_ms, ignore_errors=True)
         raise RuntimeError(f"Calibration failed for {src_ms}")
 
-    # 4. Peeling. Keep solutions outside the MS: Phase 2 deletes input MSes.
-    solutions_dir = os.path.join(nvme_work_dir, 'peeling_solutions',
-                                 os.path.basename(nvme_ms))
+    # 4. Peeling
     _peel_maxiter = peel_maxiter if peel_maxiter is not None else PEELING_PARAMS['maxiter']
-    for enabled, stage, model in ((peel_sky, 'sky', sky_model_nvme),
-                                  (peel_rfi, 'rfi', rfi_model_nvme)):
-        if not enabled:
-            continue
-        _t = time.time()
-        logger.info(f"Peeling {stage} model on {os.path.basename(nvme_ms)} (maxiter={_peel_maxiter})")
-        zest_with_ttcal(
-            ms=nvme_ms,
-            sources=model,
-            beam=PEELING_PARAMS['beam'],
-            minuvw=PEELING_PARAMS['minuvw'],
-            maxiter=_peel_maxiter,
-            tolerance=PEELING_PARAMS['tolerance'],
-            solutions_path=os.path.join(solutions_dir, f'{stage}.npz'),
-            julia_env=PEELING_PARAMS.get(f'{stage}_env', 'julia060'),
-        )
-        logger.info(f"[TIMER] peel_{stage}: {time.time() - _t:.1f}s")
+    if save_peel_solutions:
+        # Keep solutions outside the MS: Phase 2 deletes input MSes.
+        solutions_dir = os.path.join(nvme_work_dir, 'peeling_solutions',
+                                     os.path.basename(nvme_ms))
+        for enabled, stage, model in ((peel_sky, 'sky', sky_model_nvme),
+                                      (peel_rfi, 'rfi', rfi_model_nvme)):
+            if not enabled:
+                continue
+            _t = time.time()
+            logger.info(f"Peeling {stage} model on {os.path.basename(nvme_ms)} "
+                        f"(maxiter={_peel_maxiter}, saving solutions)")
+            zest_with_ttcal(
+                ms=nvme_ms,
+                sources=model,
+                beam=PEELING_PARAMS['beam'],
+                minuvw=PEELING_PARAMS['minuvw'],
+                maxiter=_peel_maxiter,
+                tolerance=PEELING_PARAMS['tolerance'],
+                solutions_path=os.path.join(solutions_dir, f'{stage}.npz'),
+                julia_env=PEELING_PARAMS.get(f'{stage}_env', 'julia060'),
+            )
+            logger.info(f"[TIMER] peel_{stage}: {time.time() - _t:.1f}s")
+    else:
+        _peel_legacy(nvme_ms, peel_sky, peel_rfi, sky_model_nvme,
+                     rfi_model_nvme, _peel_maxiter)
 
     logger.info(
         f"[{self.request.id}] Phase 1 DONE: {os.path.basename(nvme_ms)}"
@@ -854,6 +915,8 @@ def process_subband_task(
                     'cube_only': cube_only,
                     'cube_dewarp': cube_dewarp,
                     'peel_maxiter': peel_maxiter,
+                    'peel_solutions_saved': os.path.isdir(
+                        os.path.join(work_dir, 'peeling_solutions')),
                 },
                 'imaging': {
                     'pixel_size': get_pixel_size(subband),
@@ -1572,6 +1635,7 @@ def submit_subband_pipeline(
     peel_sky: bool = False,
     peel_rfi: bool = False,
     peel_maxiter: Optional[int] = None,
+    save_peel_solutions: bool = False,
     hot_baselines: bool = False,
     skip_cleanup: bool = False,
     cleanup_nvme: bool = False,
@@ -1606,6 +1670,7 @@ def submit_subband_pipeline(
         run_label: Human-readable run identifier.
         peel_sky: Peel astronomical sky sources.
         peel_rfi: Peel RFI sources.
+        save_peel_solutions: Save peeling solutions (one NPZ per stage).
         hot_baselines: Run hot-baseline diagnostics.
         skip_cleanup: Keep intermediate files on NVMe.
         cleanup_nvme: Remove entire NVMe work_dir after archiving to Lustre.
@@ -1645,6 +1710,7 @@ def submit_subband_pipeline(
             peel_sky=peel_sky,
             peel_rfi=peel_rfi,
             peel_maxiter=peel_maxiter,
+            save_peel_solutions=save_peel_solutions,
         ).set(queue=queue)
         for ms in ms_files
     ]
@@ -1876,6 +1942,7 @@ def submit_subband_pipeline_chained(
     peel_sky: bool = False,
     peel_rfi: bool = False,
     peel_maxiter: Optional[int] = None,
+    save_peel_solutions: bool = False,
     hot_baselines: bool = False,
     skip_cleanup: bool = False,
     cleanup_nvme: bool = False,
@@ -1917,6 +1984,7 @@ def submit_subband_pipeline_chained(
         run_label: Human-readable run identifier.
         peel_sky: Peel astronomical sky sources.
         peel_rfi: Peel RFI sources.
+        save_peel_solutions: Save peeling solutions (one NPZ per stage).
         hot_baselines: Run hot-baseline diagnostics.
         skip_cleanup: Keep intermediate files on NVMe.
         cleanup_nvme: Remove entire NVMe work_dir after archiving.
@@ -1956,6 +2024,7 @@ def submit_subband_pipeline_chained(
             peel_sky=peel_sky,
             peel_rfi=peel_rfi,
             peel_maxiter=peel_maxiter,
+            save_peel_solutions=save_peel_solutions,
             hot_baselines=hot_baselines,
             skip_cleanup=skip_cleanup,
             cleanup_nvme=cleanup_nvme,

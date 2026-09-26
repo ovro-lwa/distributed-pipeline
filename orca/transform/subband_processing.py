@@ -960,6 +960,7 @@ def archive_results(
 
     Copies subdirectories I/, V/, snapshots/, QA/, samples/, detections/,
     Movies/, Dewarp_Diagnostics/, peeling_solutions/ and loose files.
+    Per-MS peeling solutions are first merged into one NPZ per stage.
     Also writes to the centralised ``samples/`` and ``detections/`` trees
     under ``LUSTRE_ARCHIVE_DIR`` so that products from many runs are
     aggregated in one place.
@@ -981,6 +982,12 @@ def archive_results(
     """
     os.makedirs(archive_base, exist_ok=True)
     logger.info(f"Archiving results → {archive_base}")
+
+    # One NPZ per peeling stage instead of one per MS (no-op if none saved)
+    solutions_root = os.path.join(work_dir, 'peeling_solutions')
+    if os.path.isdir(solutions_root):
+        from orca.transform.peeling_solutions import consolidate_peeling_solutions
+        consolidate_peeling_solutions(solutions_root, subband or 'peeling')
 
     for top_level in ['I', 'V', 'snapshots', 'snapshots_clean', 'QA',
                       'samples', 'detections', 'Movies', 'Dewarp_Diagnostics',

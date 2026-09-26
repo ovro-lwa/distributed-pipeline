@@ -170,6 +170,10 @@ def main():
     parser.add_argument('--peel_rfi', action='store_true')
     parser.add_argument('--peel_maxiter', type=int, default=None,
                         help='Override max peeling iterations (default: 5 from config)')
+    parser.add_argument('--save_peel_solutions', action='store_true',
+                        help='Save TTCal sky/RFI peeling solutions; merged into one '
+                             'peeling_solutions/<subband>_{sky,rfi}.npz per hour and '
+                             'archived. Default: original ttcal.jl CLI, nothing saved.')
     parser.add_argument('--hot_baselines', action='store_true')
     parser.add_argument('--override_range', action='store_true',
                         help='Do not split into LST-hour segments')
@@ -339,6 +343,7 @@ def main():
                     'peel_sky': args.peel_sky,
                     'peel_rfi': args.peel_rfi,
                     'peel_maxiter': args.peel_maxiter,
+                    'save_peel_solutions': args.save_peel_solutions,
                     'hot_baselines': args.hot_baselines,
                     'skip_cleanup': args.skip_cleanup,
                     'cleanup_nvme': args.cleanup_nvme,
@@ -495,6 +500,7 @@ def main():
             peel_rfi=args.peel_rfi,
             hot_baselines=args.hot_baselines,
             peel_maxiter=args.peel_maxiter,
+            save_peel_solutions=args.save_peel_solutions,
             skip_cleanup=args.skip_cleanup,
             cleanup_nvme=args.cleanup_nvme,
             queue_override=queue_override,

@@ -42,17 +42,27 @@ for post-run performance analysis. Grep with `grep '\[TIMER\]' worker.log`.
 
 ## Phase 1 peeling solutions
 
-When sky or RFI peeling is enabled, Phase 1 saves a compressed solution product
-for each measurement set and stage:
+Opt-in with `--save_peel_solutions` (default off: peeling runs through the
+original `ttcal.jl` CLI and nothing is saved). With the flag, Phase 1 peels
+through the exporting adapter below and saves one solution file per
+measurement set and stage:
 
 ```
 <work_dir>/peeling_solutions/<MS basename>/sky.npz
 <work_dir>/peeling_solutions/<MS basename>/rfi.npz
 ```
 
-`archive_results` copies this tree into the normal run archive before removing
-NVMe products. The files live outside the MS because Phase 2 deletes individual
-MSes after concatenation. No extra submission flag is needed. Only enabled stages
+Before archiving, `archive_results` merges these into one file per stage per
+subband-hour (schema 2, see below) and removes the per-MS directories:
+
+```
+<archive>/peeling_solutions/<subband>_sky.npz
+<archive>/peeling_solutions/<subband>_rfi.npz
+```
+
+If merging fails (e.g. mismatched antenna/frequency axes) the per-MS files are
+archived unchanged and the error is logged. The files live outside the MS
+because Phase 2 deletes individual MSes after concatenation. Only enabled stages
 produce files; a stage with no above-horizon sources produces an explicit empty
 solution array. Export failures fail Phase 1 instead of silently losing solutions.
 Each NPZ is atomically replaced after successful serialization. Retrying Phase 1
@@ -87,7 +97,15 @@ data. Reusing them requires matching the antenna/frequency/time coordinates,
 source model, beam, input calibration and stage order; this change stores the
 solutions but does not add a reapplication command.
 
-Raw gain storage is `64 × Nsource × Nant × Nfreq × Ntime` bytes before compression.
+Merged per-hour files (schema 2) keep the same keys and gain axes with these
+differences: `gains` is complex64 (the MS visibility precision), time runs over
+all integrations of the hour, and sources are the union over the hour, with
+NaN gains and `solved[source, time] == False` where a source was below the
+horizon. `ms_names[time]` gives the source MS. `invalid_gains` is dropped
+(use `~np.isfinite(gains)`). `metadata_json` holds the shared metadata once
+(source model, solver settings) plus `n_ms` and the input `columns`.
+
+Raw gain storage (schema 1) is `64 × Nsource × Nant × Nfreq × Ntime` bytes before compression.
 For 352 antennas and 12 channels, that is 270,336 bytes per source per integration.
 Actual compressed sizes are logged for every product; no silent size-based drop
 is applied.
@@ -144,7 +162,7 @@ It verifies solution export and numerical equivalence, not solution reapplicatio
 
 | File | Purpose |
 |------|---------|
-| `pipeline/subband_celery.py` | **CLI entry point.** Discovers MS files, computes LST segments, submits one chord per (subband, LST-hour) to the correct Celery queue. Key flags: `--targets`, `--catalog`, `--clean_snapshots`, `--skip_science`, `--remap SUBBAND=NODE`, `--dynamic`, `--nodes`, `--exclude_nodes`, `--dynamic_queue_label`, `--dynamic_append_only`, `--compress_snapshots`, `--archive_concat_ms`, `--peel_maxiter`. |
+| `pipeline/subband_celery.py` | **CLI entry point.** Discovers MS files, computes LST segments, submits one chord per (subband, LST-hour) to the correct Celery queue. Key flags: `--targets`, `--catalog`, `--clean_snapshots`, `--skip_science`, `--remap SUBBAND=NODE`, `--dynamic`, `--nodes`, `--exclude_nodes`, `--dynamic_queue_label`, `--dynamic_append_only`, `--compress_snapshots`, `--archive_concat_ms`, `--peel_maxiter`, `--save_peel_solutions`, `--cube`, `--cube_only`, `--cube_dewarp`. |
 | `orca/tasks/subband_tasks.py` | **Celery task definitions.** Contains `prepare_one_ms_task` (Phase 1), `process_subband_task` (Phase 2 including science phases A–D), and `submit_subband_pipeline()` which wires them into a chord. Writes `provenance.json` per work unit and emits `[TIMER]` instrumentation. |
 | `orca/celery.py` | **Celery app configuration.** Defines broker/backend, all queues (`default`, `cosmology`, `bandpass`, `imaging`, `calim00`–`calim10`), and task include list. |
 
@@ -368,6 +386,7 @@ Lustre (centralized cross-run aggregation):
 | `--peel_sky` | off | Peel sky model sources (TTCal, `julia060` env) |
 | `--peel_rfi` | off | Peel RFI model sources (TTCal, `ttcal_dev` env) |
 | `--peel_maxiter` | 5 | Override max peeling iterations (recorded in `provenance.json`) |
+| `--save_peel_solutions` | off | Save peeling solutions; one `peeling_solutions/<subband>_{sky,rfi}.npz` per hour |
 | `--hot_baselines` | off | Run hot-baseline heatmap + UV diagnostics |
 | `--clean_snapshots` | off | Produce CLEANed Stokes-I snapshots in `snapshots_clean/` |
 | `--compress_snapshots` | off | fpack-compress snapshot FITS → `.fits.fz` (deep images unaffected) |
