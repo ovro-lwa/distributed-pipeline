@@ -268,6 +268,29 @@ IMAGING_STEPS = [
     },
 ]
 
+# Spectral-line (RRL) Stokes-I cubes, produced with ``--cube``.
+# ``-channels-out`` is set at runtime to the number of channels in the
+# concat MS (one output plane per input channel; 48 for the 4x-averaged
+# archive), and ``-niter`` is scaled to NITER_REF / sqrt(nchan) for a
+# moderate per-channel clean.  Both values below are placeholders that get
+# patched.  Output goes to I/cube/.
+CUBE_NITER_REF = 500000
+
+CUBE_IMAGING_STEPS = [
+    {
+        'pol': 'I', 'category': 'cube', 'suffix': 'I-Deep-Taper-Robust-0-cube',
+        'args': [
+            '-channels-out', '192',
+            '-log-time', '-pol', 'I', '-multiscale', '-multiscale-scale-bias', '0.8',
+            '-niter', '500000', '-mgain', '0.95', '-horizon-mask', '10deg',
+            '-mem', '50', '-auto-threshold', '0.5', '-auto-mask', '3', '-local-rms',
+            '-size', '4096', '4096', '-scale', '0.03125',
+            '-taper-inner-tukey', '30', '-weight', 'briggs', '0',
+            '-no-update-model-required',
+        ],
+    },
+]
+
 
 # ---------------------------------------------------------------------------
 #  Resource management for shared calim nodes

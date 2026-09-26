@@ -207,6 +207,19 @@ def main():
                         help='Lightweight mode: skip pilot V, deep imaging, V movies, '
                              'QA, and science. Only produce clean Stokes-I snapshots '
                              'and I movies (Raw + Filtered). For reprocessing old dates.')
+    parser.add_argument('--cube', action='store_true',
+                        help='Also produce Stokes-I spectral cubes (CUBE_IMAGING_STEPS: '
+                             'one plane per MS channel, niter = 500000/sqrt(nchan)) in '
+                             'I/cube/, PB-corrected and stacked into FITS cubes.')
+    parser.add_argument('--cube_only', action='store_true',
+                        help='Implies --cube and --archive_concat_ms. Calibration, peeling, '
+                             'AOFlagger, pilot V snapshot QA flagging and --hot_baselines '
+                             'still run; the standard deep/10min imaging, clean snapshots, '
+                             'image QA and the other science phases are skipped.')
+    parser.add_argument('--cube_dewarp', action='store_true',
+                        help='Also write ionospherically dewarped cube copies (*_dewarped); '
+                             'screen from the cube MFS image vs VLSSr, scaled by nu^-2 per '
+                             'channel. Originals are always kept.')
     parser.add_argument('--remap', nargs='+', default=None, metavar='SUBBAND=NODE',
                         help='Override node routing, e.g. --remap 18MHz=calim08 23MHz=calim08')
     parser.add_argument('--dynamic', action='store_true',
@@ -231,6 +244,12 @@ def main():
     if args.dynamic and args.remap:
         logger.error('--dynamic and --remap are mutually exclusive')
         sys.exit(1)
+    if args.snapshot_only and (args.cube or args.cube_only):
+        logger.error('--snapshot_only cannot be combined with --cube/--cube_only')
+        sys.exit(1)
+    if args.cube_only:
+        args.cube = True
+        args.archive_concat_ms = True
 
     # Resolve target/catalog paths to absolute so they work on remote workers.
     # Paths under orca/resources/ are resolved relative to the orca package
@@ -332,6 +351,9 @@ def main():
                     'compress_snapshots': args.compress_snapshots,
                     'snapshot_only': args.snapshot_only,
                     'archive_concat_ms': args.archive_concat_ms,
+                    'cube': args.cube,
+                    'cube_only': args.cube_only,
+                    'cube_dewarp': args.cube_dewarp,
                 })
 
         if not all_work_units:
@@ -485,6 +507,9 @@ def main():
             compress_snapshots=args.compress_snapshots,
             snapshot_only=args.snapshot_only,
             archive_concat_ms=args.archive_concat_ms,
+            cube=args.cube,
+            cube_only=args.cube_only,
+            cube_dewarp=args.cube_dewarp,
         )
         results.append({
             'subband': subband,

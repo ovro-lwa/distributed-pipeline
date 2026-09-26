@@ -322,6 +322,7 @@ NVMe (per-node, not shared):
     ├── I/10min/                 # Stokes I 10-min interval images
     ├── V/deep/                  # Stokes V deep images
     ├── V/10min/                 # Stokes V 10-min interval images
+    ├── I/cube/                  # Stokes I spectral cubes (optional, --cube)
     ├── snapshots/               # Pilot snapshot images + QA
     ├── snapshots_clean/         # CLEANed Stokes-I snapshots (optional)
     ├── QA/                      # Hot-baseline plots, flux check CSV+plot
@@ -383,6 +384,9 @@ Lustre (centralized cross-run aggregation):
 | `--targets` | none | Target CSV files for photometry |
 | `--catalog` | none | BDSF catalog for transient search masking |
 | `--snapshot_only` | off | Only produce clean I snapshots + I movies (skip deep imaging) |
+| `--cube` | off | Also produce Stokes-I spectral cubes in `I/cube/` (see [Spectral cubes](#spectral-cubes---cube)) |
+| `--cube_only` | off | `--cube` + `--archive_concat_ms`, without the standard deep/10min imaging, clean snapshots, image QA and science |
+| `--cube_dewarp` | off | Also write dewarped cube copies (`*_dewarped`); originals always kept |
 
 ---
 
@@ -412,6 +416,29 @@ with primary beam correction applied:
 This applies to **all** imaging: dirty snapshots, clean snapshots, and the 7
 science steps.  The `--reduced_pixels` and `--clean_reduced_pixels` flags are
 deprecated no-ops; per-subband pixel scaling is always active.
+
+### Spectral cubes (`--cube`)
+
+`CUBE_IMAGING_STEPS` in `subband_config.py` (currently one step,
+`I-Deep-Taper-Robust-0-cube`: the deep Robust-0 recipe plus
+`-channels-out`) is run after the standard imaging. At runtime:
+
+- `-channels-out` = number of channels in the concat MS (48 for the 4×-averaged
+  archive), one output plane per channel;
+- `-niter` = `CUBE_NITER_REF / sqrt(nchan)` (500000/√48 ≈ 72k per channel).
+
+Each channel and the MFS image are PB-corrected. With `--cube_dewarp`, a VLSSr
+warp screen is measured on the MFS image and applied to every channel scaled by
+(ν_MFS/ν)² (`Dewarp_Diagnostics/<subband>_cube_warp*`), written as separate
+`*_dewarped` files next to the originals. The per-channel FITS are then stacked into one cube per product
+(`<subband>-I-Deep-Taper-Robust-0-cube-{image,residual,psf,model,dirty}-<UTC>[.pbcorr[_dewarped]].fits`,
+numpy shape `(1, nchan, ny, nx)`, linear FREQ axis, per-channel frequencies and
+beams in a `CHANNELS` table extension); the `-MFS-` images stay as single planes.
+
+`--cube_only` still runs everything that changes the visibilities (calibration,
+peeling, AOFlagger, pilot-V snapshot QA flagging, `--hot_baselines`) plus the V
+snapshot movies, skips the rest, and archives the final concat MS
+(`<subband>_concat.ms`) so the cube can be re-imaged without reprocessing.
 
 ---
 

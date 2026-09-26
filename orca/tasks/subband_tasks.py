@@ -99,6 +99,8 @@ from orca.resources.subband_config import (
     SNAPSHOT_PARAMS,
     SNAPSHOT_CLEAN_I_PARAMS,
     IMAGING_STEPS,
+    CUBE_IMAGING_STEPS,
+    CUBE_NITER_REF,
     get_pixel_size,
     get_pixel_scale,
     NVME_BASE_DIR,
@@ -108,6 +110,13 @@ from orca.resources.subband_config import (
     get_image_resources,
 )
 from orca.transform.snapshot_qa import write_snapshot_qa_csv
+from orca.transform.cube_imaging import (
+    get_ms_nchan,
+    cube_niter,
+    patch_cube_args,
+    dewarp_channel_images,
+    stack_cube_products,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -690,6 +699,9 @@ def process_subband_task(
     compress_snapshots: bool = False,
     snapshot_only: bool = False,
     archive_concat_ms: bool = False,
+    cube: bool = False,
+    cube_only: bool = False,
+    cube_dewarp: bool = False,
     remaining_hours: Optional[List[dict]] = None,
     dynamic_run_label: Optional[str] = None,
     bp_table: Optional[str] = None,
@@ -736,6 +748,16 @@ def process_subband_task(
         snapshot_only: If True, skip pilot V, hot baselines, deep imaging,
             V movies, QA, and science. Only produce clean Stokes-I snapshots
             and I movies. Useful for reprocessing old dates.
+        cube: If True, also produce Stokes-I spectral cubes
+            (``CUBE_IMAGING_STEPS``, one plane per MS channel) in
+            ``I/cube/``: PB-corrected and stacked into FITS cubes.
+        cube_only: Implies *cube* and *archive_concat_ms*.  Calibration,
+            peeling, AOFlagger, pilot V snapshot QA flagging and hot
+            baselines still run (they modify the visibilities), but the
+            standard deep/10min imaging, clean snapshots, image QA and the
+            other science phases are skipped.
+        cube_dewarp: Also write ionospherically dewarped copies of the cube
+            (``*_dewarped``); the original cubes are always kept.
         remaining_hours: List of kwarg dicts for subsequent hours.
             Each dict contains the arguments for ``submit_subband_pipeline``.
             The first entry is submitted after this hour completes, with
@@ -761,6 +783,15 @@ def process_subband_task(
         clean_snapshots = True
         skip_science = True
         logger.info("snapshot_only mode: will produce clean I snapshots + I movies only")
+    if snapshot_only and (cube or cube_only):
+        logger.warning("snapshot_only set: ignoring cube/cube_only")
+        cube = cube_only = False
+    if cube_only:
+        cube = True
+        archive_concat_ms = True
+        clean_snapshots = False
+        skip_science = True
+        logger.info("cube_only mode: pilot V + QA flagging, then Stokes-I cube only")
 
     # Filter out any Nones (from failed Phase 1 tasks that were retried and
     # still returned nothing — shouldn't happen with autoretry, but be safe).
@@ -819,6 +850,9 @@ def process_subband_task(
                     'skip_science': skip_science,
                     'compress_snapshots': compress_snapshots,
                     'archive_concat_ms': archive_concat_ms,
+                    'cube': cube,
+                    'cube_only': cube_only,
+                    'cube_dewarp': cube_dewarp,
                     'peel_maxiter': peel_maxiter,
                 },
                 'imaging': {
@@ -854,7 +888,19 @@ def process_subband_task(
                              get_pixel_scale(subband)),
                          }
                         for s in IMAGING_STEPS
-                    ],
+                    ] if not cube_only else [],
+                    # channels-out / niter are patched at runtime from the
+                    # concat MS; the actual values are logged in the CMD line.
+                    'cube_steps': [
+                        {'suffix': s['suffix'], 'pol': s['pol'],
+                         'category': s['category'],
+                         'niter_ref': CUBE_NITER_REF,
+                         'args': _patch_scale_arg(
+                             _patch_size_args(s['args'], get_pixel_size(subband)),
+                             get_pixel_scale(subband)),
+                         }
+                        for s in CUBE_IMAGING_STEPS
+                    ] if cube else [],
                 },
             }
             prov_path = os.path.join(work_dir, 'provenance.json')
@@ -1052,11 +1098,14 @@ def process_subband_task(
         if snapshot_only:
             logger.info("snapshot_only: skipping deep imaging, V movies, QA, science")
         else:
+            _science_steps = [] if cube_only else IMAGING_STEPS
+            if cube_only:
+                logger.info("cube_only: skipping standard deep/10min imaging")
             _t_imaging_all = time.time()
             logger.info(f"Starting Science Imaging for {subband}...")
             logger.info(f"wsclean binary: {wsclean_bin}, thread limit: -j {wsclean_j}")
     
-            for step in IMAGING_STEPS:
+            for step in _science_steps:
                 _t_step = time.time()
                 target_dir = os.path.join(work_dir, step['pol'], step['category'])
                 base = f"{subband}-{step['suffix']}"
@@ -1096,9 +1145,20 @@ def process_subband_task(
             logger.info(f"[TIMER] movie_generation: {time.time() - _t:.1f}s")
 
         # ------------------------------------------------------------------
+        #  7-cube. Stokes-I spectral cubes (optional)
+        # ------------------------------------------------------------------
+        if cube:
+            _t = time.time()
+            _run_cube_imaging(
+                concat_ms, work_dir, subband, wsclean_bin, wsclean_j,
+                npix, scale, dewarp=cube_dewarp,
+            )
+            logger.info(f"[TIMER] cube_imaging_all: {time.time() - _t:.1f}s")
+
+        # ------------------------------------------------------------------
         #  7b-pre. Lightweight image QA (runs unless snapshot_only)
         # ------------------------------------------------------------------
-        if not snapshot_only:
+        if not snapshot_only and not cube_only:
             try:
                 freq_mhz = float(subband.replace('MHz', ''))
             except Exception:
@@ -1188,12 +1248,15 @@ def process_subband_task(
                 # Find all PB-corrected AND raw images to dewarp
                 files_to_warp = glob.glob(
                     os.path.join(work_dir, "*", "*", "*pbcorr*.fits"))
+                # Cube channels get their own frequency-scaled dewarp
                 files_to_warp = [f for f in files_to_warp
-                                 if "_dewarped" not in f]
+                                 if "_dewarped" not in f
+                                 and os.path.basename(os.path.dirname(f)) != "cube"]
                 raw_images = glob.glob(
                     os.path.join(work_dir, "*", "*", "*image*.fits"))
                 raw_images = [f for f in raw_images
-                              if "pbcorr" not in f and "_dewarped" not in f]
+                              if "pbcorr" not in f and "_dewarped" not in f
+                              and os.path.basename(os.path.dirname(f)) != "cube"]
                 files_to_warp.extend(raw_images)
     
                 calc_img = find_deep_image(work_dir, freq_mhz, 'I')
@@ -1523,6 +1586,9 @@ def submit_subband_pipeline(
     compress_snapshots: bool = False,
     snapshot_only: bool = False,
     archive_concat_ms: bool = False,
+    cube: bool = False,
+    cube_only: bool = False,
+    cube_dewarp: bool = False,
     remaining_hours: Optional[List[dict]] = None,
     dynamic_run_label: Optional[str] = None,
 ) -> 'celery.result.AsyncResult':
@@ -1554,6 +1620,9 @@ def submit_subband_pipeline(
         skip_science: If True, skip science phases after PB correction.
         compress_snapshots: If True, fpack-compress snapshot FITS.
         snapshot_only: If True, only produce clean I snapshots + I movies.
+        cube: Also produce Stokes-I spectral cubes in I/cube/.
+        cube_only: Cube plus calibration/flagging only (no deep/10min).
+        cube_dewarp: Also write dewarped copies of the cube.
         dynamic_run_label: If set, enables dynamic dispatch mode.
 
     Returns:
@@ -1599,6 +1668,9 @@ def submit_subband_pipeline(
         compress_snapshots=compress_snapshots,
         snapshot_only=snapshot_only,
         archive_concat_ms=archive_concat_ms,
+        cube=cube,
+        cube_only=cube_only,
+        cube_dewarp=cube_dewarp,
         remaining_hours=remaining_hours,
         dynamic_run_label=dynamic_run_label,
         bp_table=bp_table,
@@ -1670,6 +1742,127 @@ def _run_hot_baseline_diagnostics(concat_ms: str, work_dir: str) -> None:
         os.chdir(cwd)
 
 
+def _run_cube_imaging(
+    concat_ms: str, work_dir: str, subband: str,
+    wsclean_bin: str, wsclean_j: int, npix: int, scale: float,
+    dewarp: bool = False,
+) -> None:
+    """Image, PB-correct, optionally dewarp, and stack the Stokes-I cubes.
+
+    Each step in ``CUBE_IMAGING_STEPS`` is imaged with one output channel per
+    MS channel and ``-niter CUBE_NITER_REF / sqrt(nchan)``.  With *dewarp*,
+    a warp screen is measured on the step's own MFS image and applied, scaled
+    by nu^-2, to each channel as separate ``*_dewarped`` files.
+    Per-channel FITS are then stacked into one cube per product
+    (image, image.pbcorr, image.pbcorr_dewarped, residual, psf, ...).
+    Failures are logged and do not abort Phase 2.
+    """
+    try:
+        nchan = get_ms_nchan(concat_ms)
+    except Exception as e:
+        logger.error(f"Cube: cannot read channel count from {concat_ms}: {e}")
+        return
+    niter = cube_niter(CUBE_NITER_REF, nchan)
+    logger.info(f"Cube imaging for {subband}: {nchan} channels, niter={niter}/channel")
+
+    for step in CUBE_IMAGING_STEPS:
+        _t_step = time.time()
+        target_dir = os.path.join(work_dir, step['pol'], step['category'])
+        os.makedirs(target_dir, exist_ok=True)
+        base = f"{subband}-{step['suffix']}"
+        try:
+            args = patch_cube_args(
+                _patch_scale_arg(_patch_size_args(step['args'], npix), scale),
+                nchan, niter,
+            )
+            cmd = ([wsclean_bin, '-j', str(wsclean_j)] + args
+                   + ['-name', os.path.join(target_dir, base), concat_ms])
+            run_subprocess(cmd, f"Cube imaging {step['suffix']}")
+            add_timestamps_to_images(target_dir, base, concat_ms, 1)
+
+            pb_count = apply_pb_correction_to_images(target_dir, base)
+            logger.info(f"Cube: PB corrected {pb_count} images for {step['suffix']}")
+        except Exception as e:
+            logger.error(f"Cube imaging {step['suffix']} failed: {e}")
+            traceback.print_exc()
+            continue
+
+        # --- Optional: dewarp every channel (screen measured on MFS image) ---
+        if dewarp:
+            try:
+                _dewarp_cube(target_dir, base, subband)
+            except Exception as e:
+                logger.error(f"Cube dewarping failed for {step['suffix']}: {e}")
+                traceback.print_exc()
+
+        # --- Stack per-channel planes into FITS cubes ---
+        try:
+            cubes = stack_cube_products(target_dir, base)
+            logger.info(f"Cube: wrote {len(cubes)} stacked cubes for {step['suffix']}")
+        except Exception as e:
+            logger.error(f"Cube stacking failed for {step['suffix']}: {e}")
+            traceback.print_exc()
+        logger.info(f"[TIMER] cube_{step['suffix']}: {time.time() - _t_step:.1f}s")
+
+
+def _dewarp_cube(target_dir: str, base: str, subband: str) -> None:
+    """Measure a VLSSr warp screen on the cube's MFS image and apply it
+    (nu^-2 scaled) to every channel and MFS image of *base*."""
+    from orca.transform.ionospheric_dewarping import (
+        load_ref_catalog, generate_warp_screens,
+    )
+    from orca.transform.cube_imaging import image_freq_hz
+    from astropy.wcs import WCS as _WCS
+
+    mfs = sorted(f for f in glob.glob(
+        os.path.join(target_dir, f"{base}-MFS-image*.pbcorr.fits")))
+    if not mfs:
+        mfs = sorted(f for f in glob.glob(
+            os.path.join(target_dir, f"{base}-MFS-image*.fits"))
+            if "pbcorr" not in f and "_dewarped" not in f)
+    if not mfs:
+        logger.warning("Cube dewarp: no MFS image found — skipping")
+        return
+    calc_img = mfs[0]
+
+    vlssr = load_ref_catalog(VLSSR_CATALOG, "VLSSr")
+    if not vlssr:
+        logger.warning("Cube dewarp: VLSSr catalog unavailable — skipping")
+        return
+    df = extract_sources_to_df(calc_img)
+    if df.empty:
+        logger.warning("Cube dewarp: no sources extracted from MFS image — skipping")
+        return
+
+    with fits.open(calc_img) as h:
+        wcs_calc = _WCS(h[0].header).celestial
+        calc_shape = h[0].data.squeeze().shape
+        bmaj_deg = h[0].header.get('BMAJ', 5.0 / 60.0)
+        ref_freq_hz = image_freq_hz(h[0].header) or float(subband.replace('MHz', '')) * 1e6
+
+    work_dir = os.path.dirname(os.path.dirname(target_dir))
+    diag_dir = os.path.join(work_dir, "Dewarp_Diagnostics")
+    os.makedirs(diag_dir, exist_ok=True)
+    prev_cwd = os.getcwd()
+    os.chdir(diag_dir)
+    try:
+        sx, sy, _, _ = generate_warp_screens(
+            df, vlssr, wcs_calc, calc_shape,
+            ref_freq_hz / 1e6, 74.0, bmaj_deg, 5.0,
+            base_name=os.path.join(diag_dir, f"{subband}_cube_warp"),
+        )
+    finally:
+        os.chdir(prev_cwd)
+    if sx is None:
+        logger.warning("Cube dewarp: warp screen generation failed — skipping")
+        return
+
+    to_warp = [f for f in glob.glob(os.path.join(target_dir, f"{base}-*image*.fits"))
+               if "_dewarped" not in f]
+    n = dewarp_channel_images(to_warp, sx, sy, ref_freq_hz)
+    logger.info(f"Cube: dewarped {n}/{len(to_warp)} images (ref {ref_freq_hz/1e6:.3f} MHz)")
+
+
 # ============================================================================
 #  Sequential chaining: process multiple hours one at a time per subband
 # ============================================================================
@@ -1696,6 +1889,9 @@ def submit_subband_pipeline_chained(
     compress_snapshots: bool = False,
     snapshot_only: bool = False,
     archive_concat_ms: bool = False,
+    cube: bool = False,
+    cube_only: bool = False,
+    cube_dewarp: bool = False,
 ) -> 'celery.result.AsyncResult':
     """Submit multiple LST-hours for one subband as a sequential chain.
 
@@ -1733,6 +1929,9 @@ def submit_subband_pipeline_chained(
         skip_science: Skip science phases after PB correction.
         compress_snapshots: fpack-compress snapshot FITS.
         snapshot_only: Only produce clean I snapshots + I movies.
+        cube: Also produce Stokes-I spectral cubes in I/cube/.
+        cube_only: Cube plus calibration/flagging only (no deep/10min).
+        cube_dewarp: Also write dewarped copies of the cube.
 
     Returns:
         Celery AsyncResult for the first hour's chord (only the first
@@ -1770,6 +1969,9 @@ def submit_subband_pipeline_chained(
             compress_snapshots=compress_snapshots,
             snapshot_only=snapshot_only,
             archive_concat_ms=archive_concat_ms,
+            cube=cube,
+            cube_only=cube_only,
+            cube_dewarp=cube_dewarp,
         )
         all_hour_kwargs.append(kwargs)
 
