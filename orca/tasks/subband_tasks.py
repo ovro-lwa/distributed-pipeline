@@ -95,6 +95,7 @@ from orca.transform.subband_processing import (
 from orca.configmanager import queue_config
 from orca.resources.subband_config import (
     PEELING_PARAMS,
+    PEEL_SOLUTION_STAGES,
     AOFLAGGER_STRATEGY,
     SNAPSHOT_PARAMS,
     SNAPSHOT_CLEAN_I_PARAMS,
@@ -640,9 +641,11 @@ def prepare_one_ms_task(
         peel_sky: Run TTCal zest with sky model.
         peel_rfi: Run TTCal zest with RFI model.
         peel_maxiter: Override max iterations for peeling (default: PEELING_PARAMS['maxiter']).
-        save_peel_solutions: Peel through the solution-exporting TTCal adapter
-            and write ``peeling_solutions/<ms>/{sky,rfi}.npz`` (merged per
-            stage in Phase 2).  If False, use the original ttcal.jl CLI.
+        save_peel_solutions: For stages in ``PEEL_SOLUTION_STAGES`` (sky
+            only by default), peel through the solution-exporting TTCal
+            adapter and write ``peeling_solutions/<ms>/<stage>.npz`` (merged
+            per stage in Phase 2).  Other stages, and all stages when False,
+            use the original ttcal.jl CLI.
 
     Returns:
         Path to the processed MS on NVMe.
@@ -694,16 +697,17 @@ def prepare_one_ms_task(
         shutil.rmtree(nvme_ms, ignore_errors=True)
         raise RuntimeError(f"Calibration failed for {src_ms}")
 
-    # 4. Peeling
+    # 4. Peeling (sky before RFI, as in the original pipeline)
     _peel_maxiter = peel_maxiter if peel_maxiter is not None else PEELING_PARAMS['maxiter']
-    if save_peel_solutions:
-        # Keep solutions outside the MS: Phase 2 deletes input MSes.
-        solutions_dir = os.path.join(nvme_work_dir, 'peeling_solutions',
-                                     os.path.basename(nvme_ms))
-        for enabled, stage, model in ((peel_sky, 'sky', sky_model_nvme),
-                                      (peel_rfi, 'rfi', rfi_model_nvme)):
-            if not enabled:
-                continue
+    save_stages = set(PEEL_SOLUTION_STAGES) if save_peel_solutions else set()
+    # Keep solutions outside the MS: Phase 2 deletes input MSes.
+    solutions_dir = os.path.join(nvme_work_dir, 'peeling_solutions',
+                                 os.path.basename(nvme_ms))
+    for enabled, stage, model in ((peel_sky, 'sky', sky_model_nvme),
+                                  (peel_rfi, 'rfi', rfi_model_nvme)):
+        if not enabled:
+            continue
+        if stage in save_stages:
             _t = time.time()
             logger.info(f"Peeling {stage} model on {os.path.basename(nvme_ms)} "
                         f"(maxiter={_peel_maxiter}, saving solutions)")
@@ -718,9 +722,9 @@ def prepare_one_ms_task(
                 julia_env=PEELING_PARAMS.get(f'{stage}_env', 'julia060'),
             )
             logger.info(f"[TIMER] peel_{stage}: {time.time() - _t:.1f}s")
-    else:
-        _peel_legacy(nvme_ms, peel_sky, peel_rfi, sky_model_nvme,
-                     rfi_model_nvme, _peel_maxiter)
+        else:
+            _peel_legacy(nvme_ms, stage == 'sky', stage == 'rfi',
+                         sky_model_nvme, rfi_model_nvme, _peel_maxiter)
 
     logger.info(
         f"[{self.request.id}] Phase 1 DONE: {os.path.basename(nvme_ms)}"
@@ -1670,7 +1674,8 @@ def submit_subband_pipeline(
         run_label: Human-readable run identifier.
         peel_sky: Peel astronomical sky sources.
         peel_rfi: Peel RFI sources.
-        save_peel_solutions: Save peeling solutions (one NPZ per stage).
+        save_peel_solutions: Save peeling solutions for PEEL_SOLUTION_STAGES
+            (sky only by default), one NPZ per stage per hour.
         hot_baselines: Run hot-baseline diagnostics.
         skip_cleanup: Keep intermediate files on NVMe.
         cleanup_nvme: Remove entire NVMe work_dir after archiving to Lustre.
@@ -1984,7 +1989,8 @@ def submit_subband_pipeline_chained(
         run_label: Human-readable run identifier.
         peel_sky: Peel astronomical sky sources.
         peel_rfi: Peel RFI sources.
-        save_peel_solutions: Save peeling solutions (one NPZ per stage).
+        save_peel_solutions: Save peeling solutions for PEEL_SOLUTION_STAGES
+            (sky only by default), one NPZ per stage per hour.
         hot_baselines: Run hot-baseline diagnostics.
         skip_cleanup: Keep intermediate files on NVMe.
         cleanup_nvme: Remove entire NVMe work_dir after archiving.

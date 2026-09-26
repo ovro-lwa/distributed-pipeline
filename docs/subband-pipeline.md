@@ -43,9 +43,12 @@ for post-run performance analysis. Grep with `grep '\[TIMER\]' worker.log`.
 ## Phase 1 peeling solutions
 
 Opt-in with `--save_peel_solutions` (default off: peeling runs through the
-original `ttcal.jl` CLI and nothing is saved). With the flag, Phase 1 peels
-through the exporting adapter below and saves one solution file per
-measurement set and stage:
+original `ttcal.jl` CLI and nothing is saved). With the flag, stages listed in
+`PEEL_SOLUTION_STAGES` (`subband_config.py`, currently sky only) peel through
+the exporting adapter below; the others keep the `ttcal.jl` CLI. RFI is
+excluded because on the workers the adapter fails to load TTCal in `ttcal_dev`
+(`libcasacorewrapper.so` / `libcasa_ms.so.7` undefined symbol), while the CLI
+works. Phase 1 saves one solution file per measurement set and saved stage:
 
 ```
 <work_dir>/peeling_solutions/<MS basename>/sky.npz
@@ -386,7 +389,7 @@ Lustre (centralized cross-run aggregation):
 | `--peel_sky` | off | Peel sky model sources (TTCal, `julia060` env) |
 | `--peel_rfi` | off | Peel RFI model sources (TTCal, `ttcal_dev` env) |
 | `--peel_maxiter` | 5 | Override max peeling iterations (recorded in `provenance.json`) |
-| `--save_peel_solutions` | off | Save peeling solutions; one `peeling_solutions/<subband>_{sky,rfi}.npz` per hour |
+| `--save_peel_solutions` | off | Save peeling solutions for `PEEL_SOLUTION_STAGES` (sky only); one `peeling_solutions/<subband>_sky.npz` per hour |
 | `--hot_baselines` | off | Run hot-baseline heatmap + UV diagnostics |
 | `--clean_snapshots` | off | Produce CLEANed Stokes-I snapshots in `snapshots_clean/` |
 | `--compress_snapshots` | off | fpack-compress snapshot FITS → `.fits.fz` (deep images unaffected) |

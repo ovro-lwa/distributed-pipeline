@@ -96,6 +96,11 @@ PEELING_PARAMS = {
     'args': '--beam constant --minuvw 5 --maxiter 5 --tolerance 1e-4',
 }
 
+# Peeling stages whose solutions are saved with --save_peel_solutions.
+# RFI (ttcal_dev) is excluded: the exporting adapter fails to load TTCal in
+# that env on the workers, so RFI always uses the original ttcal.jl CLI.
+PEEL_SOLUTION_STAGES = ('sky',)
+
 AOFLAGGER_STRATEGY = '/lustre/ghellbourg/AOFlagger_strat_opt/LWA_opt_GH1.lua'
 
 VLSSR_CATALOG = '/lustre/gh/calibration/pipeline/reference/surveys/FullVLSSCatalog.text'

@@ -171,9 +171,10 @@ def main():
     parser.add_argument('--peel_maxiter', type=int, default=None,
                         help='Override max peeling iterations (default: 5 from config)')
     parser.add_argument('--save_peel_solutions', action='store_true',
-                        help='Save TTCal sky/RFI peeling solutions; merged into one '
-                             'peeling_solutions/<subband>_{sky,rfi}.npz per hour and '
-                             'archived. Default: original ttcal.jl CLI, nothing saved.')
+                        help='Save TTCal peeling solutions for PEEL_SOLUTION_STAGES '
+                             '(sky only; RFI always uses the ttcal.jl CLI), merged into '
+                             'peeling_solutions/<subband>_sky.npz per hour and archived. '
+                             'Default: original ttcal.jl CLI, nothing saved.')
     parser.add_argument('--hot_baselines', action='store_true')
     parser.add_argument('--override_range', action='store_true',
                         help='Do not split into LST-hour segments')
