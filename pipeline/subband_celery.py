@@ -43,6 +43,9 @@ from orca.tasks.subband_tasks import (
     _dynamic_queue_length,
 )
 from orca.transform.subband_processing import find_archive_files_for_subband
+from orca.utils.sun_cut import (
+    filter_sun, SUN_MAX_ALT_MORNING_DEG, SUN_MAX_ALT_EVENING_DEG,
+)
 from orca.resources.subband_config import (
     NODE_SUBBAND_MAP,
     DYNAMIC_NODE_POOL,
@@ -142,6 +145,19 @@ def generate_lst_segments(t_start, t_end, override=False):
     return jobs
 
 
+def _apply_sun_cut(ms_files, args, subband, lst_label):
+    """Drop frames taken with the Sun too high (see orca.utils.sun_cut)."""
+    if args.no_sun_cut or not ms_files:
+        return ms_files
+    kept, refused = filter_sun(ms_files, args.sun_morning_max, args.sun_evening_max)
+    if refused:
+        logger.info(
+            f"  Sun cut {subband} {lst_label}: kept {len(kept)}/{len(ms_files)} "
+            f"(refused {os.path.basename(refused[0])} .. {os.path.basename(refused[-1])})"
+        )
+    return kept
+
+
 # ---------------------------------------------------------------------------
 #  Main
 # ---------------------------------------------------------------------------
@@ -225,6 +241,14 @@ def main():
                         help='Also write ionospherically dewarped cube copies (*_dewarped); '
                              'screen from the cube MFS image vs VLSSr, scaled by nu^-2 per '
                              'channel. Originals are always kept.')
+    parser.add_argument('--no_sun_cut', action='store_true',
+                        help='Disable the Sun-altitude frame cut (default: refuse frames '
+                             'with the Sun above --sun_morning_max while rising and above '
+                             '--sun_evening_max while setting).')
+    parser.add_argument('--sun_morning_max', type=float, default=SUN_MAX_ALT_MORNING_DEG,
+                        help='Max Sun altitude (deg) for morning frames (default: %(default)s)')
+    parser.add_argument('--sun_evening_max', type=float, default=SUN_MAX_ALT_EVENING_DEG,
+                        help='Max Sun altitude (deg) for evening frames (default: %(default)s)')
     parser.add_argument('--remap', nargs='+', default=None, metavar='SUBBAND=NODE',
                         help='Override node routing, e.g. --remap 18MHz=calim08 23MHz=calim08')
     parser.add_argument('--dynamic', action='store_true',
@@ -326,6 +350,7 @@ def main():
                 ms_files = find_archive_files_for_subband(
                     start_dt, end_dt, subband, input_dir=args.input_dir,
                 )
+                ms_files = _apply_sun_cut(ms_files, args, subband, lst_label)
                 if not ms_files:
                     logger.warning(
                         f"No files for {subband} in {lst_label} "
@@ -457,6 +482,7 @@ def main():
             ms_files = find_archive_files_for_subband(
                 start_dt, end_dt, subband, input_dir=args.input_dir,
             )
+            ms_files = _apply_sun_cut(ms_files, args, subband, lst_label)
 
             if not ms_files:
                 logger.warning(
