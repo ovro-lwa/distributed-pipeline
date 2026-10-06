@@ -409,7 +409,7 @@ Lustre (centralized cross-run aggregation):
 | `--no_sun_cut` | off | Disable the Sun cut. By default frames are refused when the Sun is above `--sun_morning_max` (−12°, rising) or `--sun_evening_max` (−18°, setting); times from the file names (UTC), see `orca/utils/sun_cut.py` |
 | `--sun_morning_max` / `--sun_evening_max` | −12 / −18 | Sun altitude limits (deg) for the Sun cut |
 | `--cube` | off | Also produce Stokes-I spectral cubes in `I/cube/` (see [Spectral cubes](#spectral-cubes---cube)) |
-| `--cube_only` | off | `--cube` + `--archive_concat_ms`, without the standard deep/10min imaging, clean snapshots, image QA and science |
+| `--cube_only` | off | `--cube`, without the standard deep/10min imaging, clean snapshots, image QA and science; concat MS archival is opt-in |
 | `--cube_dewarp` | off | Also write dewarped cube copies (`*_dewarped`); originals always kept |
 
 ---
@@ -461,8 +461,9 @@ beams in a `CHANNELS` table extension); the `-MFS-` images stay as single planes
 
 `--cube_only` still runs everything that changes the visibilities (calibration,
 peeling, AOFlagger, pilot-V snapshot QA flagging, `--hot_baselines`) plus the V
-snapshot movies, skips the rest, and archives the final concat MS
-(`<subband>_concat.ms`) so the cube can be re-imaged without reprocessing.
+snapshot movies and skips the rest. Add `--archive_concat_ms` to retain the final
+concat MS (`<subband>_concat.ms`) for re-imaging. Without that flag, only the image
+and other pipeline products are archived; `--cleanup_nvme` removes the scratch MS.
 
 ---
 

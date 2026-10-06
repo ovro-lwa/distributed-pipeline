@@ -974,8 +974,7 @@ def archive_results(
             Supersedes cleanup_concat when True.
         archive_concat_ms: If True, copy the concatenated MS
             (``<subband>_concat.ms``) to ``archive_base/`` before removing
-            it from NVMe. Ignored when ``cleanup_workdir`` is True (the
-            entire work_dir is removed regardless).
+            it from NVMe, including when ``cleanup_workdir`` is True.
 
     Returns:
         The archive_base path.

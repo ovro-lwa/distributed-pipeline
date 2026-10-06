@@ -820,7 +820,7 @@ def process_subband_task(
         cube: If True, also produce Stokes-I spectral cubes
             (``CUBE_IMAGING_STEPS``, one plane per MS channel) in
             ``I/cube/``: PB-corrected and stacked into FITS cubes.
-        cube_only: Implies *cube* and *archive_concat_ms*.  Calibration,
+        cube_only: Implies *cube*; concat MS archival remains opt-in. Calibration,
             peeling, AOFlagger, pilot V snapshot QA flagging and hot
             baselines still run (they modify the visibilities), but the
             standard deep/10min imaging, clean snapshots, image QA and the
@@ -857,7 +857,6 @@ def process_subband_task(
         cube = cube_only = False
     if cube_only:
         cube = True
-        archive_concat_ms = True
         clean_snapshots = False
         skip_science = True
         logger.info("cube_only mode: pilot V + QA flagging, then Stokes-I cube only")

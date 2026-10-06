@@ -222,8 +222,8 @@ def main():
                              'Originals are deleted. Deep images are NOT compressed.')
     parser.add_argument('--archive_concat_ms', action='store_true',
                         help='Copy the concatenated MS (<subband>_concat.ms) to the '
-                             'Lustre archive directory before removing it from NVMe. '
-                             'Ignored when --cleanup_nvme is set (entire work_dir removed).')
+                             'Lustre archive directory before NVMe cleanup. '
+                             'Opt-in in all modes, including --cube_only.')
     parser.add_argument('--snapshot_only', action='store_true',
                         help='Lightweight mode: skip pilot V, deep imaging, V movies, '
                              'QA, and science. Only produce clean Stokes-I snapshots '
@@ -233,7 +233,7 @@ def main():
                              'one plane per MS channel, niter = 500000/sqrt(nchan)) in '
                              'I/cube/, PB-corrected and stacked into FITS cubes.')
     parser.add_argument('--cube_only', action='store_true',
-                        help='Implies --cube and --archive_concat_ms. Calibration, peeling, '
+                        help='Implies --cube. Calibration, peeling, '
                              'AOFlagger, pilot V snapshot QA flagging and --hot_baselines '
                              'still run; the standard deep/10min imaging, clean snapshots, '
                              'image QA and the other science phases are skipped.')
@@ -278,7 +278,6 @@ def main():
         sys.exit(1)
     if args.cube_only:
         args.cube = True
-        args.archive_concat_ms = True
 
     # Resolve target/catalog paths to absolute so they work on remote workers.
     # Paths under orca/resources/ are resolved relative to the orca package
