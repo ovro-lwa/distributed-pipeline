@@ -87,6 +87,12 @@ LUSTRE_PRODUCTS_DIR = '/lustre/pipeline/products'
 PEELING_PARAMS = {
     'sky_env': 'julia060',
     'rfi_env': 'ttcal_dev',
+    # Prepended to LD_LIBRARY_PATH for ttcal_dev runs.  Since 2026-09-05 the
+    # system linker cache prefers /opt/carta-casacore/lib/libcasa_*.so.7,
+    # which is ABI-incompatible with /opt/lib/libcasa_ms.so.7 that
+    # CasaCore.jl's wrapper also needs (undefined casacore::Array symbols).
+    # /opt/lib holds a complete, consistent casacore 7 set.
+    'rfi_ld_library_path': '/opt/lib',
     'sky_model': '/lustre/gh/calibration/pipeline/reference/sources/sources.json',
     'rfi_model': '/lustre/gh/calibration/pipeline/reference/sources/rfi_43.2_ver20251101.json',
     'beam': 'constant',
@@ -95,6 +101,11 @@ PEELING_PARAMS = {
     'tolerance': '1e-4',
     'args': '--beam constant --minuvw 5 --maxiter 5 --tolerance 1e-4',
 }
+
+# Peeling stages whose solutions are saved with --save_peel_solutions.
+# RFI (ttcal_dev) is excluded: the exporting adapter fails to load TTCal in
+# that env on the workers, so RFI always uses the original ttcal.jl CLI.
+PEEL_SOLUTION_STAGES = ('sky',)
 
 AOFLAGGER_STRATEGY = '/lustre/ghellbourg/AOFlagger_strat_opt/LWA_opt_GH1.lua'
 
@@ -263,6 +274,29 @@ IMAGING_STEPS = [
             '-size', '4096', '4096', '-scale', '0.03125',
             '-taper-inner-tukey', '30', '-weight', 'briggs', '0',
             '-no-dirty', '-intervals-out', '6',
+            '-no-update-model-required',
+        ],
+    },
+]
+
+# Spectral-line (RRL) Stokes-I cubes, produced with ``--cube``.
+# ``-channels-out`` is set at runtime to the number of channels in the
+# concat MS (one output plane per input channel; 48 for the 4x-averaged
+# archive), and ``-niter`` is scaled to NITER_REF / sqrt(nchan) for a
+# moderate per-channel clean.  Both values below are placeholders that get
+# patched.  Output goes to I/cube/.
+CUBE_NITER_REF = 500000
+
+CUBE_IMAGING_STEPS = [
+    {
+        'pol': 'I', 'category': 'cube', 'suffix': 'I-Deep-Taper-Robust-0-cube',
+        'args': [
+            '-channels-out', '192',
+            '-log-time', '-pol', 'I', '-multiscale', '-multiscale-scale-bias', '0.8',
+            '-niter', '500000', '-mgain', '0.95', '-horizon-mask', '10deg',
+            '-mem', '50', '-auto-threshold', '0.5', '-auto-mask', '3', '-local-rms',
+            '-size', '4096', '4096', '-scale', '0.03125',
+            '-taper-inner-tukey', '30', '-weight', 'briggs', '0',
             '-no-update-model-required',
         ],
     },

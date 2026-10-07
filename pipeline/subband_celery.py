@@ -43,6 +43,9 @@ from orca.tasks.subband_tasks import (
     _dynamic_queue_length,
 )
 from orca.transform.subband_processing import find_archive_files_for_subband
+from orca.utils.sun_cut import (
+    filter_sun, SUN_MAX_ALT_MORNING_DEG, SUN_MAX_ALT_EVENING_DEG,
+)
 from orca.resources.subband_config import (
     NODE_SUBBAND_MAP,
     DYNAMIC_NODE_POOL,
@@ -142,6 +145,19 @@ def generate_lst_segments(t_start, t_end, override=False):
     return jobs
 
 
+def _apply_sun_cut(ms_files, args, subband, lst_label):
+    """Drop frames taken with the Sun too high (see orca.utils.sun_cut)."""
+    if args.no_sun_cut or not ms_files:
+        return ms_files
+    kept, refused = filter_sun(ms_files, args.sun_morning_max, args.sun_evening_max)
+    if refused:
+        logger.info(
+            f"  Sun cut {subband} {lst_label}: kept {len(kept)}/{len(ms_files)} "
+            f"(refused {os.path.basename(refused[0])} .. {os.path.basename(refused[-1])})"
+        )
+    return kept
+
+
 # ---------------------------------------------------------------------------
 #  Main
 # ---------------------------------------------------------------------------
@@ -170,6 +186,11 @@ def main():
     parser.add_argument('--peel_rfi', action='store_true')
     parser.add_argument('--peel_maxiter', type=int, default=None,
                         help='Override max peeling iterations (default: 5 from config)')
+    parser.add_argument('--save_peel_solutions', action='store_true',
+                        help='Save TTCal peeling solutions for PEEL_SOLUTION_STAGES '
+                             '(sky only; RFI always uses the ttcal.jl CLI), merged into '
+                             'peeling_solutions/<subband>_sky.npz per hour and archived. '
+                             'Default: original ttcal.jl CLI, nothing saved.')
     parser.add_argument('--hot_baselines', action='store_true')
     parser.add_argument('--override_range', action='store_true',
                         help='Do not split into LST-hour segments')
@@ -201,12 +222,33 @@ def main():
                              'Originals are deleted. Deep images are NOT compressed.')
     parser.add_argument('--archive_concat_ms', action='store_true',
                         help='Copy the concatenated MS (<subband>_concat.ms) to the '
-                             'Lustre archive directory before removing it from NVMe. '
-                             'Ignored when --cleanup_nvme is set (entire work_dir removed).')
+                             'Lustre archive directory before NVMe cleanup. '
+                             'Opt-in in all modes, including --cube_only.')
     parser.add_argument('--snapshot_only', action='store_true',
                         help='Lightweight mode: skip pilot V, deep imaging, V movies, '
                              'QA, and science. Only produce clean Stokes-I snapshots '
                              'and I movies (Raw + Filtered). For reprocessing old dates.')
+    parser.add_argument('--cube', action='store_true',
+                        help='Also produce Stokes-I spectral cubes (CUBE_IMAGING_STEPS: '
+                             'one plane per MS channel, niter = 500000/sqrt(nchan)) in '
+                             'I/cube/, PB-corrected and stacked into FITS cubes.')
+    parser.add_argument('--cube_only', action='store_true',
+                        help='Implies --cube. Calibration, peeling, '
+                             'AOFlagger, pilot V snapshot QA flagging and --hot_baselines '
+                             'still run; the standard deep/10min imaging, clean snapshots, '
+                             'image QA and the other science phases are skipped.')
+    parser.add_argument('--cube_dewarp', action='store_true',
+                        help='Also write ionospherically dewarped cube copies (*_dewarped); '
+                             'screen from the cube MFS image vs VLSSr, scaled by nu^-2 per '
+                             'channel. Originals are always kept.')
+    parser.add_argument('--no_sun_cut', action='store_true',
+                        help='Disable the Sun-altitude frame cut (default: refuse frames '
+                             'with the Sun above --sun_morning_max while rising and above '
+                             '--sun_evening_max while setting).')
+    parser.add_argument('--sun_morning_max', type=float, default=SUN_MAX_ALT_MORNING_DEG,
+                        help='Max Sun altitude (deg) for morning frames (default: %(default)s)')
+    parser.add_argument('--sun_evening_max', type=float, default=SUN_MAX_ALT_EVENING_DEG,
+                        help='Max Sun altitude (deg) for evening frames (default: %(default)s)')
     parser.add_argument('--remap', nargs='+', default=None, metavar='SUBBAND=NODE',
                         help='Override node routing, e.g. --remap 18MHz=calim08 23MHz=calim08')
     parser.add_argument('--dynamic', action='store_true',
@@ -231,6 +273,11 @@ def main():
     if args.dynamic and args.remap:
         logger.error('--dynamic and --remap are mutually exclusive')
         sys.exit(1)
+    if args.snapshot_only and (args.cube or args.cube_only):
+        logger.error('--snapshot_only cannot be combined with --cube/--cube_only')
+        sys.exit(1)
+    if args.cube_only:
+        args.cube = True
 
     # Resolve target/catalog paths to absolute so they work on remote workers.
     # Paths under orca/resources/ are resolved relative to the orca package
@@ -302,6 +349,7 @@ def main():
                 ms_files = find_archive_files_for_subband(
                     start_dt, end_dt, subband, input_dir=args.input_dir,
                 )
+                ms_files = _apply_sun_cut(ms_files, args, subband, lst_label)
                 if not ms_files:
                     logger.warning(
                         f"No files for {subband} in {lst_label} "
@@ -320,6 +368,7 @@ def main():
                     'peel_sky': args.peel_sky,
                     'peel_rfi': args.peel_rfi,
                     'peel_maxiter': args.peel_maxiter,
+                    'save_peel_solutions': args.save_peel_solutions,
                     'hot_baselines': args.hot_baselines,
                     'skip_cleanup': args.skip_cleanup,
                     'cleanup_nvme': args.cleanup_nvme,
@@ -332,6 +381,9 @@ def main():
                     'compress_snapshots': args.compress_snapshots,
                     'snapshot_only': args.snapshot_only,
                     'archive_concat_ms': args.archive_concat_ms,
+                    'cube': args.cube,
+                    'cube_only': args.cube_only,
+                    'cube_dewarp': args.cube_dewarp,
                 })
 
         if not all_work_units:
@@ -429,6 +481,7 @@ def main():
             ms_files = find_archive_files_for_subband(
                 start_dt, end_dt, subband, input_dir=args.input_dir,
             )
+            ms_files = _apply_sun_cut(ms_files, args, subband, lst_label)
 
             if not ms_files:
                 logger.warning(
@@ -473,6 +526,7 @@ def main():
             peel_rfi=args.peel_rfi,
             hot_baselines=args.hot_baselines,
             peel_maxiter=args.peel_maxiter,
+            save_peel_solutions=args.save_peel_solutions,
             skip_cleanup=args.skip_cleanup,
             cleanup_nvme=args.cleanup_nvme,
             queue_override=queue_override,
@@ -485,6 +539,9 @@ def main():
             compress_snapshots=args.compress_snapshots,
             snapshot_only=args.snapshot_only,
             archive_concat_ms=args.archive_concat_ms,
+            cube=args.cube,
+            cube_only=args.cube_only,
+            cube_dewarp=args.cube_dewarp,
         )
         results.append({
             'subband': subband,

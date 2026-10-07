@@ -95,10 +95,13 @@ from orca.transform.subband_processing import (
 from orca.configmanager import queue_config
 from orca.resources.subband_config import (
     PEELING_PARAMS,
+    PEEL_SOLUTION_STAGES,
     AOFLAGGER_STRATEGY,
     SNAPSHOT_PARAMS,
     SNAPSHOT_CLEAN_I_PARAMS,
     IMAGING_STEPS,
+    CUBE_IMAGING_STEPS,
+    CUBE_NITER_REF,
     get_pixel_size,
     get_pixel_scale,
     NVME_BASE_DIR,
@@ -108,6 +111,13 @@ from orca.resources.subband_config import (
     get_image_resources,
 )
 from orca.transform.snapshot_qa import write_snapshot_qa_csv
+from orca.transform.cube_imaging import (
+    get_ms_nchan,
+    cube_niter,
+    patch_cube_args,
+    dewarp_channel_images,
+    stack_cube_products,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -544,6 +554,61 @@ def _patch_scale_arg(args: list, scale: float) -> list:
     return args
 
 
+def _peel_legacy(nvme_ms, peel_sky, peel_rfi, sky_model, rfi_model, maxiter):
+    """Original ttcal.jl CLI peeling (no solutions saved)."""
+    if peel_sky:
+        _t = time.time()
+        logger.info(f"Peeling sky model on {os.path.basename(nvme_ms)} (maxiter={maxiter})")
+        zest_with_ttcal(
+            ms=nvme_ms,
+            sources=sky_model,
+            beam=PEELING_PARAMS['beam'],
+            minuvw=PEELING_PARAMS['minuvw'],
+            maxiter=maxiter,
+            tolerance=PEELING_PARAMS['tolerance'],
+        )
+        logger.info(f"[TIMER] peel_sky: {time.time() - _t:.1f}s")
+
+    if peel_rfi:
+        _t = time.time()
+        logger.info(f"Peeling RFI model on {os.path.basename(nvme_ms)}")
+        # RFI peeling may use a different conda env (ttcal_dev) than sky
+        # (julia060); zest_with_ttcal's CLI path uses julia060, so use a
+        # shell-based invocation like the Slurm pipeline when they differ.
+        rfi_env = PEELING_PARAMS.get('rfi_env', 'julia060')
+        sky_env = PEELING_PARAMS.get('sky_env', 'julia060')
+        if rfi_env != sky_env:
+            peel_env = os.environ.copy()
+            peel_env["OMP_NUM_THREADS"] = "8"
+            _ld = PEELING_PARAMS.get('rfi_ld_library_path')
+            if _ld:
+                peel_env["LD_LIBRARY_PATH"] = ":".join(
+                    p for p in (_ld, peel_env.get("LD_LIBRARY_PATH")) if p)
+            _rfi_args = PEELING_PARAMS['args'].replace(
+                f"--maxiter {PEELING_PARAMS['maxiter']}",
+                f"--maxiter {maxiter}",
+            )
+            cmd = (
+                f"source ~/.bashrc && conda activate {rfi_env} && "
+                f"ttcal.jl zest {nvme_ms} {rfi_model} "
+                f"{_rfi_args}"
+            )
+            subprocess.run(
+                cmd, shell=True, check=True,
+                executable='/bin/bash', env=peel_env,
+            )
+        else:
+            zest_with_ttcal(
+                ms=nvme_ms,
+                sources=rfi_model,
+                beam=PEELING_PARAMS['beam'],
+                minuvw=PEELING_PARAMS['minuvw'],
+                maxiter=maxiter,
+                tolerance=PEELING_PARAMS['tolerance'],
+            )
+        logger.info(f"[TIMER] peel_rfi: {time.time() - _t:.1f}s")
+
+
 # ============================================================================
 #  PHASE 1 — Per-MS task  (runs in parallel via Celery)
 # ============================================================================
@@ -565,6 +630,7 @@ def prepare_one_ms_task(
     peel_sky: bool = False,
     peel_rfi: bool = False,
     peel_maxiter: Optional[int] = None,
+    save_peel_solutions: bool = False,
 ) -> str:
     """Copy one MS to NVMe, flag, calibrate, and optionally peel.
 
@@ -579,6 +645,11 @@ def prepare_one_ms_task(
         peel_sky: Run TTCal zest with sky model.
         peel_rfi: Run TTCal zest with RFI model.
         peel_maxiter: Override max iterations for peeling (default: PEELING_PARAMS['maxiter']).
+        save_peel_solutions: For stages in ``PEEL_SOLUTION_STAGES`` (sky
+            only by default), peel through the solution-exporting TTCal
+            adapter and write ``peeling_solutions/<ms>/<stage>.npz`` (merged
+            per stage in Phase 2).  Other stages, and all stages when False,
+            use the original ttcal.jl CLI.
 
     Returns:
         Path to the processed MS on NVMe.
@@ -630,58 +701,34 @@ def prepare_one_ms_task(
         shutil.rmtree(nvme_ms, ignore_errors=True)
         raise RuntimeError(f"Calibration failed for {src_ms}")
 
-    # 4. Peeling
+    # 4. Peeling (sky before RFI, as in the original pipeline)
     _peel_maxiter = peel_maxiter if peel_maxiter is not None else PEELING_PARAMS['maxiter']
-    if peel_sky:
-        _t = time.time()
-        logger.info(f"Peeling sky model on {os.path.basename(nvme_ms)} (maxiter={_peel_maxiter})")
-        zest_with_ttcal(
-            ms=nvme_ms,
-            sources=sky_model_nvme,
-            beam=PEELING_PARAMS['beam'],
-            minuvw=PEELING_PARAMS['minuvw'],
-            maxiter=_peel_maxiter,
-            tolerance=PEELING_PARAMS['tolerance'],
-        )
-        logger.info(f"[TIMER] peel_sky: {time.time() - _t:.1f}s")
-
-    if peel_rfi:
-        _t = time.time()
-        logger.info(f"Peeling RFI model on {os.path.basename(nvme_ms)}")
-        # RFI peeling may use a different conda env (ttcal_dev) than sky (julia060).
-        # The orca wrapper zest_with_ttcal uses julia060 hardcoded.
-        # If the envs are different, use shell-based invocation like the
-        # Slurm pipeline does.
-        rfi_env = PEELING_PARAMS.get('rfi_env', 'julia060')
-        sky_env = PEELING_PARAMS.get('sky_env', 'julia060')
-        if rfi_env != sky_env:
-            # Shell-based invocation matching process_subband.py
-            peel_env = os.environ.copy()
-            peel_env["OMP_NUM_THREADS"] = "8"
-            _rfi_args = PEELING_PARAMS['args'].replace(
-                f"--maxiter {PEELING_PARAMS['maxiter']}",
-                f"--maxiter {_peel_maxiter}",
-            )
-            cmd = (
-                f"source ~/.bashrc && conda activate {rfi_env} && "
-                f"ttcal.jl zest {nvme_ms} {rfi_model_nvme} "
-                f"{_rfi_args}"
-            )
-            import subprocess
-            subprocess.run(
-                cmd, shell=True, check=True,
-                executable='/bin/bash', env=peel_env,
-            )
-        else:
+    save_stages = set(PEEL_SOLUTION_STAGES) if save_peel_solutions else set()
+    # Keep solutions outside the MS: Phase 2 deletes input MSes.
+    solutions_dir = os.path.join(nvme_work_dir, 'peeling_solutions',
+                                 os.path.basename(nvme_ms))
+    for enabled, stage, model in ((peel_sky, 'sky', sky_model_nvme),
+                                  (peel_rfi, 'rfi', rfi_model_nvme)):
+        if not enabled:
+            continue
+        if stage in save_stages:
+            _t = time.time()
+            logger.info(f"Peeling {stage} model on {os.path.basename(nvme_ms)} "
+                        f"(maxiter={_peel_maxiter}, saving solutions)")
             zest_with_ttcal(
                 ms=nvme_ms,
-                sources=rfi_model_nvme,
+                sources=model,
                 beam=PEELING_PARAMS['beam'],
                 minuvw=PEELING_PARAMS['minuvw'],
                 maxiter=_peel_maxiter,
                 tolerance=PEELING_PARAMS['tolerance'],
+                solutions_path=os.path.join(solutions_dir, f'{stage}.npz'),
+                julia_env=PEELING_PARAMS.get(f'{stage}_env', 'julia060'),
             )
-        logger.info(f"[TIMER] peel_rfi: {time.time() - _t:.1f}s")
+            logger.info(f"[TIMER] peel_{stage}: {time.time() - _t:.1f}s")
+        else:
+            _peel_legacy(nvme_ms, stage == 'sky', stage == 'rfi',
+                         sky_model_nvme, rfi_model_nvme, _peel_maxiter)
 
     logger.info(
         f"[{self.request.id}] Phase 1 DONE: {os.path.basename(nvme_ms)}"
@@ -721,6 +768,9 @@ def process_subband_task(
     compress_snapshots: bool = False,
     snapshot_only: bool = False,
     archive_concat_ms: bool = False,
+    cube: bool = False,
+    cube_only: bool = False,
+    cube_dewarp: bool = False,
     remaining_hours: Optional[List[dict]] = None,
     dynamic_run_label: Optional[str] = None,
     bp_table: Optional[str] = None,
@@ -767,6 +817,16 @@ def process_subband_task(
         snapshot_only: If True, skip pilot V, hot baselines, deep imaging,
             V movies, QA, and science. Only produce clean Stokes-I snapshots
             and I movies. Useful for reprocessing old dates.
+        cube: If True, also produce Stokes-I spectral cubes
+            (``CUBE_IMAGING_STEPS``, one plane per MS channel) in
+            ``I/cube/``: PB-corrected and stacked into FITS cubes.
+        cube_only: Implies *cube*; concat MS archival remains opt-in. Calibration,
+            peeling, AOFlagger, pilot V snapshot QA flagging and hot
+            baselines still run (they modify the visibilities), but the
+            standard deep/10min imaging, clean snapshots, image QA and the
+            other science phases are skipped.
+        cube_dewarp: Also write ionospherically dewarped copies of the cube
+            (``*_dewarped``); the original cubes are always kept.
         remaining_hours: List of kwarg dicts for subsequent hours.
             Each dict contains the arguments for ``submit_subband_pipeline``.
             The first entry is submitted after this hour completes, with
@@ -792,6 +852,14 @@ def process_subband_task(
         clean_snapshots = True
         skip_science = True
         logger.info("snapshot_only mode: will produce clean I snapshots + I movies only")
+    if snapshot_only and (cube or cube_only):
+        logger.warning("snapshot_only set: ignoring cube/cube_only")
+        cube = cube_only = False
+    if cube_only:
+        cube = True
+        clean_snapshots = False
+        skip_science = True
+        logger.info("cube_only mode: pilot V + QA flagging, then Stokes-I cube only")
 
     # Filter out any Nones (from failed Phase 1 tasks that were retried and
     # still returned nothing — shouldn't happen with autoretry, but be safe).
@@ -850,7 +918,12 @@ def process_subband_task(
                     'skip_science': skip_science,
                     'compress_snapshots': compress_snapshots,
                     'archive_concat_ms': archive_concat_ms,
+                    'cube': cube,
+                    'cube_only': cube_only,
+                    'cube_dewarp': cube_dewarp,
                     'peel_maxiter': peel_maxiter,
+                    'peel_solutions_saved': os.path.isdir(
+                        os.path.join(work_dir, 'peeling_solutions')),
                 },
                 'imaging': {
                     'pixel_size': get_pixel_size(subband),
@@ -885,7 +958,19 @@ def process_subband_task(
                              get_pixel_scale(subband)),
                          }
                         for s in IMAGING_STEPS
-                    ],
+                    ] if not cube_only else [],
+                    # channels-out / niter are patched at runtime from the
+                    # concat MS; the actual values are logged in the CMD line.
+                    'cube_steps': [
+                        {'suffix': s['suffix'], 'pol': s['pol'],
+                         'category': s['category'],
+                         'niter_ref': CUBE_NITER_REF,
+                         'args': _patch_scale_arg(
+                             _patch_size_args(s['args'], get_pixel_size(subband)),
+                             get_pixel_scale(subband)),
+                         }
+                        for s in CUBE_IMAGING_STEPS
+                    ] if cube else [],
                 },
             }
             prov_path = os.path.join(work_dir, 'provenance.json')
@@ -1083,11 +1168,14 @@ def process_subband_task(
         if snapshot_only:
             logger.info("snapshot_only: skipping deep imaging, V movies, QA, science")
         else:
+            _science_steps = [] if cube_only else IMAGING_STEPS
+            if cube_only:
+                logger.info("cube_only: skipping standard deep/10min imaging")
             _t_imaging_all = time.time()
             logger.info(f"Starting Science Imaging for {subband}...")
             logger.info(f"wsclean binary: {wsclean_bin}, thread limit: -j {wsclean_j}")
     
-            for step in IMAGING_STEPS:
+            for step in _science_steps:
                 _t_step = time.time()
                 target_dir = os.path.join(work_dir, step['pol'], step['category'])
                 base = f"{subband}-{step['suffix']}"
@@ -1127,9 +1215,20 @@ def process_subband_task(
             logger.info(f"[TIMER] movie_generation: {time.time() - _t:.1f}s")
 
         # ------------------------------------------------------------------
+        #  7-cube. Stokes-I spectral cubes (optional)
+        # ------------------------------------------------------------------
+        if cube:
+            _t = time.time()
+            _run_cube_imaging(
+                concat_ms, work_dir, subband, wsclean_bin, wsclean_j,
+                npix, scale, dewarp=cube_dewarp,
+            )
+            logger.info(f"[TIMER] cube_imaging_all: {time.time() - _t:.1f}s")
+
+        # ------------------------------------------------------------------
         #  7b-pre. Lightweight image QA (runs unless snapshot_only)
         # ------------------------------------------------------------------
-        if not snapshot_only:
+        if not snapshot_only and not cube_only:
             try:
                 freq_mhz = float(subband.replace('MHz', ''))
             except Exception:
@@ -1219,12 +1318,15 @@ def process_subband_task(
                 # Find all PB-corrected AND raw images to dewarp
                 files_to_warp = glob.glob(
                     os.path.join(work_dir, "*", "*", "*pbcorr*.fits"))
+                # Cube channels get their own frequency-scaled dewarp
                 files_to_warp = [f for f in files_to_warp
-                                 if "_dewarped" not in f]
+                                 if "_dewarped" not in f
+                                 and os.path.basename(os.path.dirname(f)) != "cube"]
                 raw_images = glob.glob(
                     os.path.join(work_dir, "*", "*", "*image*.fits"))
                 raw_images = [f for f in raw_images
-                              if "pbcorr" not in f and "_dewarped" not in f]
+                              if "pbcorr" not in f and "_dewarped" not in f
+                              and os.path.basename(os.path.dirname(f)) != "cube"]
                 files_to_warp.extend(raw_images)
     
                 calc_img = find_deep_image(work_dir, freq_mhz, 'I')
@@ -1540,6 +1642,7 @@ def submit_subband_pipeline(
     peel_sky: bool = False,
     peel_rfi: bool = False,
     peel_maxiter: Optional[int] = None,
+    save_peel_solutions: bool = False,
     hot_baselines: bool = False,
     skip_cleanup: bool = False,
     cleanup_nvme: bool = False,
@@ -1554,6 +1657,9 @@ def submit_subband_pipeline(
     compress_snapshots: bool = False,
     snapshot_only: bool = False,
     archive_concat_ms: bool = False,
+    cube: bool = False,
+    cube_only: bool = False,
+    cube_dewarp: bool = False,
     remaining_hours: Optional[List[dict]] = None,
     dynamic_run_label: Optional[str] = None,
 ) -> 'celery.result.AsyncResult':
@@ -1571,6 +1677,8 @@ def submit_subband_pipeline(
         run_label: Human-readable run identifier.
         peel_sky: Peel astronomical sky sources.
         peel_rfi: Peel RFI sources.
+        save_peel_solutions: Save peeling solutions for PEEL_SOLUTION_STAGES
+            (sky only by default), one NPZ per stage per hour.
         hot_baselines: Run hot-baseline diagnostics.
         skip_cleanup: Keep intermediate files on NVMe.
         cleanup_nvme: Remove entire NVMe work_dir after archiving to Lustre.
@@ -1585,6 +1693,9 @@ def submit_subband_pipeline(
         skip_science: If True, skip science phases after PB correction.
         compress_snapshots: If True, fpack-compress snapshot FITS.
         snapshot_only: If True, only produce clean I snapshots + I movies.
+        cube: Also produce Stokes-I spectral cubes in I/cube/.
+        cube_only: Cube plus calibration/flagging only (no deep/10min).
+        cube_dewarp: Also write dewarped copies of the cube.
         dynamic_run_label: If set, enables dynamic dispatch mode.
 
     Returns:
@@ -1607,6 +1718,7 @@ def submit_subband_pipeline(
             peel_sky=peel_sky,
             peel_rfi=peel_rfi,
             peel_maxiter=peel_maxiter,
+            save_peel_solutions=save_peel_solutions,
         ).set(queue=queue)
         for ms in ms_files
     ]
@@ -1630,6 +1742,9 @@ def submit_subband_pipeline(
         compress_snapshots=compress_snapshots,
         snapshot_only=snapshot_only,
         archive_concat_ms=archive_concat_ms,
+        cube=cube,
+        cube_only=cube_only,
+        cube_dewarp=cube_dewarp,
         remaining_hours=remaining_hours,
         dynamic_run_label=dynamic_run_label,
         bp_table=bp_table,
@@ -1701,6 +1816,127 @@ def _run_hot_baseline_diagnostics(concat_ms: str, work_dir: str) -> None:
         os.chdir(cwd)
 
 
+def _run_cube_imaging(
+    concat_ms: str, work_dir: str, subband: str,
+    wsclean_bin: str, wsclean_j: int, npix: int, scale: float,
+    dewarp: bool = False,
+) -> None:
+    """Image, PB-correct, optionally dewarp, and stack the Stokes-I cubes.
+
+    Each step in ``CUBE_IMAGING_STEPS`` is imaged with one output channel per
+    MS channel and ``-niter CUBE_NITER_REF / sqrt(nchan)``.  With *dewarp*,
+    a warp screen is measured on the step's own MFS image and applied, scaled
+    by nu^-2, to each channel as separate ``*_dewarped`` files.
+    Per-channel FITS are then stacked into one cube per product
+    (image, image.pbcorr, image.pbcorr_dewarped, residual, psf, ...).
+    Failures are logged and do not abort Phase 2.
+    """
+    try:
+        nchan = get_ms_nchan(concat_ms)
+    except Exception as e:
+        logger.error(f"Cube: cannot read channel count from {concat_ms}: {e}")
+        return
+    niter = cube_niter(CUBE_NITER_REF, nchan)
+    logger.info(f"Cube imaging for {subband}: {nchan} channels, niter={niter}/channel")
+
+    for step in CUBE_IMAGING_STEPS:
+        _t_step = time.time()
+        target_dir = os.path.join(work_dir, step['pol'], step['category'])
+        os.makedirs(target_dir, exist_ok=True)
+        base = f"{subband}-{step['suffix']}"
+        try:
+            args = patch_cube_args(
+                _patch_scale_arg(_patch_size_args(step['args'], npix), scale),
+                nchan, niter,
+            )
+            cmd = ([wsclean_bin, '-j', str(wsclean_j)] + args
+                   + ['-name', os.path.join(target_dir, base), concat_ms])
+            run_subprocess(cmd, f"Cube imaging {step['suffix']}")
+            add_timestamps_to_images(target_dir, base, concat_ms, 1)
+
+            pb_count = apply_pb_correction_to_images(target_dir, base)
+            logger.info(f"Cube: PB corrected {pb_count} images for {step['suffix']}")
+        except Exception as e:
+            logger.error(f"Cube imaging {step['suffix']} failed: {e}")
+            traceback.print_exc()
+            continue
+
+        # --- Optional: dewarp every channel (screen measured on MFS image) ---
+        if dewarp:
+            try:
+                _dewarp_cube(target_dir, base, subband)
+            except Exception as e:
+                logger.error(f"Cube dewarping failed for {step['suffix']}: {e}")
+                traceback.print_exc()
+
+        # --- Stack per-channel planes into FITS cubes ---
+        try:
+            cubes = stack_cube_products(target_dir, base)
+            logger.info(f"Cube: wrote {len(cubes)} stacked cubes for {step['suffix']}")
+        except Exception as e:
+            logger.error(f"Cube stacking failed for {step['suffix']}: {e}")
+            traceback.print_exc()
+        logger.info(f"[TIMER] cube_{step['suffix']}: {time.time() - _t_step:.1f}s")
+
+
+def _dewarp_cube(target_dir: str, base: str, subband: str) -> None:
+    """Measure a VLSSr warp screen on the cube's MFS image and apply it
+    (nu^-2 scaled) to every channel and MFS image of *base*."""
+    from orca.transform.ionospheric_dewarping import (
+        load_ref_catalog, generate_warp_screens,
+    )
+    from orca.transform.cube_imaging import image_freq_hz
+    from astropy.wcs import WCS as _WCS
+
+    mfs = sorted(f for f in glob.glob(
+        os.path.join(target_dir, f"{base}-MFS-image*.pbcorr.fits")))
+    if not mfs:
+        mfs = sorted(f for f in glob.glob(
+            os.path.join(target_dir, f"{base}-MFS-image*.fits"))
+            if "pbcorr" not in f and "_dewarped" not in f)
+    if not mfs:
+        logger.warning("Cube dewarp: no MFS image found — skipping")
+        return
+    calc_img = mfs[0]
+
+    vlssr = load_ref_catalog(VLSSR_CATALOG, "VLSSr")
+    if not vlssr:
+        logger.warning("Cube dewarp: VLSSr catalog unavailable — skipping")
+        return
+    df = extract_sources_to_df(calc_img)
+    if df.empty:
+        logger.warning("Cube dewarp: no sources extracted from MFS image — skipping")
+        return
+
+    with fits.open(calc_img) as h:
+        wcs_calc = _WCS(h[0].header).celestial
+        calc_shape = h[0].data.squeeze().shape
+        bmaj_deg = h[0].header.get('BMAJ', 5.0 / 60.0)
+        ref_freq_hz = image_freq_hz(h[0].header) or float(subband.replace('MHz', '')) * 1e6
+
+    work_dir = os.path.dirname(os.path.dirname(target_dir))
+    diag_dir = os.path.join(work_dir, "Dewarp_Diagnostics")
+    os.makedirs(diag_dir, exist_ok=True)
+    prev_cwd = os.getcwd()
+    os.chdir(diag_dir)
+    try:
+        sx, sy, _, _ = generate_warp_screens(
+            df, vlssr, wcs_calc, calc_shape,
+            ref_freq_hz / 1e6, 74.0, bmaj_deg, 5.0,
+            base_name=os.path.join(diag_dir, f"{subband}_cube_warp"),
+        )
+    finally:
+        os.chdir(prev_cwd)
+    if sx is None:
+        logger.warning("Cube dewarp: warp screen generation failed — skipping")
+        return
+
+    to_warp = [f for f in glob.glob(os.path.join(target_dir, f"{base}-*image*.fits"))
+               if "_dewarped" not in f]
+    n = dewarp_channel_images(to_warp, sx, sy, ref_freq_hz)
+    logger.info(f"Cube: dewarped {n}/{len(to_warp)} images (ref {ref_freq_hz/1e6:.3f} MHz)")
+
+
 # ============================================================================
 #  Sequential chaining: process multiple hours one at a time per subband
 # ============================================================================
@@ -1714,6 +1950,7 @@ def submit_subband_pipeline_chained(
     peel_sky: bool = False,
     peel_rfi: bool = False,
     peel_maxiter: Optional[int] = None,
+    save_peel_solutions: bool = False,
     hot_baselines: bool = False,
     skip_cleanup: bool = False,
     cleanup_nvme: bool = False,
@@ -1727,6 +1964,9 @@ def submit_subband_pipeline_chained(
     compress_snapshots: bool = False,
     snapshot_only: bool = False,
     archive_concat_ms: bool = False,
+    cube: bool = False,
+    cube_only: bool = False,
+    cube_dewarp: bool = False,
 ) -> 'celery.result.AsyncResult':
     """Submit multiple LST-hours for one subband as a sequential chain.
 
@@ -1752,6 +1992,8 @@ def submit_subband_pipeline_chained(
         run_label: Human-readable run identifier.
         peel_sky: Peel astronomical sky sources.
         peel_rfi: Peel RFI sources.
+        save_peel_solutions: Save peeling solutions for PEEL_SOLUTION_STAGES
+            (sky only by default), one NPZ per stage per hour.
         hot_baselines: Run hot-baseline diagnostics.
         skip_cleanup: Keep intermediate files on NVMe.
         cleanup_nvme: Remove entire NVMe work_dir after archiving.
@@ -1764,6 +2006,9 @@ def submit_subband_pipeline_chained(
         skip_science: Skip science phases after PB correction.
         compress_snapshots: fpack-compress snapshot FITS.
         snapshot_only: Only produce clean I snapshots + I movies.
+        cube: Also produce Stokes-I spectral cubes in I/cube/.
+        cube_only: Cube plus calibration/flagging only (no deep/10min).
+        cube_dewarp: Also write dewarped copies of the cube.
 
     Returns:
         Celery AsyncResult for the first hour's chord (only the first
@@ -1788,6 +2033,7 @@ def submit_subband_pipeline_chained(
             peel_sky=peel_sky,
             peel_rfi=peel_rfi,
             peel_maxiter=peel_maxiter,
+            save_peel_solutions=save_peel_solutions,
             hot_baselines=hot_baselines,
             skip_cleanup=skip_cleanup,
             cleanup_nvme=cleanup_nvme,
@@ -1801,6 +2047,9 @@ def submit_subband_pipeline_chained(
             compress_snapshots=compress_snapshots,
             snapshot_only=snapshot_only,
             archive_concat_ms=archive_concat_ms,
+            cube=cube,
+            cube_only=cube_only,
+            cube_dewarp=cube_dewarp,
         )
         all_hour_kwargs.append(kwargs)
 

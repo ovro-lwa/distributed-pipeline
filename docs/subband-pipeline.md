@@ -40,13 +40,132 @@ for post-run performance analysis. Grep with `grep '\[TIMER\]' worker.log`.
 
 ---
 
+## Phase 1 peeling solutions
+
+Opt-in with `--save_peel_solutions` (default off: peeling runs through the
+original `ttcal.jl` CLI and nothing is saved). With the flag, stages listed in
+`PEEL_SOLUTION_STAGES` (`subband_config.py`, currently sky only) peel through
+the exporting adapter below; the others keep the `ttcal.jl` CLI. RFI is
+excluded because on the workers the adapter fails to load TTCal in `ttcal_dev`
+(`libcasacorewrapper.so` / `libcasa_ms.so.7` undefined symbol), while the CLI
+works. Phase 1 saves one solution file per measurement set and saved stage:
+
+```
+<work_dir>/peeling_solutions/<MS basename>/sky.npz
+<work_dir>/peeling_solutions/<MS basename>/rfi.npz
+```
+
+Before archiving, `archive_results` merges these into one file per stage per
+subband-hour (schema 2, see below) and removes the per-MS directories:
+
+```
+<archive>/peeling_solutions/<subband>_sky.npz
+<archive>/peeling_solutions/<subband>_rfi.npz
+```
+
+If merging fails (e.g. mismatched antenna/frequency axes) the per-MS files are
+archived unchanged and the error is logged. The files live outside the MS
+because Phase 2 deletes individual MSes after concatenation. Only enabled stages
+produce files; a stage with no above-horizon sources produces an explicit empty
+solution array. Export failures fail Phase 1 instead of silently losing solutions.
+Each NPZ is atomically replaced after successful serialization. Retrying Phase 1
+starts from a fresh staged MS through the existing copy/calibration path.
+
+The repo-owned `orca/wrapper/ttcal_solutions.jl` adapter uses the existing TTCal
+`zest` algorithm, full polarization, three peeling passes, and configured solver
+parameters. It preserves the CLI's DATA/CORRECTED_DATA selection and leaves MS
+flags unchanged. It does not write MODEL_DATA or run a second solve. Sky uses
+`julia060`; RFI uses `ttcal_dev`. No packages or environment changes are required:
+Julia writes temporary binary/JSON exchange files, Python compresses them, and
+only the NPZ survives. The runtime account needs read access to the existing
+Julia package caches, as it does for the original TTCal CLI.
+
+Schema version 1 (load with `numpy.load(path, allow_pickle=False)`):
+
+| Key | Meaning |
+| --- | --- |
+| `gains` | complex128, axes `(source, Jones component, antenna, frequency, time)` |
+| `jones_order` | `xx, xy, yx, yy` |
+| `source_indices`, `source_names` | Zero-based indices into the original source model, and names, in the actual above-horizon solve order |
+| `antenna_indices` | Zero-based MS ANTENNA row indices |
+| `frequencies_hz`, `times_mjd_seconds` | Solver frequency/time coordinates; time uses MS UTC seconds since MJD 0 |
+| `invalid_gains` | Non-finite Jones entries, reduced over components; **not convergence flags** |
+| `metadata_json` | Schema, full input source model, MS basename, input column, solver settings, environment and array-axis definitions |
+
+These TTCal installations do not retain convergence flags in their returned
+`Calibration` objects. Metadata explicitly records this limitation. Their Dataset
+reader handles one integration per input MS; the exporter preserves that contract.
+Solutions describe the sequential sky-then-RFI subtraction on already calibrated
+data. Reusing them requires matching the antenna/frequency/time coordinates,
+source model, beam, input calibration and stage order; this change stores the
+solutions but does not add a reapplication command.
+
+Merged per-hour files (schema 2) keep the same keys and gain axes with these
+differences: `gains` is complex64 (the MS visibility precision), time runs over
+all integrations of the hour, and sources are the union over the hour, with
+NaN gains and `solved[source, time] == False` where a source was below the
+horizon. `ms_names[time]` gives the source MS. `invalid_gains` is dropped
+(use `~np.isfinite(gains)`). `metadata_json` holds the shared metadata once
+(source model, solver settings) plus `n_ms` and the input `columns`.
+
+Raw gain storage (schema 1) is `64 × Nsource × Nant × Nfreq × Ntime` bytes before compression.
+For 352 antennas and 12 channels, that is 270,336 bytes per source per integration.
+Actual compressed sizes are logged for every product; no silent size-based drop
+is applied.
+
+For a bounded server comparison without Celery or a full pipeline run:
+
+```bash
+/opt/devel/pipeline/envs/py38_orca_nkosogor/bin/python \
+  tests/integration/peeling_solutions_smoke.py "$PWD" \
+  "$PWD/tests/resources/test_data.ms" /tmp/peeling-smoke-unique
+```
+
+This creates eight-antenna copies of the test fixture and compares existing CLI
+and export-adapter visibilities in both environments, including the source-index
+mapping and MS flag preservation. Use a fresh scratch directory for each run.
+An optional trailing environment name (`julia060` or `ttcal_dev`) limits the check
+to that environment.
+
+Validated on `lwacalim02` on 2026-09-18 using the installed environments and
+synthetic sky/RFI models: both adapters matched the existing CLI's output
+visibilities exactly and preserved flags. The eight-antenna, 12-channel products
+were 8,480 bytes (sky) and 8,490 bytes (RFI). The archive retention test passed in
+`py38_orca_nkosogor`; four serialization/failure tests passed locally. The RFI
+comparison used the `calim2` login because the `calim_nkos_2` account could not
+read an existing `ttcal_dev` compiled-cache file. No environment, package,
+permission, or production repository changes were needed for these checks.
+
+
+A subsequent full-size real-data check used independent filesystem copies of
+`/fast/nkosogor/no_peel/20240524_090003_73MHz_averaged.ms` on `lwacalim02`:
+352 antennas, 48 channels, one integration, and an existing CORRECTED_DATA column.
+The reference CLI and exporter each ran sky then RFI peeling with the repository's
+Cyg A/Cas A and RFI_B source models and the Phase 1 solver settings. After each
+stage, CORRECTED_DATA matched exactly; DATA, FLAG and FLAG_ROW remained unchanged.
+
+| Stage | Gain shape | NPZ bytes | Non-finite gain entries | Maximum visibility difference |
+| --- | --- | ---: | ---: | ---: |
+| Sky | `(2, 4, 352, 48, 1)` | 1,818,519 | 0 | 0 |
+| RFI | `(1, 4, 352, 48, 1)` | 924,231 | 0 | 0 |
+
+Before/after SHA-256 hashes, file sizes and modification times matched for all
+106 original files. All table access and peeling took place on independent
+scratch copies, with subtable references redirected to the respective copies.
+The test script, logs, NPZ products and integrity manifests are retained on the
+server in `/fast/pipeline/peelsol-real-b0JlSg/`; `results.json` summarizes the run.
+This was direct TTCal execution, with no Celery submission or full pipeline run.
+It verifies solution export and numerical equivalence, not solution reapplication.
+
+---
+
 ## File Map
 
 ### Submission & Orchestration
 
 | File | Purpose |
 |------|---------|
-| `pipeline/subband_celery.py` | **CLI entry point.** Discovers MS files, computes LST segments, submits one chord per (subband, LST-hour) to the correct Celery queue. Key flags: `--targets`, `--catalog`, `--clean_snapshots`, `--skip_science`, `--remap SUBBAND=NODE`, `--dynamic`, `--nodes`, `--exclude_nodes`, `--dynamic_queue_label`, `--dynamic_append_only`, `--compress_snapshots`, `--archive_concat_ms`, `--peel_maxiter`. |
+| `pipeline/subband_celery.py` | **CLI entry point.** Discovers MS files, computes LST segments, submits one chord per (subband, LST-hour) to the correct Celery queue. Key flags: `--targets`, `--catalog`, `--clean_snapshots`, `--skip_science`, `--remap SUBBAND=NODE`, `--dynamic`, `--nodes`, `--exclude_nodes`, `--dynamic_queue_label`, `--dynamic_append_only`, `--compress_snapshots`, `--archive_concat_ms`, `--peel_maxiter`, `--save_peel_solutions`, `--cube`, `--cube_only`, `--cube_dewarp`. |
 | `orca/tasks/subband_tasks.py` | **Celery task definitions.** Contains `prepare_one_ms_task` (Phase 1), `process_subband_task` (Phase 2 including science phases A–D), and `submit_subband_pipeline()` which wires them into a chord. Writes `provenance.json` per work unit and emits `[TIMER]` instrumentation. |
 | `orca/celery.py` | **Celery app configuration.** Defines broker/backend, all queues (`default`, `cosmology`, `bandpass`, `imaging`, `calim00`–`calim10`), and task include list. |
 
@@ -224,6 +343,7 @@ NVMe (per-node, not shared):
     ├── I/10min/                 # Stokes I 10-min interval images
     ├── V/deep/                  # Stokes V deep images
     ├── V/10min/                 # Stokes V 10-min interval images
+    ├── I/cube/                  # Stokes I spectral cubes (optional, --cube)
     ├── snapshots/               # Pilot snapshot images + QA
     ├── snapshots_clean/         # CLEANed Stokes-I snapshots (optional)
     ├── QA/                      # Hot-baseline plots, flux check CSV+plot
@@ -269,6 +389,7 @@ Lustre (centralized cross-run aggregation):
 | `--peel_sky` | off | Peel sky model sources (TTCal, `julia060` env) |
 | `--peel_rfi` | off | Peel RFI model sources (TTCal, `ttcal_dev` env) |
 | `--peel_maxiter` | 5 | Override max peeling iterations (recorded in `provenance.json`) |
+| `--save_peel_solutions` | off | Save peeling solutions for `PEEL_SOLUTION_STAGES` (sky only); one `peeling_solutions/<subband>_sky.npz` per hour |
 | `--hot_baselines` | off | Run hot-baseline heatmap + UV diagnostics |
 | `--clean_snapshots` | off | Produce CLEANed Stokes-I snapshots in `snapshots_clean/` |
 | `--compress_snapshots` | off | fpack-compress snapshot FITS → `.fits.fz` (deep images unaffected) |
@@ -285,6 +406,11 @@ Lustre (centralized cross-run aggregation):
 | `--targets` | none | Target CSV files for photometry |
 | `--catalog` | none | BDSF catalog for transient search masking |
 | `--snapshot_only` | off | Only produce clean I snapshots + I movies (skip deep imaging) |
+| `--no_sun_cut` | off | Disable the Sun cut. By default frames are refused when the Sun is above `--sun_morning_max` (−12°, rising) or `--sun_evening_max` (−18°, setting); times from the file names (UTC), see `orca/utils/sun_cut.py` |
+| `--sun_morning_max` / `--sun_evening_max` | −12 / −18 | Sun altitude limits (deg) for the Sun cut |
+| `--cube` | off | Also produce Stokes-I spectral cubes in `I/cube/` (see [Spectral cubes](#spectral-cubes---cube)) |
+| `--cube_only` | off | `--cube`, without the standard deep/10min imaging, clean snapshots, image QA and science; concat MS archival is opt-in |
+| `--cube_dewarp` | off | Also write dewarped cube copies (`*_dewarped`); originals always kept |
 
 ---
 
@@ -314,6 +440,30 @@ with primary beam correction applied:
 This applies to **all** imaging: dirty snapshots, clean snapshots, and the 7
 science steps.  The `--reduced_pixels` and `--clean_reduced_pixels` flags are
 deprecated no-ops; per-subband pixel scaling is always active.
+
+### Spectral cubes (`--cube`)
+
+`CUBE_IMAGING_STEPS` in `subband_config.py` (currently one step,
+`I-Deep-Taper-Robust-0-cube`: the deep Robust-0 recipe plus
+`-channels-out`) is run after the standard imaging. At runtime:
+
+- `-channels-out` = number of channels in the concat MS (48 for the 4×-averaged
+  archive), one output plane per channel;
+- `-niter` = `CUBE_NITER_REF / sqrt(nchan)` (500000/√48 ≈ 72k per channel).
+
+Each channel and the MFS image are PB-corrected. With `--cube_dewarp`, a VLSSr
+warp screen is measured on the MFS image and applied to every channel scaled by
+(ν_MFS/ν)² (`Dewarp_Diagnostics/<subband>_cube_warp*`), written as separate
+`*_dewarped` files next to the originals. The per-channel FITS are then stacked into one cube per product
+(`<subband>-I-Deep-Taper-Robust-0-cube-{image,residual,psf,model,dirty}-<UTC>[.pbcorr[_dewarped]].fits`,
+numpy shape `(1, nchan, ny, nx)`, linear FREQ axis, per-channel frequencies and
+beams in a `CHANNELS` table extension); the `-MFS-` images stay as single planes.
+
+`--cube_only` still runs everything that changes the visibilities (calibration,
+peeling, AOFlagger, pilot-V snapshot QA flagging, `--hot_baselines`) plus the V
+snapshot movies and skips the rest. Add `--archive_concat_ms` to retain the final
+concat MS (`<subband>_concat.ms`) for re-imaging. Without that flag, only the image
+and other pipeline products are archived; `--cleanup_nvme` removes the scratch MS.
 
 ---
 

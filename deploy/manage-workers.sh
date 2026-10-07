@@ -25,7 +25,8 @@ LOGLEVEL="INFO"
 # Per-node concurrency overrides (lower for nodes with less RAM/CPU)
 declare -A CONCURRENCY_MAP
 CONCURRENCY_MAP[calim05]=20
-CONCURRENCY_MAP[calim06]=20
+# Full-resolution 192-channel peeling uses ~20 GiB per task; leave RAM headroom.
+CONCURRENCY_MAP[calim06]=8
 CONCURRENCY_MAP[calim07]=20
 CONCURRENCY_MAP[calim08]=20
 CONCURRENCY_MAP[calim09]=20
