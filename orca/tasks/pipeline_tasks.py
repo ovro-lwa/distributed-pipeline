@@ -571,15 +571,19 @@ def get_utc_hour_from_path(ms_path: str) -> int:
 
 
 @app.task(bind=True,autoretry_for=(Exception,),retry_kwargs={"max_retries": 3, "countdown": 10},)
-def run_pipeline_slow_on_one_cpu_nvme(self, vis: str, start: int = 1, end: int = 14, chanbin: int = 4) -> str:
+def run_pipeline_slow_on_one_cpu_nvme(self, vis: str, start: int = 1, end: int = 14, chanbin: int = 4,
+                                      output_base: str = '/lustre/pipeline/slow-averaged/') -> str:
     """
     A pipeline that:
     - Checks if MS is a calibrator; if yes, copy to calibration directory without removing original.
-    - If MS UTC hour is in [start..end], process it on NVMe: copy to NVMe, flag, save metadata, average.
-      After averaging, move results to /lustre/pipeline/slow-averaged/.
+    - If MS UTC hour is in [start..end], process it on NVMe: copy (or untar a .ms.tar) to NVMe,
+      flag, save metadata, average.
+      After averaging, move results to <output_base>/<freq>/<date>/<hour>/.
     - Do not remove the original MS from /lustre/pipeline/slow/.
     - Remove the NVMe copy after processing.
+    - Skip the file if the averaged MS already exists in <output_base>.
     """
+    from orca.transform.subband_processing import copy_ms_to_nvme
 
     # Check if calibrator
     #sources_in_window = is_within_transit_window(vis, window_minutes=4)
@@ -592,8 +596,21 @@ def run_pipeline_slow_on_one_cpu_nvme(self, vis: str, start: int = 1, end: int =
 
     # Process if hour in [start..end]
     if start <= utc_hour <= end:
-        # Copy to NVMe
-        nvme_ms = copy_ms_to_nvme_task(vis)
+        # e.g. '73MHz/2024-11-29/00' and '20241129_000005_73MHz' for both .ms and .ms.tar inputs
+        rel_dir = os.path.dirname(get_relative_path(vis))
+        ms_name = os.path.basename(vis.rstrip('/'))
+        if ms_name.endswith('.tar'):
+            ms_name = ms_name[:-4]
+        ms_base_no_averaged = os.path.splitext(ms_name)[0]
+        final_output_dir = os.path.join(output_base, rel_dir)
+        final_averaged_ms = os.path.join(final_output_dir, f"{ms_base_no_averaged}_averaged.ms")
+        if os.path.isdir(final_averaged_ms):
+            logging.info(f"[NVMe pipeline] {final_averaged_ms} already exists, skipping")
+            return final_averaged_ms
+
+        # Copy (or untar) to NVMe; a stale averaged MS left by a failed attempt would make mstransform fail
+        shutil.rmtree(os.path.join('/fast/pipeline', f"{ms_base_no_averaged}_averaged.ms"), ignore_errors=True)
+        nvme_ms = copy_ms_to_nvme(vis, '/fast/pipeline')
 
         # Flag on NVMe
         strategy = get_aoflagger_strategy("LWA_opt_GH1.lua")
@@ -611,15 +628,15 @@ def run_pipeline_slow_on_one_cpu_nvme(self, vis: str, start: int = 1, end: int =
         averaged_ms_on_nvme = remove_ms_task(ms_tuple)
         # Now we have the averaged MS on NVMe and the original NVMe MS is removed
 
-        # Move the final averaged MS and flag metadata from NVMe back to Lustre (slow-averaged)
-        final_output_dir, ms_base = build_output_paths(vis, base_output_dir='/lustre/pipeline/slow-averaged/')
-        final_averaged_ms = os.path.join(final_output_dir, f"{ms_base}_averaged.ms")
+        # Move the final averaged MS and flag metadata from NVMe back to Lustre (output_base)
+        # Copy under a temporary name first so an interrupted move is never mistaken for a finished file
+        os.makedirs(final_output_dir, exist_ok=True)
+        partial_ms = final_averaged_ms + '.partial'
+        shutil.rmtree(partial_ms, ignore_errors=True)
+        shutil.move(averaged_ms_on_nvme, partial_ms)
+        os.rename(partial_ms, final_averaged_ms)
 
-        os.makedirs(os.path.dirname(final_averaged_ms), exist_ok=True)
-        shutil.move(averaged_ms_on_nvme, final_averaged_ms)
-
-        # Move the flag metadata file from NVMe to slow-averaged
-        ms_base_no_averaged = os.path.splitext(os.path.basename(vis))[0]
+        # Move the flag metadata file from NVMe to output_base
         nvme_meta_file = os.path.join('/fast/pipeline', f"{ms_base_no_averaged}_flagmeta.bin")
         final_flag_meta = os.path.join(final_output_dir, f"{ms_base_no_averaged}_flagmeta.bin")
 
