@@ -121,6 +121,11 @@ from orca.transform.cube_imaging import (
 
 logger = logging.getLogger(__name__)
 
+# Phase 2 time limits for cube runs. 192-channel cubes from ~250 integrations
+# need more than the default 7h30m (2026-09-30 20h run timed out at ch 184).
+CUBE_PHASE2_SOFT_TIME_LIMIT = 86400   # 24 h
+CUBE_PHASE2_TIME_LIMIT = 90000        # 25 h
+
 # ---------------------------------------------------------------------------
 #  Dynamic dispatch — Redis-backed work queue
 # ---------------------------------------------------------------------------
@@ -844,6 +849,12 @@ def process_subband_task(
         f"{subband} ({len(ms_paths)} files)"
     )
 
+    # Restore the cwd before work_dir is removed, otherwise the next task in
+    # this pool process fails casacore's getcwd assertion.
+    try:
+        prev_cwd = os.getcwd()
+    except FileNotFoundError:
+        prev_cwd = os.path.expanduser('~')
     os.chdir(work_dir)
     redirect_casa_log(work_dir)
 
@@ -874,6 +885,7 @@ def process_subband_task(
     if not valid_ms and not have_concat:
         # No data at all — still trigger chain + cleanup before failing
         logger.error(f"No valid MS files for {subband} in {lst_label}")
+        os.chdir(prev_cwd)
         _trigger_next_and_cleanup(
             remaining_hours, work_dir, cleanup_nvme, subband, lst_label,
             dynamic_run_label=dynamic_run_label,
@@ -1608,6 +1620,7 @@ def process_subband_task(
         # ------------------------------------------------------------------
         #  9. Trigger next hour + cleanup  — ALWAYS runs
         # ------------------------------------------------------------------
+        os.chdir(prev_cwd)
         _trigger_next_and_cleanup(
             remaining_hours, work_dir, cleanup_nvme, subband, lst_label,
             dynamic_run_label=dynamic_run_label,
@@ -1751,6 +1764,11 @@ def submit_subband_pipeline(
         xy_table=xy_table,
         peel_maxiter=peel_maxiter,
     ).set(queue=queue)
+    if cube or cube_only:
+        phase2_callback = phase2_callback.set(
+            soft_time_limit=CUBE_PHASE2_SOFT_TIME_LIMIT,
+            time_limit=CUBE_PHASE2_TIME_LIMIT,
+        )
 
     # Error handler: if all Phase 1 retries fail the chord never fires
     # Phase 2, so this callback ensures the dispatch chain continues.
