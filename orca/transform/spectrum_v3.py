@@ -217,7 +217,9 @@ def dynspec_map_v3(subband_no: int,
     calibrated = _applycal_cross_with_flags_native(
         data.astype(np.complex64, copy=False), flags_in, bcal_dat
     )
-    amp = np.abs(calibrated).astype(_TRANSPORT_DTYPE)   # keep NaNs from flags
+    # |V| via sqrt(re²+im²), keeps NaNs from flags.  np.abs on complex64 is
+    # ~400x slower on lwacalim05 (numpy 1.24 CFLOAT_absolute), so avoid it.
+    amp = np.sqrt(calibrated.real**2 + calibrated.imag**2).astype(_TRANSPORT_DTYPE, copy=False)
 
     # incoherent sum across baselines
     incoh_sum = np.nanmean(amp, axis=0).astype(_TRANSPORT_DTYPE)  # (nChan, 4)
