@@ -22,7 +22,7 @@ cd "$REPO" || exit 1
 log() { echo "[$(date -u +%F' '%T)] $*" | tee -a "$LOG"; }
 
 last_hour=$(echo $HOURS | awk '{print $NF}')
-ready_at=$(date -u -d "${DATE} ${last_hour}:00 +1 hour +10 min" +%s)
+ready_at=$(( $(date -u -d "${DATE} ${last_hour}:00:00 UTC" +%s) + 3600 + 600 ))
 deadline=$((ready_at + 3 * 3600))
 log "Waiting for ${DATE} hours ${HOURS} (not before $(date -u -d @${ready_at} +%F' '%T) UTC)"
 
