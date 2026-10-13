@@ -165,7 +165,7 @@ It verifies solution export and numerical equivalence, not solution reapplicatio
 
 | File | Purpose |
 |------|---------|
-| `pipeline/subband_celery.py` | **CLI entry point.** Discovers MS files, computes LST segments, submits one chord per (subband, LST-hour) to the correct Celery queue. Key flags: `--targets`, `--catalog`, `--clean_snapshots`, `--skip_science`, `--remap SUBBAND=NODE`, `--dynamic`, `--nodes`, `--exclude_nodes`, `--dynamic_queue_label`, `--dynamic_append_only`, `--compress_snapshots`, `--archive_concat_ms`, `--peel_maxiter`, `--save_peel_solutions`, `--cube`, `--cube_only`, `--cube_dewarp`. |
+| `pipeline/subband_celery.py` | **CLI entry point.** Discovers MS files, computes LST segments, submits one chord per (subband, LST-hour) to the correct Celery queue. Key flags: `--targets`, `--catalog`, `--clean_snapshots`, `--skip_science`, `--remap SUBBAND=NODE`, `--dynamic`, `--nodes`, `--exclude_nodes`, `--dynamic_queue_label`, `--dynamic_append_only`, `--compress_snapshots`, `--archive_concat_ms`, `--peel_maxiter`, `--save_peel_solutions`, `--cube`, `--cube_only`, `--cube_dewarp`, `--cube_preset`. |
 | `orca/tasks/subband_tasks.py` | **Celery task definitions.** Contains `prepare_one_ms_task` (Phase 1), `process_subband_task` (Phase 2 including science phases A–D), and `submit_subband_pipeline()` which wires them into a chord. Writes `provenance.json` per work unit and emits `[TIMER]` instrumentation. |
 | `orca/celery.py` | **Celery app configuration.** Defines broker/backend, all queues (`default`, `cosmology`, `bandpass`, `imaging`, `calim00`–`calim10`), and task include list. |
 
@@ -411,6 +411,7 @@ Lustre (centralized cross-run aggregation):
 | `--cube` | off | Also produce Stokes-I spectral cubes in `I/cube/` (see [Spectral cubes](#spectral-cubes---cube)) |
 | `--cube_only` | off | `--cube`, without the standard deep/10min imaging, clean snapshots, image QA and science; concat MS archival is opt-in |
 | `--cube_dewarp` | off | Also write dewarped cube copies (`*_dewarped`); originals always kept |
+| `--cube_preset` | `robust0_tukey` | Cube imaging steps from `CUBE_PRESETS`; `natural_core` = outriggers flagged, natural weighting, 2° Gaussian taper (large-scale structure) |
 
 ---
 
@@ -443,13 +444,24 @@ deprecated no-ops; per-subband pixel scaling is always active.
 
 ### Spectral cubes (`--cube`)
 
-`CUBE_IMAGING_STEPS` in `subband_config.py` (currently one step,
-`I-Deep-Taper-Robust-0-cube`: the deep Robust-0 recipe plus
-`-channels-out`) is run after the standard imaging. At runtime:
+`CUBE_PRESETS[--cube_preset]` in `subband_config.py` is run after the standard
+imaging. Presets:
 
-- `-channels-out` = number of channels in the concat MS (48 for the 4×-averaged
-  archive), one output plane per channel;
-- `-niter` = `CUBE_NITER_REF / sqrt(nchan)` (500000/√48 ≈ 72k per channel).
+- `robust0_tukey` (default): `I-Deep-Taper-Robust-0-cube`, the deep Robust-0
+  recipe (full array, inner Tukey taper) plus `-channels-out`. The taper
+  suppresses structure larger than ~2°.
+- `natural_core`: `I-Deep-Taper-Natural-cube`, for large-scale emission
+  (e.g. RRLs). The 114 outrigger antennas (`OUTRIGGER_ANTENNAS`, MS antenna
+  indices, everything beyond ~130 m) are flagged in the concat MS first, then
+  natural weighting, `-taper-gaussian 2deg`, `-beam-size 3.0deg`,
+  `-join-channels`, 512×512 at 0.25°. The flags stay in the MS, so an archived
+  concat MS has the outriggers flagged.
+
+At runtime `-channels-out` = number of channels in the concat MS (48 for the
+4×-averaged archive, 192 for full resolution), one output plane per channel.
+Unless the step sets `fixed_args` (as `natural_core` does), the grid is patched to
+the subband's pixel size/scale and `-niter` = `CUBE_NITER_REF / sqrt(nchan)`
+(500000/√48 ≈ 72k per channel); otherwise size, scale and niter are used as given.
 
 Each channel and the MFS image are PB-corrected. With `--cube_dewarp`, a VLSSr
 warp screen is measured on the MFS image and applied to every channel scaled by

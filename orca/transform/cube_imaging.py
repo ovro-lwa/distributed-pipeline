@@ -29,15 +29,49 @@ def get_ms_nchan(ms_path: str) -> int:
         return int(t.getcell('NUM_CHAN', 0))
 
 
+def flag_antennas(ms_path: str, antenna_ids: List[int]) -> Tuple[float, float]:
+    """Flag every baseline that involves one of *antenna_ids* (MS row indices).
+
+    Equivalent to CASA ``flagdata(vis, antenna='i,j,...')``; autocorrelations
+    of those antennas are flagged too.
+
+    Returns:
+        Flagged fraction of the visibilities before and after.
+    """
+    import casacore.tables as pt
+    ids = np.asarray(sorted(set(int(a) for a in antenna_ids)))
+    with pt.table(ms_path, readonly=False, ack=False) as t:
+        before = after = 0.0
+        n = t.nrows()
+        step = 1_000_000
+        for start in range(0, n, step):
+            nrow = min(step, n - start)
+            a1 = t.getcol('ANTENNA1', start, nrow)
+            a2 = t.getcol('ANTENNA2', start, nrow)
+            flag = t.getcol('FLAG', start, nrow)
+            before += flag.sum()
+            hit = np.isin(a1, ids) | np.isin(a2, ids)
+            flag[hit] = True
+            after += flag.sum()
+            t.putcol('FLAG', flag, start, nrow)
+        total = float(n) * flag.shape[1] * flag.shape[2] if n else 1.0
+    return before / total, after / total
+
+
 def cube_niter(niter_ref: int, nchan: int) -> int:
     """Per-channel CLEAN depth: ``niter_ref / sqrt(nchan)``."""
     return max(1, int(round(niter_ref / np.sqrt(max(nchan, 1)))))
 
 
-def patch_cube_args(args: List[str], nchan: int, niter: int) -> List[str]:
-    """Return a copy of *args* with ``-channels-out`` and ``-niter`` replaced."""
+def patch_cube_args(args: List[str], nchan: int, niter: Optional[int]) -> List[str]:
+    """Return a copy of *args* with ``-channels-out`` and ``-niter`` replaced.
+
+    With *niter* None, ``-niter`` is left as given.
+    """
     args = list(args)
     for flag, value in (('-channels-out', nchan), ('-niter', niter)):
+        if value is None:
+            continue
         if flag in args:
             args[args.index(flag) + 1] = str(value)
         else:
