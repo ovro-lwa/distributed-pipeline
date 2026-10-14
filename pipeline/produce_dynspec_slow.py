@@ -134,6 +134,8 @@ def main():
     p.add_argument("--reduce-queue", help="queue for the reducer (default: first --queues entry)")
     p.add_argument("--use-ms-flags", action="store_true", help="NaN out MS-flagged samples")
     p.add_argument("--work-dir", default="/fast/pipeline/dynspec_tmp")
+    p.add_argument("--only", nargs="+", metavar="NAME",
+                   help="only these outputs, e.g. 'LWA-280&LWA-336' or incoherent-sum (default: all)")
     p.add_argument("--max-scans", type=int, help="only the first N integrations (for testing)")
     p.add_argument("--dry-run", action="store_true", help="preflight only, submit nothing")
     p.add_argument("--overwrite", action="store_true", help="allow replacing existing FITS for DATE")
@@ -143,8 +145,12 @@ def main():
     queues = parse_queues(args.queues)
     reduce_queue = args.reduce_queue or queues[0][0]
 
-    existing = [str(Path(args.out_dir) / n / f"{args.date}-XY.fits")
-                for n in ["incoherent-sum"] + [n for n, _ in ROW_NUMS]]
+    all_names = ["incoherent-sum"] + [n for n, _ in ROW_NUMS]
+    names = args.only or all_names
+    unknown = set(names) - set(all_names)
+    if unknown:
+        sys.exit(f"Unknown --only names {sorted(unknown)}; choose from {all_names}")
+    existing = [str(Path(args.out_dir) / n / f"{args.date}-XY.fits") for n in names]
     existing = [e for e in existing if os.path.exists(e)]
     if existing and not args.overwrite:
         sys.exit(f"Output exists (use --overwrite): {existing}")
@@ -173,6 +179,7 @@ def main():
     if args.max_scans:
         tasks = [t for t in tasks if t[1] < args.max_scans]
     n_scans = max(t[1] for t in tasks) + 1
+    print(f"Outputs: {', '.join(names)}")
     print(f"Timeline: {n_scans} integrations from {t0.isoformat()} UTC "
           f"(CDELT1 {inttime:.4f} s), {len(tasks)} map tasks")
 
@@ -198,7 +205,8 @@ def main():
         return
 
     sigs = [
-        dynspec_map_v3.si(sb, scan, ms, None, args.use_ms_flags).set(queue=q)
+        dynspec_map_v3.si(sb, scan, ms, None, args.use_ms_flags,
+                          names if args.only else None).set(queue=q)
         for (sb, scan, ms), q in zip(tasks, qs)
     ]
     t_start = datetime.now()

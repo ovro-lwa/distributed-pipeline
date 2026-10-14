@@ -53,6 +53,7 @@ ROW_NUMS = [
     ('LWA-018&LWA-237', 30360),
     ('LWA-065&LWA-094', 41689),
     ('LWA-286&LWA-333', 28524),
+    ('LWA-280&LWA-336', 13585),
 ]
 
 # --- Calibration + flagging at native channelization ---------------------
@@ -172,13 +173,17 @@ def dynspec_map_v3(subband_no: int,
                    scan_no:   int,
                    ms:        str,
                    bcal:      str | None = None,
-                   use_ms_flags: bool = True) -> List[_SnapshotSpectrumV3]:
+                   use_ms_flags: bool = True,
+                   names: List[str] | None = None) -> List[_SnapshotSpectrumV3]:
     """
     Map step on a SINGLE MS:
       • Reads DATA & FLAG (cross-correlations only)
       • Optionally applies bcal at native resolution (192 channels) — NO rebin
       • Stores incoherent-sum and selected-baseline spectra in Redis
     Returns JSONable _SnapshotSpectrumV3 list (for the reducer).
+
+    ``names`` limits the output to these types ('incoherent-sum' and/or
+    ROW_NUMS names); None means all.
 
     ``ms`` may be a ``.ms.tar``; it is extracted under TAR_WORK_DIR and
     removed again when the task finishes.
@@ -227,12 +232,13 @@ def dynspec_map_v3(subband_no: int,
     r   = redis.Redis.from_url(REDIS_URL)
     out : list[_SnapshotSpectrumV3] = []
 
-    key_sum = f"{REDIS_KEY_PREFIX}{Path(ms).stem}-sum"
-    r.set(key_sum, incoh_sum.tobytes(), ex=REDIS_EXPIRE_S)
-    out.append(_SnapshotSpectrumV3("incoherent-sum", subband_no, scan_no, key_sum))
+    if names is None or "incoherent-sum" in names:
+        key_sum = f"{REDIS_KEY_PREFIX}{Path(ms).stem}-sum"
+        r.set(key_sum, incoh_sum.tobytes(), ex=REDIS_EXPIRE_S)
+        out.append(_SnapshotSpectrumV3("incoherent-sum", subband_no, scan_no, key_sum))
 
     for name, _ in ROW_NUMS:
-        if name not in rows:
+        if name not in rows or (names is not None and name not in names):
             continue
         row_idx = rows[name]
         key = f"{REDIS_KEY_PREFIX}{Path(ms).stem}-{row_idx}"
@@ -262,7 +268,10 @@ def dynspec_reduce_v3(spectra: Iterable[List[_SnapshotSpectrumV3]],
 
     n_scans  = max(spec.scan_no for snap in spectra for spec in snap) + 1
     n_freqs  = N_CHAN_OUT * 16     # 192 × 16 = 3072
-    types    = ['incoherent-sum'] + [name for name, _ in ROW_NUMS]
+    # Only write types that some map produced, so a partial (--only) run
+    # never overwrites other baselines' files with zeros.
+    present  = {spec.type for snap in spectra for spec in snap}
+    types    = [t for t in ['incoherent-sum'] + [name for name, _ in ROW_NUMS] if t in present]
 
     cubes = {t: np.zeros((4, n_scans, n_freqs), dtype=_TRANSPORT_DTYPE) for t in types}
     r     = redis.Redis.from_url(REDIS_URL)
