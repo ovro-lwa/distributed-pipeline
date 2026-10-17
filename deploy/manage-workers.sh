@@ -31,6 +31,12 @@ CONCURRENCY_MAP[calim07]=20
 CONCURRENCY_MAP[calim08]=20
 CONCURRENCY_MAP[calim09]=20
 
+# Extra shared queues per node (comma-separated), consumed in addition to the node's own queue.
+# nightavg: night-time averaging of slow data (pipeline/average_nighttime_slow.py); a shared queue
+# lets fast nodes take more of the work.
+declare -A EXTRA_QUEUES_MAP
+for n in calim00 calim06 calim07 calim09; do EXTRA_QUEUES_MAP[$n]=nightavg; done
+
 # PID and log file locations (no sudo needed — user-writable dirs)
 PID_DIR="${REPO_DIR}/deploy/pids"
 LOG_DIR="${REPO_DIR}/deploy/logs"
@@ -93,13 +99,14 @@ cmd_start() {
         echo "Starting worker on ${node}..."
         ssh_cmd "$node" "mkdir -p ${PID_DIR} ${LOG_DIR}"
         local node_concurrency=${CONCURRENCY_MAP[$node]:-$CONCURRENCY}
+        local node_queues=${node}${EXTRA_QUEUES_MAP[$node]:+,${EXTRA_QUEUES_MAP[$node]}}
         ssh_cmd "$node" bash <<EOF
             eval "\$(conda shell.bash hook)"
             conda activate ${CONDA_ENV}
             cd ${REPO_DIR}
             export OPENBLAS_NUM_THREADS=1
             nohup celery -A orca.celery worker \\
-                -Q ${node} \\
+                -Q ${node_queues} \\
                 --hostname=${node}@\$(hostname) \\
                 -c ${node_concurrency} \\
                 --loglevel=${LOGLEVEL} \\
