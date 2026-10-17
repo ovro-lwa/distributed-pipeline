@@ -23,6 +23,7 @@ from orca.wrapper import change_phase_centre
 from orca.utils.calibrationutils import build_output_paths
 from typing import List, Tuple
 import shutil
+import subprocess
 from orca.utils.calibrationutils import is_within_transit_window, get_lst_from_filename, get_relative_path
 
 import logging
@@ -572,7 +573,8 @@ def get_utc_hour_from_path(ms_path: str) -> int:
 
 @app.task(bind=True,autoretry_for=(Exception,),retry_kwargs={"max_retries": 3, "countdown": 10},)
 def run_pipeline_slow_on_one_cpu_nvme(self, vis: str, start: int = 1, end: int = 14, chanbin: int = 4,
-                                      output_base: str = '/lustre/pipeline/slow-averaged/') -> str:
+                                      output_base: str = '/lustre/pipeline/slow-averaged/',
+                                      tar_output: bool = False) -> str:
     """
     A pipeline that:
     - Checks if MS is a calibrator; if yes, copy to calibration directory without removing original.
@@ -581,7 +583,8 @@ def run_pipeline_slow_on_one_cpu_nvme(self, vis: str, start: int = 1, end: int =
       After averaging, move results to <output_base>/<freq>/<date>/<hour>/.
     - Do not remove the original MS from /lustre/pipeline/slow/.
     - Remove the NVMe copy after processing.
-    - Skip the file if the averaged MS already exists in <output_base>.
+    - Skip the file if the averaged MS (or, with tar_output, its .ms.tar) already exists in <output_base>.
+    - With tar_output, tar the averaged MS on NVMe and store <name>_averaged.ms.tar instead of the directory.
     """
     from orca.transform.subband_processing import copy_ms_to_nvme
 
@@ -604,9 +607,13 @@ def run_pipeline_slow_on_one_cpu_nvme(self, vis: str, start: int = 1, end: int =
         ms_base_no_averaged = os.path.splitext(ms_name)[0]
         final_output_dir = os.path.join(output_base, rel_dir)
         final_averaged_ms = os.path.join(final_output_dir, f"{ms_base_no_averaged}_averaged.ms")
+        final_tar = final_averaged_ms + '.tar'
         if os.path.isdir(final_averaged_ms):
             logging.info(f"[NVMe pipeline] {final_averaged_ms} already exists, skipping")
             return final_averaged_ms
+        if tar_output and os.path.isfile(final_tar):
+            logging.info(f"[NVMe pipeline] {final_tar} already exists, skipping")
+            return final_tar
 
         # Copy (or untar) to NVMe; a stale averaged MS left by a failed attempt would make mstransform fail
         shutil.rmtree(os.path.join('/fast/pipeline', f"{ms_base_no_averaged}_averaged.ms"), ignore_errors=True)
@@ -631,10 +638,23 @@ def run_pipeline_slow_on_one_cpu_nvme(self, vis: str, start: int = 1, end: int =
         # Move the final averaged MS and flag metadata from NVMe back to Lustre (output_base)
         # Copy under a temporary name first so an interrupted move is never mistaken for a finished file
         os.makedirs(final_output_dir, exist_ok=True)
-        partial_ms = final_averaged_ms + '.partial'
-        shutil.rmtree(partial_ms, ignore_errors=True)
-        shutil.move(averaged_ms_on_nvme, partial_ms)
-        os.rename(partial_ms, final_averaged_ms)
+        if tar_output:
+            # Tar on NVMe (inode-friendly on Lustre), then copy the single file across
+            nvme_dir, ms_dirname = os.path.split(averaged_ms_on_nvme.rstrip('/'))
+            nvme_tar = averaged_ms_on_nvme.rstrip('/') + '.tar'
+            subprocess.run(['tar', 'cf', nvme_tar, ms_dirname], cwd=nvme_dir, check=True)
+            shutil.rmtree(averaged_ms_on_nvme)
+            partial_tar = final_tar + '.partial'
+            if os.path.exists(partial_tar):
+                os.remove(partial_tar)
+            shutil.move(nvme_tar, partial_tar)
+            os.rename(partial_tar, final_tar)
+            final_averaged_ms = final_tar
+        else:
+            partial_ms = final_averaged_ms + '.partial'
+            shutil.rmtree(partial_ms, ignore_errors=True)
+            shutil.move(averaged_ms_on_nvme, partial_ms)
+            os.rename(partial_ms, final_averaged_ms)
 
         # Move the flag metadata file from NVMe to output_base
         nvme_meta_file = os.path.join('/fast/pipeline', f"{ms_base_no_averaged}_flagmeta.bin")
