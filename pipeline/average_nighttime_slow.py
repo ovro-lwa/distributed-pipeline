@@ -1,9 +1,12 @@
 """Flag + frequency-average one night of slow-buffer data into night-time/averaged.
 
-Window: whole LST hours that lie entirely inside the Phase 1 Sun-altitude
-limits (``orca.utils.sun_cut``: evening Sun <= -18 deg, morning Sun <= -12 deg)
-on the given UTC date, optionally restricted with ``--lst-hours``.  Partial LST
-hours at either end of the night are left out.
+Window: whole LST hours of the given UTC date accepted by the Phase 1
+Sun-altitude limits (``orca.utils.sun_cut``: evening Sun <= -18 deg, morning
+Sun <= -12 deg), optionally restricted with ``--lst-hours``.  By default an LST
+hour is accepted when its midpoint passes the Sun limits
+(``--lst-criterion midpoint``), so the first and last hour can contain some
+frames with the Sun above the limit; ``--lst-criterion full`` keeps only hours
+that lie entirely inside the limits.
 
 Every ``.ms.tar`` (or ``.ms``) integration of all 16 subbands (13-82 MHz) in
 that window is run through ``run_pipeline_slow_on_one_cpu_nvme`` (AOFlagger
@@ -73,8 +76,10 @@ def assign_queues(n_tasks: int, queues):
     return out
 
 
-def lst_window(date: str, lst_hours=None, step_s: int = 10):
-    """Whole LST hours of *date* (UTC) fully inside the Sun limits.
+def lst_window(date: str, lst_hours=None, step_s: int = 10, criterion: str = "midpoint"):
+    """Whole LST hours of *date* (UTC) accepted by the Sun limits.
+
+    *criterion* "midpoint": the Sun passes at the hour's midpoint; "full": at every step.
 
     Returns [(lst_hour, utc_start, utc_end), ...] with utc_end exclusive.
     """
@@ -86,7 +91,9 @@ def lst_window(date: str, lst_hours=None, step_s: int = 10):
     for i0, i1 in zip(edges[:-1], edges[1:]):
         if i0 == 0 or i1 == len(t):          # LST hour cut by the date boundary
             continue
-        if not ok[i0:i1].all():
+        if criterion == "full" and not ok[i0:i1].all():
+            continue
+        if criterion == "midpoint" and not ok[(i0 + i1) // 2]:
             continue
         if lst_hours is not None and lst[i0] not in lst_hours:
             continue
@@ -104,6 +111,9 @@ def main():
     p.add_argument("--date", required=True, help="UTC date YYYY-MM-DD")
     p.add_argument("--lst-hours", nargs="+", type=int,
                    help="only these LST hours (default: every whole LST hour inside the Sun limits)")
+    p.add_argument("--lst-criterion", choices=["midpoint", "full"], default="midpoint",
+                   help="accept an LST hour if its midpoint passes the Sun limits (default), "
+                        "or only if the whole hour does")
     p.add_argument("--queues", nargs="+", required=True, help="queue[:weight], e.g. calim10:32 calim06:8")
     p.add_argument("--root", default="/lustre/pipeline/slow")
     p.add_argument("--out-base", default="/lustre/pipeline/night-time/averaged")
@@ -116,11 +126,12 @@ def main():
 
     queues = parse_queues(args.queues)
 
-    blocks = lst_window(args.date, set(args.lst_hours) if args.lst_hours else None)
+    blocks = lst_window(args.date, set(args.lst_hours) if args.lst_hours else None,
+                        criterion=args.lst_criterion)
     if not blocks:
         sys.exit(f"{args.date}: no whole LST hour inside the Sun limits")
     t0, t1 = blocks[0][1], blocks[-1][2]
-    print(f"{args.date}: {len(blocks)} whole LST hours inside the Sun limits")
+    print(f"{args.date}: {len(blocks)} whole LST hours accepted by the Sun limits ({args.lst_criterion})")
     for lh, a, b in blocks:
         print(f"  LST {lh:02d}h  UTC {a:%H:%M:%S} - {b:%H:%M:%S}")
     hours = sorted({f"{h:02d}" for h in range(t0.hour, t1.hour + 1)})
