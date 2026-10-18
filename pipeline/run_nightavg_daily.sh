@@ -10,11 +10,12 @@
 # Usage (as pipeline, inside screen):
 #   screen -dmS nightavg-daily pipeline/run_nightavg_daily.sh 2026-10-18
 #
-# Optional env: QUEUES="nightavg" (or per-node "calim09:20 ...")  READY_UTC="14:30"  NDAYS=0 (0 = forever)
+# Optional env: QUEUES="nightavg" (or per-node "calim09:20 ...")  READY_UTC="14:30"  NDAYS=0 (0 = forever)  MAX_MISSING=100
 #               CONSUMERS="calim00@lwacalim00,..."  workers that must consume the nightavg queue
 #
-# Before each date the previous date's log must say "Outputs missing after run: 0"; otherwise the
-# loop stops so a broken night is looked at before more are submitted.
+# Before each date the previous date's log must report at most MAX_MISSING (default 100) missing
+# outputs, or nightavg_<prev>.ok must exist (accepted by hand); otherwise the loop stops so a
+# broken night is looked at before more are submitted.
 # Logs: deploy/logs/nightavg_<DATE>.log
 set -uo pipefail
 
@@ -22,6 +23,7 @@ START_DATE=${1:?usage: $0 YYYY-MM-DD}
 QUEUES=${QUEUES:-"nightavg"}   # shared queue on calim00 06 07 09 10 (see deploy/manage-workers.sh)
 READY_UTC=${READY_UTC:-"14:30"}
 NDAYS=${NDAYS:-0}
+MAX_MISSING=${MAX_MISSING:-100}   # previous night may miss up to this many outputs
 CONSUMERS=${CONSUMERS:-"calim00@lwacalim00,calim06@lwacalim06,calim07@lwacalim07,calim09@lwacalim09,calim10@lwacalim10"}
 REPO=/opt/devel/nkosogor/nkosogor/distributed-pipeline
 PY=/opt/devel/pipeline/envs/py38_orca_nkosogor/bin/python
@@ -40,9 +42,15 @@ while (( NDAYS == 0 || n < NDAYS )); do
     while (( $(date -u +%s) < ready_at )); do sleep 300; done
 
     prev=$(date -u -d "${date_str} - 1 day" +%F)
-    if ! grep -q "Outputs missing after run: 0" "${REPO}/deploy/logs/nightavg_${prev}.log" 2>/dev/null; then
-        log "Previous night ${prev} not complete (see nightavg_${prev}.log); stopping"
+    prev_log=${REPO}/deploy/logs/nightavg_${prev}.log
+    prev_missing=$(grep -o "Outputs missing after run: [0-9]*" "$prev_log" 2>/dev/null | tail -1 | awk '{print $NF}')
+    if [[ -e "${prev_log%.log}.ok" ]]; then
+        log "Previous night ${prev} accepted by hand (${prev_log%.log}.ok)"
+    elif [[ -z "$prev_missing" ]] || (( prev_missing > MAX_MISSING )); then
+        log "Previous night ${prev} not complete (missing: ${prev_missing:-unknown}, see nightavg_${prev}.log); stopping"
         exit 1
+    else
+        log "Previous night ${prev}: ${prev_missing} outputs missing (<= ${MAX_MISSING}), continuing"
     fi
 
     # Workers restarted outside manage-workers.sh (e.g. calim10) lose the shared queue; re-add it.

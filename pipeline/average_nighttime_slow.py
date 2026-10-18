@@ -26,6 +26,7 @@ import argparse
 import os
 import re
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -108,6 +109,9 @@ def main():
     p.add_argument("--out-base", default="/lustre/pipeline/night-time/averaged")
     p.add_argument("--chanbin", type=int, default=4)
     p.add_argument("--dry-run", action="store_true", help="list and sun-cut only, submit nothing")
+    p.add_argument("--stall-min", type=float, default=30,
+                   help="stop waiting after this many minutes without a task finishing ...")
+    p.add_argument("--max-lost", type=int, default=100, help="... if at most this many are left")
     args = p.parse_args()
 
     queues = parse_queues(args.queues)
@@ -146,6 +150,7 @@ def main():
     print(f"{args.date} UTC {t0:%H:%M:%S}-{t1:%H:%M:%S}: {n_found} files in window, "
           f"{n_done} already averaged, {len(todo)} to submit")
     if not todo:
+        print("Outputs missing after run: 0")
         return
 
     # Oldest first, subbands interleaved: the slow buffer is deleted ~24 h after recording.
@@ -168,10 +173,23 @@ def main():
     res = group(sigs).apply_async()
     print(f"[{t_start:%F %T}] Submitted group {res.id} ({len(sigs)} tasks)", flush=True)
 
-    raw = res.get(disable_sync_subtasks=False, propagate=False)
+    # A few tasks can get lost (worker restart, redelivery); don't wait for them forever.
+    # Stop when nothing has finished for --stall-min minutes and at most --max-lost are left.
+    last_n, last_change = -1, time.time()
+    while not res.ready():
+        n = res.completed_count()
+        if n != last_n:
+            last_n, last_change = n, time.time()
+        elif len(sigs) - n <= args.max_lost and time.time() - last_change > args.stall_min * 60:
+            print(f"[{datetime.now():%F %T}] {len(sigs) - n} tasks unfinished after "
+                  f"{args.stall_min} min without progress; giving up on them", flush=True)
+            break
+        time.sleep(60)
+    raw = [r.result if r.ready() else None for r in res.results]
     failed = [(f, r) for f, r in zip(todo, raw) if isinstance(r, Exception)]
+    n_ok = sum(1 for r in res.results if r.successful())
     print(f"[{datetime.now():%F %T}] Done in {datetime.now() - t_start}: "
-          f"{len(raw) - len(failed)}/{len(raw)} OK, {len(failed)} failed", flush=True)
+          f"{n_ok}/{len(raw)} OK, {len(failed)} failed", flush=True)
     for f, r in failed:
         print(f"  FAILED {f}: {r!r}")
 
