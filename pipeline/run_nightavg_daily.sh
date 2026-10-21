@@ -20,11 +20,11 @@
 set -uo pipefail
 
 START_DATE=${1:?usage: $0 YYYY-MM-DD}
-QUEUES=${QUEUES:-"nightavg"}   # shared queue on calim00 06 07 09 10 (see deploy/manage-workers.sh)
+QUEUES=${QUEUES:-"nightavg"}   # shared queue on calim00 06 07 09 (see deploy/manage-workers.sh)
 READY_UTC=${READY_UTC:-"14:30"}
 NDAYS=${NDAYS:-0}
 MAX_MISSING=${MAX_MISSING:-100}   # previous night may miss up to this many outputs
-CONSUMERS=${CONSUMERS:-"calim00@lwacalim00,calim06@lwacalim06,calim07@lwacalim07,calim09@lwacalim09,calim10@lwacalim10"}
+CONSUMERS=${CONSUMERS:-"calim00@lwacalim00,calim06@lwacalim06,calim07@lwacalim07,calim09@lwacalim09"}
 REPO=/opt/devel/nkosogor/nkosogor/distributed-pipeline
 PY=/opt/devel/pipeline/envs/py38_orca_nkosogor/bin/python
 
@@ -53,8 +53,12 @@ while (( NDAYS == 0 || n < NDAYS )); do
         log "Previous night ${prev}: ${prev_missing} outputs missing (<= ${MAX_MISSING}), continuing"
     fi
 
-    # Workers restarted outside manage-workers.sh (e.g. calim10) lose the shared queue; re-add it.
-    $PY -m celery -A orca.celery control add_consumer nightavg -d "$CONSUMERS" >> "$LOG" 2>&1
+    # Re-add the shared queue (workers restarted outside manage-workers.sh lose it), but only on
+    # workers with room on /fast.
+    if ! pipeline/nightavg_consumers.sh "$CONSUMERS" >> "$LOG" 2>&1; then
+        log "No worker has enough free /fast; stopping"
+        exit 1
+    fi
 
     for pass in 1 2; do
         log "Pass ${pass}: average_nighttime_slow.py --queues ${QUEUES}"
