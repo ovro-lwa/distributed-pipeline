@@ -161,7 +161,8 @@ def main():
     print(f"{args.date} UTC {t0:%H:%M:%S}-{t1:%H:%M:%S}: {n_found} files in window, "
           f"{n_done} already averaged, {len(todo)} to submit")
     if not todo:
-        print("Outputs missing after run: 0")
+        if n_found:     # nothing at all under --root says nothing about what is missing
+            print("Outputs missing after run: 0")
         return
 
     # Oldest first, subbands interleaved: the slow buffer is deleted ~24 h after recording.

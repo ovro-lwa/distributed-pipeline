@@ -11,6 +11,7 @@
 #   screen -dmS nightavg-daily pipeline/run_nightavg_daily.sh 2026-10-18
 #
 # Optional env: QUEUES="nightavg" (or per-node "calim09:20 ...")  READY_UTC="14:30"  NDAYS=0 (0 = forever)  MAX_MISSING=100
+#               ALT_ROOTS="/lustre/pipeline/cosmology"  other roots to look in when files are missing
 #               CONSUMERS="calim00@lwacalim00,..."  workers that must consume the nightavg queue
 #
 # Before each date the previous date's log must report at most MAX_MISSING (default 100) missing
@@ -23,7 +24,8 @@ START_DATE=${1:?usage: $0 YYYY-MM-DD}
 QUEUES=${QUEUES:-"nightavg"}   # shared queue on calim00 06 07 09 (see deploy/manage-workers.sh)
 READY_UTC=${READY_UTC:-"14:30"}
 NDAYS=${NDAYS:-0}
-MAX_MISSING=${MAX_MISSING:-100}   # previous night may miss up to this many outputs
+MAX_MISSING=${MAX_MISSING:-100}
+ALT_ROOTS=${ALT_ROOTS:-"/lustre/pipeline/cosmology"}   # where slow hours have been moved to   # previous night may miss up to this many outputs
 CONSUMERS=${CONSUMERS:-"calim00@lwacalim00,calim06@lwacalim06,calim07@lwacalim07,calim09@lwacalim09"}
 REPO=/opt/devel/nkosogor/nkosogor/distributed-pipeline
 PY=/opt/devel/pipeline/envs/py38_orca_nkosogor/bin/python
@@ -67,6 +69,16 @@ while (( NDAYS == 0 || n < NDAYS )); do
         log "Pass ${pass} exited with ${rc}"
         (( rc == 0 )) && break
     done
+    # Hours that someone moved out of the slow buffer mid-run (seen 2026-10-22: hours 11-13 moved
+    # to /lustre/pipeline/cosmology) are averaged from where they went.
+    if (( rc != 0 )); then
+        for alt in $ALT_ROOTS; do
+            log "Pass alt: average_nighttime_slow.py --root ${alt}"
+            $PY -W ignore -u pipeline/average_nighttime_slow.py --date "$date_str" --root "$alt" \
+                --queues $QUEUES >> "$LOG" 2>&1
+            log "Pass alt exited with $?"
+        done
+    fi
 
     date_str=$(date -u -d "${date_str} + 1 day" +%F)
     n=$((n + 1))
