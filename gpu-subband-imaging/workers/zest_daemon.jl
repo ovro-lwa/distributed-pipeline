@@ -20,6 +20,16 @@
 #                             apparent geometry with precession/nutation, as CPU TTCal)
 #   ZEST_SKIP_SHORT           1: leave baselines < minuvw unpeeled (as CPU TTCal,
 #                             which flags them before peeling)
+#   ZEST_FLAG_MODEL           1: give each model the data's flags, so flagged
+#                             baselines drop out of both sides of StefCal (as CPU
+#                             TTCal; otherwise the model's power on flagged baselines
+#                             biases gains low in heavily flagged channels)
+#   ZEST_GENVIS               kernels (TTCalX) | exact (host model as CPU TTCal:
+#                             3-D Gaussian projection, per-component horizon,
+#                             U - iV; implies apparent geometry, any UVW convention)
+#   ZEST_RESUBTRACT           1: when a solve is rejected, subtract the source again
+#                             with its restored (last accepted) gains instead of
+#                             leaving it in the data
 #   ZEST_SAVE_GAINS_DIR       write per-source gains (<ms>.<pass>.<i>.gains.bin)
 push!(LOAD_PATH, joinpath(ENV["TTCALX_DIR"], "src"))
 include(joinpath(ENV["TTCALX_DIR"], "src", "TTCalX.jl"))
@@ -60,6 +70,9 @@ reg_lambda = envf("ZEST_REG_LAMBDA", 1.0)
 reg_targets = get(ENV, "ZEST_REG_TARGETS", "all")
 save_gains_dir = get(ENV, "ZEST_SAVE_GAINS_DIR", "")
 skip_short = envb("ZEST_SKIP_SHORT", false)
+flag_model = envb("ZEST_FLAG_MODEL", false)
+genvis_mode = get(ENV, "ZEST_GENVIS", "kernels")
+resubtract = envb("ZEST_RESUBTRACT", false)
 experimental = solver != :damped || reg_offset > 0
 
 function elevation_deg(source, meta)
@@ -108,7 +121,7 @@ end
 
 function safe_zest_gpu!(vis, meta, catalog_sources; pass="sky", maxiter=mi,
                         tolerance=tol, minuvw=muvw, peeliter=piter,
-                        ms="")
+                        ms="", mjd=NaN)
     selected_sources = GPUSource[]
     elevations = Float64[]
     for source in catalog_sources
@@ -144,7 +157,9 @@ function safe_zest_gpu!(vis, meta, catalog_sources; pass="sky", maxiter=mi,
     coherencies = GPUVisibilities[]
     for source in peel_sources
         coherency = GPUVisibilities(meta.Nbase, meta.Nfreq; gpu=true)
-        if is_rfi(source)
+        if genvis_mode == "exact" && !is_rfi(source)
+            genvis_exact!(coherency, meta, unwrap(source), mjd)
+        elseif is_rfi(source)
             gpu_genvis!(coherency, meta, unwrap(source), meta.phase_center_ra,
                         meta.phase_center_dec, 0.0; geometry=rfi_geometry,
                         position=rfi_position)
@@ -155,6 +170,7 @@ function safe_zest_gpu!(vis, meta, catalog_sources; pass="sky", maxiter=mi,
             )
         end
         skip_short && zero_short_baselines!(coherency, meta, minuvw)
+        flag_model && (coherency.flags .= vis.flags)
         push!(coherencies, coherency)
     end
 
@@ -198,7 +214,14 @@ function safe_zest_gpu!(vis, meta, catalog_sources; pass="sky", maxiter=mi,
                 accepted_final[index] = true
             else
                 restore_calibration!(calibration, saved)
-                accepted_final[index] = false
+                if resubtract && accepted_final[index]
+                    corrupted = deepcopy_gpu(coherency)
+                    gpu_corrupt!(corrupted, calibration, meta)
+                    gpu_subsrc!(vis, corrupted)
+                    subtracted[index] = true
+                else
+                    accepted_final[index] = false
+                end
             end
         end
     end
@@ -239,6 +262,7 @@ for line in eachline(stdin)
     t0 = time()
     try
         vis, cal, meta, bl, nrows = read_ms_to_gpu(ms; gpu=true, column=col)
+        mjd = genvis_mode == "exact" ? ms_mjd(ms) : NaN
         if uvw_convention == "auto"
             println("UVW_CONVENTION sign=$(apply_uvw_convention!(meta))")
         elseif uvw_convention == "geom"
@@ -247,14 +271,14 @@ for line in eachline(stdin)
         end
         if rfi_mode == "joint"
             joint = vcat(sources, rfi_sources)
-            isempty(joint) || safe_zest_gpu!(vis, meta, joint; ms=ms)
+            isempty(joint) || safe_zest_gpu!(vis, meta, joint; ms=ms, mjd=mjd)
         else
-            isempty(sources) || safe_zest_gpu!(vis, meta, sources; ms=ms)
+            isempty(sources) || safe_zest_gpu!(vis, meta, sources; ms=ms, mjd=mjd)
         end
         if !isempty(rfi_sources) && rfi_mode != "joint"
             safe_zest_gpu!(vis, meta, rfi_sources; pass="rfi", maxiter=rfi_mi,
                            tolerance=rfi_tol, minuvw=rfi_muvw, peeliter=rfi_piter,
-                           ms=ms)
+                           ms=ms, mjd=mjd)
         end
         write_gpu_to_ms!(ms, vis, bl, nrows; column=col)
         @printf("ZESTED %s %.2f\n", ms, time() - t0)

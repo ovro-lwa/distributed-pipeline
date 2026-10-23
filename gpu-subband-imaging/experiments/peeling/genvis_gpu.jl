@@ -1,5 +1,5 @@
 # TTCalX model visibilities -> DATA of an MS copy.
-#   TTCALX_DIR=... julia --project=$TTCALX_DIR genvis_gpu.jl MS SOURCES_JSON [as_is|auto|geom|geom_neg] [uvw|none] [x,y,z]
+#   TTCALX_DIR=... julia --project=$TTCALX_DIR genvis_gpu.jl MS SOURCES_JSON [as_is|auto|geom|geom_neg|exact] [uvw|none] [x,y,z]
 include(joinpath(ENV["TTCALX_DIR"], "src", "TTCalX.jl"))
 using .TTCalX, CUDA
 init_pycasacore()
@@ -18,8 +18,11 @@ elseif startswith(conv, "geom")
     rms, off = geometric_uvw!(meta, ms_mjd(ms); sign=conv == "geom" ? 1 : -1)
     println("UVW_GEOMETRIC rms_w_vs_ms=$rms phase_centre_offset_deg=$off")
 end
+mjd = ms_mjd(ms)
 for s in read_gpu_sources(path)
-    if isdefined(TTCalX, :is_rfi) && TTCalX.is_rfi(s)
+    if conv == "exact" && !TTCalX.is_rfi(s)
+        genvis_exact!(vis, meta, s, mjd)
+    elseif isdefined(TTCalX, :is_rfi) && TTCalX.is_rfi(s)
         gpu_genvis!(vis, meta, s, meta.phase_center_ra, meta.phase_center_dec, 0.0;
                     geometry=geometry, position=position)
     else

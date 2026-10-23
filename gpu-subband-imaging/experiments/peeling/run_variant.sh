@@ -17,6 +17,11 @@
 #   gpu_rfi_oldbr   gpu_exp + RFI pass with the old branch's geometry (no ŝ₀ term)
 #   gpu_joint       gpu_geom with the RFI emitter zested jointly with the sky
 #   gpu_jreg<D>     gpu_joint with the Tukey phase prior, max offset D deg
+#   gpu_prodfix     production code path and settings + the three minimal fixes:
+#                   no convergence gate, elevation cut 0, model flags (ZEST_FLAG_MODEL)
+#   gpu_prodfix_rfi gpu_prodfix + joint RFI source (damped solver)
+#   gpu_cm_exact    gpu_cpumatch with the CPU-exact host model (ZEST_GENVIS=exact)
+#   gpu_cm_exact_joint  gpu_cm_exact + joint RFI
 #   gpu_cm_after    gpu_cpumatch + RFI pass after sky (the main pipeline's scheme)
 #   gpu_cm_aftercpu gpu_cm_after at ttcal_dev's (misread) emitter position
 #   gpu_cm_joint    gpu_cpumatch with the RFI zested jointly with the sky
@@ -38,10 +43,11 @@ DAEMON_EXP=$PX_REPO/workers/zest_daemon.jl
 DAEMON_PROD=$PX/prod_daemon/zest_daemon.jl
 CPU_RFI_ITRF="6.368747415744499e6,-364625.3282460041,114589.56805339623"
 STUDY=${STUDY:-$PX/runs/study}
+DATA=${DATA:-$PX/data}
 
 MSES=()
 for snap in "$@"; do
-    prep=( "$PX"/data/$snap/*_prep.ms )
+    prep=( "$DATA"/$snap/*_prep.ms )
     out=$STUDY/$snap/$VARIANT.ms
     mkdir -p "$STUDY/$snap/img"
     rm -rf "$out"; cp -r "${prep[0]}" "$out"
@@ -56,6 +62,7 @@ cpum() {
     geom
     export ZEST_SOLVER=rk4 ZEST_MAXITER=5 ZEST_TOLERANCE=1e-4 ZEST_MINUVW=5
     export ZEST_MIN_SOURCE_ELEVATION_DEG=0 ZEST_REQUIRE_CONVERGENCE=false
+    export ZEST_FLAG_MODEL=${ZEST_FLAG_MODEL:-1} ZEST_RESUBTRACT=1
 }
 reg() {  # max offset from the variant name suffix
     export ZEST_REG_MAX_OFFSET_DEG=$1
@@ -86,6 +93,15 @@ case $VARIANT in
     gpu_rfi_oldbr)
         rfi; export ZEST_RFI_GEOMETRY=none
         gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    gpu_prodfix) export ZEST_REQUIRE_CONVERGENCE=false ZEST_MIN_SOURCE_ELEVATION_DEG=0 ZEST_FLAG_MODEL=1 ZEST_RESUBTRACT=1
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    gpu_prodfix_rfi) export ZEST_REQUIRE_CONVERGENCE=false ZEST_MIN_SOURCE_ELEVATION_DEG=0 ZEST_FLAG_MODEL=1 ZEST_RESUBTRACT=1
+        rfi; export ZEST_RFI_MODE=joint
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    gpu_cm_exact) cpum; export ZEST_GENVIS=exact
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    gpu_cm_exact_joint) cpum; rfi; export ZEST_GENVIS=exact ZEST_RFI_MODE=joint
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
     gpu_cm_after) cpum; rfi; gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
     gpu_cm_aftercpu) cpum; rfi; export ZEST_RFI_POSITION_ITRF=$CPU_RFI_ITRF
         gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
@@ -110,6 +126,10 @@ case $VARIANT in
     abl_cm_skipshort) cpum; export ZEST_SKIP_SHORT=1
         gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
     abl_cm_after_skipshort) cpum; rfi; export ZEST_SKIP_SHORT=1
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    abl_cm_flagmodel) cpum; export ZEST_FLAG_MODEL=1
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    abl_nogate_el0_flagmodel) export ZEST_REQUIRE_CONVERGENCE=false ZEST_MIN_SOURCE_ELEVATION_DEG=0 ZEST_FLAG_MODEL=1
         gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
     abl_tol) export ZEST_TOLERANCE=1e-4 ZEST_MAXITER=100
         gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
@@ -142,7 +162,7 @@ echo "VARIANT_PEELED $VARIANT n=${#MSES[@]} elapsed=$(( $(date +%s) - t0 ))s"
 SNAPS=("$@")
 for i in "${!MSES[@]}"; do
     snap=${SNAPS[$i]}
-    band=${snap%%MHz*}
+    band=$(basename "$snap"); band=${band%%MHz*}
     "$PX_SCRIPTS/image.sh" "${MSES[$i]}" "$STUDY/$snap/img/$VARIANT" "$band" > /dev/null
 done
 echo "VARIANT_DONE $VARIANT"
