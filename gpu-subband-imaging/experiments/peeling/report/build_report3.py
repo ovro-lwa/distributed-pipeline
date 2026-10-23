@@ -248,11 +248,20 @@ def main():
     story += bullets(N["recommendations"])
     story.append(para("9. Where everything is", H2))
     story += bullets(N["where"])
+    story.append(para("10. Code review guide: TTCalX branch feature/cpu-matched-zest", H2))
+    story += bullets(N["review_intro"])
+    story.append(para("<b>High risk — review these</b>", P))
+    story.append(table(N["review_high"], widths=[4.4 * cm, 3.8 * cm, 11.8 * cm, 6.6 * cm]))
+    story.append(Spacer(1, 4))
+    story.append(para("<b>Lower risk — skim or skip</b>", P))
+    story.append(table(N["review_low"], widths=[6.0 * cm, 20.6 * cm]))
+    story.append(Spacer(1, 4))
+    story += [para(t, SMALL) for t in N["review_notes"]]
     story.append(PageBreak())
     story.append(para("Appendix A: the math, and where it is in the code", H2))
-    story.append(para("Line numbers refer to the local experimental branches (TTCalX exp/peeling-experiments @ a72f4e5: src/gpu/…; "
-                      "distributed-pipeline exp/gpu-peeling-experiments: gpu-subband-imaging/workers/zest_daemon.jl) and to the "
-                      "main pipeline's CPU TTCal (julia060 build, src/…).", SMALL))
+    story.append(para("TTCalX references are to the submitted branch feature/cpu-matched-zest (src/gpu/…); zest_daemon.jl to "
+                      "distributed-pipeline exp/gpu-peeling-experiments (gpu-subband-imaging/workers/); CPU TTCal to the main "
+                      "pipeline's julia060 build (src/…).", SMALL))
     for title, eqs, text, code in N["math"]:
         block = [para(f"<b>{title}</b>", P)]
         for e in eqs:

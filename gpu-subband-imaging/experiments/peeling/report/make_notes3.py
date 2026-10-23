@@ -202,5 +202,100 @@ N["vpol_figs"] = [
 N["answers"].insert(5,
     "<b>Polarization:</b> with the pipeline's own bandpass + XY-phase calibration applied before zest, Stokes V after GPU sky and "
     "sky+RFI zest equals CPU TTCal's on all 96 snapshots (V rms ratio 1.000; |V| at the sources 1.00–1.01×; RFI emitter 0.98×).")
+N["review_intro"] = [
+    "<b>What was submitted:</b> TTCalX branch <b>feature/cpu-matched-zest</b> on GitHub (nkosogor/TTCalX), based on the "
+    "current main (98b6561). Three commits: 200c5c6 (sources.jl: base-10 power law, RFI entries), 9fdd308 (seven new "
+    "files in src/gpu/, about 1,040 lines), 94f062e (unit tests, a CI step, README). No pull request was opened; CI runs "
+    "when one is opened against main. The distributed-pipeline daemon changes are not in this branch.",
+    "<b>How it was checked:</b>"
+    "<br/>• Unit tests (test/runtests.jl): 1016 pass on calim03 with the GPU, 982 with the GPU hidden (as in CI), 956 on "
+    "Julia 1.11 (macOS, fresh dependency resolve). quick_test.jl passes.<br/>"
+    "• An independent code review; its findings were fixed and tested.<br/>"
+    "• Real data: on three OVRO-LWA snapshots, sky-then-RFI zest with the branch writes DATA and FLAG <b>byte-identical</b> "
+    "to the experimental code validated on all 96 snapshots, and the CPU mode and the prior agree to ≤2.6e-7 of the rms.",
+    "<b>Where to spend review time:</b> about 450 lines carry the risk (table below, highest first). Everything else is "
+    "plumbing, ports of standard formulas, or tests, and can be skimmed.",
+]
+N["review_high"] = [
+    ["file:lines (branch)", "what it is", "why it is risky / what to check", "how it is verified"],
+    ["src/gpu/sources.jl:24–35", "GPUPowerLaw: natural log → log10",
+     "<b>Changes every existing caller</b>, including the deployed GPU pipeline once deployed: curved spectra (Cyg A) get "
+     "brighter, single-index spectra are unchanged. Check it matches TTCal's PowerLaw (sky/spectra.jl).",
+     "unit test with a curved spectrum; GPU = CPU TTCal on 96 snapshots"],
+    ["src/gpu/solver.jl:44–113", "_full_normal_equations, _full_step",
+     "Core StefCal math. M[i,j] is read as M[j,i]ᴴ (xy ↔ yx swapped and conjugated), which is valid only because the "
+     "square matrices are Hermitian. The unregularized branch (84–92) must stay the 2×2 solve of the GPU kernel. The "
+     "prior branch (94–112) does a Schur-complement update.",
+     "equals TTCalX's cpu_stefcal_step_full! to 1e-12; GPU = host; real data byte-identical"],
+    ["src/gpu/solver.jl:225–303", "solve_gains!",
+     "RK4 with per-channel freezing (275–300) must match CPU TTCal's solve! (calibration.jl:169): the step that converges "
+     "is still applied, and frozen channels keep their gains. Also the damped branch (257–273) and the prior/device "
+     "checks (234–242).",
+     "noiseless/noisy recovery, diagonal, minuvw, flags, invalid-argument tests"],
+    ["src/gpu/genvis_exact.jl:43–113", "exact_model_tables, _exact_vis, kernel",
+     "Determines GPU = CPU equality. Check the signs (delay τ = r·(ŝ - ŝ₀), cis(-k(τ₂ - τ₁)) at 92), Stokes→linear "
+     "(xy = U - iV, 62), Gaussian widths and axes, and the geocentric horizon test (50), which is ~0.2° from CPU TTCal's.",
+     "matches a CPU-TTCal-style reference loop to 1e-8; GPU = host; 96-snapshot study"],
+    ["src/gpu/geometry.jl:29–104", "j2000_to_itrf_matrix, uvw_geometry, geometric_uvw!",
+     "Precession/nutation/GAST formulas and the UVW sign (b = r₂ - r₁, E rows at 89, 99). An error here mirrors or "
+     "rotates the sky model; free gains would partly hide it.",
+     "rotation, precession and sidereal-day tests; recovers the synthetic MS phase centre and sign"],
+    ["src/gpu/rfi.jl:105–133", "near-field RFI model",
+     "Phase sign (124), and ŝ₀ fitted from meta.uvw (114): it must be called after geometric_uvw! (documented; the s0 "
+     "keyword overrides it).",
+     "tends to the analytic plane wave far away (incl. V sign); RFI residual 0.93× CPU"],
+    ["src/gpu/ms_io.jl:22–84, 133–175", "read_ms_fast / write_ms_fast! (numpy)",
+     "Writes the MS: a row-mapping error would corrupt data. Check the fallback conditions (several rows per baseline, "
+     "not 4 polarizations), the 0/1-based index conversion (PyReverseDims) and the padding at 64–67.",
+     "same arrays as read_ms_to_gpu; byte-identical DATA/FLAG vs write_gpu_to_ms! (also with a partial baseline map)"],
+]
+N["review_low"] = [
+    ["file", "why lower risk"],
+    ["src/gpu/regularization.jl", "Opt-in only (no prior unless reg is passed). regularize_element (93) is a 1-D search, unit-tested for its limits."],
+    ["src/gpu/host_backend.jl", "Opt-in CPU mode. Thin per-channel wrappers around TTCalX's own cpu_corrupt!/cpu_subsrc!, plus a makesquare tested equal to the GPU kernel."],
+    ["src/gpu/solver.jl:20–35, 116–200", "mask_short_baselines! (bit-identical to flag_short_baselines!), the diagonal step (the existing kernel's arithmetic, tested equal), and the kernel/thread dispatch."],
+    ["src/gpu/rfi.jl:1–100", "Spectrum lookup ported from ttcal_dev, standard WGS84 → ITRF, JSON parsing with validation; all unit-tested."],
+    ["src/TTCalX.jl", "Includes and exports only."],
+    ["test/*, .github/workflows/ci.yml, README.md", "Tests (skim helpers.jl to trust the fixtures), one CI step, documentation. quick_test.jl: a one-line fix of a check that errored on GPU hosts."],
+]
+N["review_notes"] = [
+    "Not in this branch: the daemon changes (ZEST_* switches, guard, re-subtract on rejection, model flags, fast I/O "
+    "switches) live in distributed-pipeline exp/gpu-peeling-experiments and still call the experimental name "
+    "gpu_stefcal_exp!; they become solve_gains! when that branch is prepared.",
+    "Known differences from CPU TTCal kept on purpose: the horizon test is geocentric (≤0.2°), and autocorrelations are "
+    "not peeled (unchanged TTCalX behaviour).",
+]
+for m in N["math"]:
+    m[3] = (m[3].replace("experimental.jl:759 _exact_tables, :790 _exact_vis, :812 genvis_exact_kernel!, :832 genvis_exact!, :684 _gaussian_axes, :713 genvis_exact_reference!",
+                         "genvis_exact.jl:43 exact_model_tables, :82 _exact_vis, :104 genvis_exact_kernel!, :128 genvis_exact!, :19 _gaussian_axes")
+                .replace("experimental.jl:231 gpu_genvis!(…::GPURFISource), :109 uvw_geometry", "rfi.jl:105 gpu_genvis!(…::GPURFISource), geometry.jl:58 uvw_geometry")
+                .replace("experimental.jl:951 stefcal_step_full_herm_kernel!", "solver.jl:44 _full_normal_equations, :76 _full_step, :169 stefcal_steps!")
+                .replace("experimental.jl:564 gpu_stefcal_exp! (solver=:rk4 / :damped)", "solver.jl:225 solve_gains! (solver=:rk4 / :damped)")
+                .replace("experimental.jl:929 flag_short_baselines_gpu!", "solver.jl:20 mask_short_baselines!")
+                .replace("experimental.jl:150 j2000_to_itrf_matrix, :195 geometric_uvw!", "geometry.jl:29 j2000_to_itrf_matrix, :83 geometric_uvw!")
+                .replace("experimental.jl:297 PhaseRegularization, :317 phase_regularization, :335 tukey_prior, :353 regularize_element, :399/:438 regularized step kernels",
+                         "regularization.jl:26 PhaseRegularization, :53 phase_regularization, :71 tukey_prior, :93 regularize_element; solver.jl:94–112 prior update"))
+N["where"].append("<b>Submitted:</b> TTCalX branch feature/cpu-matched-zest (GitHub, commits 200c5c6, 9fdd308, 94f062e); "
+                  "see section 10 for the review guide. The distributed-pipeline branch is not yet prepared.")
+N["answers"].insert(6, "<b>Code submitted for review:</b> TTCalX branch feature/cpu-matched-zest, with unit tests. Its real-data "
+                    "output is byte-identical to the validated code. Section 10 lists the ~450 high-risk lines to review "
+                    "and what can be skimmed.")
+SUB = {"₀": "0", "₁": "1", "₂": "2", "₃": "3", "ₙ": "n"}
+
+
+def _subs(x):
+    """Unicode subscripts → <sub> (the PDF font has no subscript glyphs)."""
+    if isinstance(x, str):
+        for k, v in SUB.items():
+            x = x.replace(k, f"<sub>{v}</sub>")
+        return x.replace("ᴴ", "<super>H</super>")
+    if isinstance(x, list):
+        return [_subs(y) for y in x]
+    if isinstance(x, dict):
+        return {k: _subs(v) for k, v in x.items()}
+    return x
+
+
+N = _subs(N)
 json.dump(N, open("notes3.json", "w"), indent=1)
 print("ok", len(N["math"]))
