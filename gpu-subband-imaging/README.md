@@ -108,3 +108,41 @@ The defaults live under `peel` in `pipeline.yaml`: 30x3 peeling with a 15 degree
 source elevation limit, `1e-2` convergence tolerance, required convergence,
 maximum gain amplitude of 100, and a 1 percent minimum nonzero visibility
 fraction.
+
+## CPU-TTCal-matched zesting (sky + RFI)
+
+The `peel` section can also select a zest that reproduces the CPU pipeline's
+`ttcal.jl zest` (sky) and `ttcal_dev` (RFI) results. It needs TTCalX with
+`solve_gains!` (branch `feature/cpu-matched-zest`) in `env.ttcalx`. The
+defaults above keep the original GPU peeling.
+
+```yaml
+cal:
+  rfi_sources: /path/to/rfi_43.2_ver20251101.json
+
+peel:
+  solver: rk4                    # CPU TTCal's solver: RK4, per-channel convergence
+  maxiter: 5
+  tolerance: 1.0e-4
+  minuvw: 5.0
+  min_source_elevation_deg: 0.0
+  require_convergence: false
+  model: exact                   # CPU TTCal's sky model
+  uvw: geometric                 # precessed ITRF baselines
+  flag_model: true               # flagged data out of both sides of the solve
+  resubtract: true               # keep the last accepted solution on rejection
+  fast_io: true                  # faster MS read/write, same result
+  rfi: true                      # zest cal.rfi_sources after the sky
+
+peel_overrides:                  # the RFI model has flux only at 14.8-40.9 MHz
+  46: {rfi: false}
+  50: {rfi: false}
+  # ... and the other bands above 41 MHz
+```
+
+Further options: `rfi_mode: joint` zests the RFI emitter together with the
+sky sources; `guard: true` reverts a source update that raises the residual
+power; `reg_max_offset_deg` (with `reg_taper_deg`, `reg_lambda`) adds a
+Tukey phase prior on the gains; `device: cpu` runs TTCalX on CPU threads
+(`JULIA_NUM_THREADS`, default `auto`). The daemon logs
+`ZEST_TIMING read=… peel=… write=…` for every snapshot.

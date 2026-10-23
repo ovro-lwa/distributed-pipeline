@@ -143,6 +143,16 @@ def load_subbands(path: Union[str, Path]) -> SubbandConfig:
 
 @dataclass(frozen=True)
 class PeelParams:
+    """Zest settings, passed to the TTCalX daemon as ZEST_<FIELD> variables.
+
+    The defaults reproduce the original GPU peeling.  The CPU-TTCal-matched
+    configuration (same result as the main pipeline's ttcal.jl zest) is
+    solver=rk4, maxiter=5, tolerance=1e-4, minuvw=5, min_source_elevation_deg=0,
+    require_convergence=false, model=exact, uvw=geometric, flag_model=true,
+    resubtract=true; rfi=true adds the RFI zest after the sky (cal.rfi_sources).
+    solver=rk4, model=exact, uvw=geometric, fast_io and device=cpu need a TTCalX
+    with solve_gains! (branch feature/cpu-matched-zest).
+    """
     maxiter: int = 30
     tolerance: float = 1e-2
     minuvw: float = 10.0
@@ -153,6 +163,41 @@ class PeelParams:
     quality_sample_rows: int = 1024
     min_visibility_amplitude: float = 1e-12
     min_visibility_nonzero_fraction: float = 0.01
+    solver: str = "damped"            # damped (gpu_stefcal!) | rk4 (CPU TTCal's solve!)
+    model: str = "kernels"            # kernels (TTCalX genvis) | exact (CPU TTCal's model)
+    uvw: str = "ms"                   # ms | geometric (precessed ITRF baselines)
+    flag_model: bool = False          # give each model the data's flags
+    resubtract: bool = False          # re-subtract a rejected source with its last accepted gains
+    guard: bool = False               # undo a source update that raises the residual power
+    rfi: bool = False                 # zest cal.rfi_sources (near-field RFI emitters)
+    rfi_mode: str = "after"           # after (separate pass after the sky) | joint
+    fast_io: bool = False             # read_ms_fast / write_ms_fast! (same results)
+    device: str = "gpu"               # gpu | cpu (TTCalX on CPU threads)
+    reg_max_offset_deg: float = 0.0   # > 0: Tukey phase prior (Regularized Peeling)
+    reg_taper_deg: float = 1.0
+    reg_lambda: float = 1.0
+
+    def __post_init__(self) -> None:
+        choices = {"solver": ("damped", "rk4"), "model": ("kernels", "exact"),
+                   "uvw": ("ms", "geometric"), "rfi_mode": ("after", "joint"),
+                   "device": ("gpu", "cpu")}
+        for name, allowed in choices.items():
+            if getattr(self, name) not in allowed:
+                raise ConfigError(f"peel.{name} must be one of {allowed}, "
+                                  f"got {getattr(self, name)!r}")
+        if self.device == "cpu" and self.model != "exact":
+            raise ConfigError("peel.device=cpu needs peel.model=exact")
+        if self.maxiter < 1 or self.peeliter < 1:
+            raise ConfigError("peel.maxiter and peel.peeliter must be >= 1")
+
+    def daemon_env(self, rfi_sources: Optional[str]) -> Dict[str, str]:
+        """ZEST_* environment for the zest daemon."""
+        opts = {k: v for k, v in vars(self).items() if k != "rfi"}
+        if self.rfi:
+            if not rfi_sources:
+                raise ConfigError("peel.rfi is true but cal.rfi_sources is not set")
+            opts["rfi_sources"] = rfi_sources
+        return {f"ZEST_{k.upper()}": str(v) for k, v in opts.items()}
 
 
 @dataclass(frozen=True)
@@ -182,6 +227,7 @@ class CalTables:
     xy: str
     sources: str
     aoflagger_strategy: str
+    rfi_sources: Optional[str] = None     # RFI model for peel.rfi (TTCal JSON)
 
 
 @dataclass(frozen=True)
@@ -239,7 +285,8 @@ def load_pipeline(path: Union[str, Path]) -> PipelineConfig:
         chanbin=int(d.get("chanbin", 4)),
         cal=CalTables(bp=_require(cal, "bp", "cal"), xy=_require(cal, "xy", "cal"),
                       sources=_require(cal, "sources", "cal"),
-                      aoflagger_strategy=_require(cal, "aoflagger_strategy", "cal")),
+                      aoflagger_strategy=_require(cal, "aoflagger_strategy", "cal"),
+                      rfi_sources=cal.get("rfi_sources")),
         peel=peel,
         peel_overrides=peel_overrides,
         imaging=ImagingParams(**d.get("imaging", {})),

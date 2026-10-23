@@ -281,8 +281,9 @@ class Worker:
             project=self.cfg.pipeline.env.ttcalx,
             daemon_jl=str(Path(workers_dir) / "zest_daemon.jl"),
             sources=self.cfg.pipeline.cal.sources, env=dict(os.environ),
-            peel_opts=dict(
-                column="DATA", **vars(self.cfg.pipeline.peel_for_band(self.band))))
+            zest_env={"ZEST_COLUMN": "DATA",
+                      **self.cfg.pipeline.peel_for_band(self.band).daemon_env(
+                          self.cfg.pipeline.cal.rfi_sources)})
 
     def stitch(self) -> None:
         if not self.cfg.pipeline.movie.enabled:
