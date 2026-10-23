@@ -22,7 +22,12 @@ LABEL = {"prep": "before peeling", "cpu_sky": "CPU sky (main)", "cpu_sky_rfi": "
          "gpu_prod": "GPU production", "gpu_cpumatch": "GPU CPU-matched",
          "gpu_cm_after": "GPU sky+RFI (after)", "gpu_cm_joint": "GPU sky+RFI (joint)",
          "gpu_cm_aftercpu": "GPU sky+RFI, CPU RFI pos.", "gpu_cm_areg1": "GPU after + reg 1°",
-         "gpu_cm_areg5": "GPU after + reg 5°", "gpu_cm_jreg1": "GPU joint + reg 1°"}
+         "gpu_cm_areg5": "GPU after + reg 5°", "gpu_cm_jreg1": "GPU joint + reg 1°",
+         "gpu_cm_jreg0.25": "GPU joint + reg 0.25°", "gpu_cm_jreg3": "GPU joint + reg 3°",
+         "gpu_prodfix": "GPU prod. + 3 fixes", "gpu_prodfix_rfi": "GPU prod. + fixes, joint RFI",
+         "gpu_cm_exact": "GPU CPU-matched, exact model", "gpu_cm_exact_joint": "GPU exact model, joint RFI",
+         "gpu_prodfix_guard": "GPU prod. + fixes + guard", "gpu_cm_joint_guard": "GPU joint + guard",
+         "gpu_cm_after_guard": "GPU after + guard"}
 
 
 def main():

@@ -52,11 +52,14 @@ def vis_removed(prep_ms, ms):
     return np.where(good, p - d, 0), np.where(good, p, 0)
 
 
-def snapshot(snapdir, do_vis, do_png):
+def snapshot(snapdir, do_vis, do_png, only=None, previous=None):
     variants = [v for v in ORDER if os.path.exists(f"{snapdir}/img/{v}-I-image.fits")]
     variants += sorted(os.path.basename(p)[:-len("-I-image.fits")]
                        for p in glob.glob(f"{snapdir}/img/*-I-image.fits")
                        if os.path.basename(p)[:-len("-I-image.fits")] not in ORDER)
+    if only:  # recompute only these (plus the references they are compared with)
+        keep = set(only) | {"prep", *REFS}
+        variants = [v for v in variants if v in keep]
     if not variants:
         return None
     out = {}
@@ -100,6 +103,10 @@ def snapshot(snapdir, do_vis, do_png):
                                                      (np.linalg.norm(rr) + 1e-30))
     if do_png:
         make_png(snapdir, variants, imgs, out)
+    if only and previous:
+        merged = dict(previous)
+        merged.update({v: out[v] for v in only if v in out})
+        return merged
     return out
 
 
@@ -147,16 +154,22 @@ def main() -> int:
     ap.add_argument("--snaps", nargs="*")
     ap.add_argument("--vis", action="store_true")
     ap.add_argument("--png", action="store_true")
+    ap.add_argument("--only", nargs="*", help="recompute only these variants, keep the rest")
+    ap.add_argument("--out", help="write the summary here instead of STUDY/summary.json")
     a = ap.parse_args()
     snaps = a.snaps or sorted(os.path.basename(p) for p in glob.glob(f"{a.study}/*MHz_*"))
     path = f"{a.study}/summary.json"
     summary = json.load(open(path)) if os.path.exists(path) else {}
+    if a.out:
+        path = a.out
     for s in snaps:
-        r = snapshot(f"{a.study}/{s}", a.vis, a.png)
+        r = snapshot(f"{a.study}/{s}", a.vis, a.png, a.only, summary.get(s))
         if r is None:
             continue
         summary[s] = r
         for v, m in r.items():
+            if a.only and v not in a.only:
+                continue
             tg = " ".join(f"{k}={x['peak']:.0f}" for k, x in m["targets"].items())
             extra = " ".join(f"{k}={m[k]:.3f}" for k in m if k.startswith(("removed", "corr_")))
             print(f"{s:11s} {v:16s} rms={m['rms']:7.2f} V={m.get('V_rms', np.nan):6.2f} {tg} {extra}")

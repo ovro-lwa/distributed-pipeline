@@ -15,8 +15,9 @@ import sys
 
 import numpy as np
 
-SKY = ["gpu_prod", "gpu_prodfix", "gpu_exp", "gpu_geom", "gpu_cpumatch", "gpu_cm_exact"]
-RFI = ["gpu_cm_after", "gpu_cm_aftercpu", "gpu_cm_joint", "gpu_cm_exact_joint", "gpu_prodfix_rfi", "gpu_geom_rfi", "gpu_joint",
+SKY = ["gpu_prod", "gpu_prodfix", "gpu_prodfix_guard", "gpu_exp", "gpu_geom", "gpu_cpumatch", "gpu_cm_exact"]
+RFI = ["gpu_cm_after", "gpu_cm_after_guard", "gpu_cm_aftercpu", "gpu_cm_joint", "gpu_cm_joint_guard",
+       "gpu_cm_exact_joint", "gpu_prodfix_rfi", "gpu_cm_jreg0.25", "gpu_cm_jreg3", "gpu_geom_rfi", "gpu_joint",
        "gpu_cm_jreg0.5", "gpu_cm_jreg1", "gpu_cm_jreg2", "gpu_cm_jreg5",
        "gpu_cm_areg0.5", "gpu_cm_areg1", "gpu_cm_areg2", "gpu_cm_areg5"]
 
@@ -68,7 +69,7 @@ def main():
         for v, r in rows.items():
             print(f"  {v:16s} " + " ".join(f"{k}={x:.3f}" if isinstance(x, float) else f"{k}={x}"
                                            for k, x in r.items()))
-    json.dump(out, open(f"{sys.argv[1]}/tables.json", "w"), indent=1)
+    json.dump(out, open(os.environ.get("TABLES_OUT", f"{sys.argv[1]}/tables.json"), "w"), indent=1)
 
 
 if __name__ == "__main__":
