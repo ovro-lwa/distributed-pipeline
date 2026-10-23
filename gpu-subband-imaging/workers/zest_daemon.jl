@@ -4,7 +4,9 @@
 # default (production behaviour unchanged):
 #   ZEST_RFI_SOURCES          RFI model; adds a near-field RFI pass after sky
 #                             (as the main pipeline: sky zest, then RFI zest)
-#   ZEST_RFI_{MAXITER,TOLERANCE,MINUVW,PEELITER}   RFI-pass overrides
+#   ZEST_RFI_MODE             after (separate pass after sky, as the main pipeline)
+#                             | joint (RFI zested together with the sky sources)
+#   ZEST_RFI_{MAXITER,TOLERANCE,MINUVW,PEELITER}   RFI-pass overrides (mode=after)
 #   ZEST_SOLVER               damped (TTCalX) | rk4 (CPU TTCal solve!)
 #   ZEST_REG_MAX_OFFSET_DEG   >0 enables the Tukey phase prior (Regularized Peeling)
 #   ZEST_REG_TAPER_DEG        taper width beyond the max offset (deg)
@@ -16,6 +18,8 @@
 #                             stores r1-r2, so the far-field model is not mirrored)
 #                             | geom (UVW from ITRF baselines rotated to J2000:
 #                             apparent geometry with precession/nutation, as CPU TTCal)
+#   ZEST_SKIP_SHORT           1: leave baselines < minuvw unpeeled (as CPU TTCal,
+#                             which flags them before peeling)
 #   ZEST_SAVE_GAINS_DIR       write per-source gains (<ms>.<pass>.<i>.gains.bin)
 push!(LOAD_PATH, joinpath(ENV["TTCALX_DIR"], "src"))
 include(joinpath(ENV["TTCALX_DIR"], "src", "TTCalX.jl"))
@@ -38,6 +42,7 @@ require_convergence = envb("ZEST_REQUIRE_CONVERGENCE", true)
 max_gain = envf("ZEST_MAX_GAIN_AMPLITUDE", 100.0)
 
 rfi_path = get(ENV, "ZEST_RFI_SOURCES", "")
+rfi_mode = get(ENV, "ZEST_RFI_MODE", "after")
 rfi_mi = envi("ZEST_RFI_MAXITER", mi)
 rfi_tol = envf("ZEST_RFI_TOLERANCE", tol)
 rfi_muvw = envf("ZEST_RFI_MINUVW", muvw)
@@ -54,6 +59,7 @@ reg_taper = envf("ZEST_REG_TAPER_DEG", 1.0)
 reg_lambda = envf("ZEST_REG_LAMBDA", 1.0)
 reg_targets = get(ENV, "ZEST_REG_TARGETS", "all")
 save_gains_dir = get(ENV, "ZEST_SAVE_GAINS_DIR", "")
+skip_short = envb("ZEST_SKIP_SHORT", false)
 experimental = solver != :damped || reg_offset > 0
 
 function elevation_deg(source, meta)
@@ -148,6 +154,7 @@ function safe_zest_gpu!(vis, meta, catalog_sources; pass="sky", maxiter=mi,
                 meta.phase_center_ra, meta.phase_center_dec, 0.0
             )
         end
+        skip_short && zero_short_baselines!(coherency, meta, minuvw)
         push!(coherencies, coherency)
     end
 
@@ -221,7 +228,7 @@ println(
     "DAEMON_READY sources=$(length(sources)) device=$device_name " *
     "min_elevation=$min_elevation require_convergence=$require_convergence " *
     "max_gain=$max_gain rfi_sources=$(length(rfi_sources)) solver=$solver " *
-    "reg_max_offset_deg=$reg_offset uvw_convention=$uvw_convention"
+    "reg_max_offset_deg=$reg_offset uvw_convention=$uvw_convention rfi_mode=$rfi_mode"
 )
 flush(stdout)
 
@@ -238,8 +245,13 @@ for line in eachline(stdin)
             rms, offset = geometric_uvw!(meta, ms_mjd(ms))
             @printf("UVW_GEOMETRIC rms_w_vs_ms=%.4f phase_centre_offset_deg=%.4f\n", rms, offset)
         end
-        isempty(sources) || safe_zest_gpu!(vis, meta, sources; ms=ms)
-        if !isempty(rfi_sources)
+        if rfi_mode == "joint"
+            joint = vcat(sources, rfi_sources)
+            isempty(joint) || safe_zest_gpu!(vis, meta, joint; ms=ms)
+        else
+            isempty(sources) || safe_zest_gpu!(vis, meta, sources; ms=ms)
+        end
+        if !isempty(rfi_sources) && rfi_mode != "joint"
             safe_zest_gpu!(vis, meta, rfi_sources; pass="rfi", maxiter=rfi_mi,
                            tolerance=rfi_tol, minuvw=rfi_muvw, peeliter=rfi_piter,
                            ms=ms)

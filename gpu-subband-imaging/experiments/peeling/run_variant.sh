@@ -15,6 +15,20 @@
 #   gpu_geom_rfi    gpu_geom + RFI pass (correct emitter position)
 #   gpu_geom_rficpu gpu_geom + RFI pass at ttcal_dev's (misread) emitter position
 #   gpu_rfi_oldbr   gpu_exp + RFI pass with the old branch's geometry (no ŝ₀ term)
+#   gpu_joint       gpu_geom with the RFI emitter zested jointly with the sky
+#   gpu_jreg<D>     gpu_joint with the Tukey phase prior, max offset D deg
+#   gpu_cm_after    gpu_cpumatch + RFI pass after sky (the main pipeline's scheme)
+#   gpu_cm_aftercpu gpu_cm_after at ttcal_dev's (misread) emitter position
+#   gpu_cm_joint    gpu_cpumatch with the RFI zested jointly with the sky
+#   gpu_cm_jreg<D>  gpu_cm_joint + Tukey phase prior, max offset D deg
+#   gpu_cm_areg<D>  gpu_cm_after with the prior on the sky pass only (stops the
+#                   sky gains absorbing the RFI before the RFI pass)
+#   abl_*           one-at-a-time changes to production settings (exp code):
+#                   abl_tol (damped, tol 1e-4, maxiter 100), abl_el0 (min elevation 0),
+#                   abl_nogate (no convergence gate), abl_rk4 (rk4, tol 1e-4, maxiter 30,
+#                   no gate), abl_geom_rk4 (abl_rk4 + geometric UVW)
+#                   abl_nogate_{uvw5,it5}: abl_nogate + minuvw 5 / maxiter 5;
+#                   abl_cm_{uvw10,it30}: gpu_cpumatch with production minuvw / maxiter
 #   gpu_reg<D>      gpu_geom_rfi with the Tukey phase prior, max offset D deg
 #                   (ZEST_REG_TAPER_DEG / ZEST_REG_LAMBDA / ZEST_REG_TARGETS from env)
 set -eo pipefail
@@ -23,7 +37,7 @@ source "$(dirname "$0")/env.sh"
 DAEMON_EXP=$PX_REPO/workers/zest_daemon.jl
 DAEMON_PROD=$PX/prod_daemon/zest_daemon.jl
 CPU_RFI_ITRF="6.368747415744499e6,-364625.3282460041,114589.56805339623"
-STUDY=$PX/runs/study
+STUDY=${STUDY:-$PX/runs/study}
 
 MSES=()
 for snap in "$@"; do
@@ -38,6 +52,15 @@ gpu_run() {  # TTCALX DAEMON SOURCES
     "$PX_SCRIPTS/gpu_zest.sh" "$1" "$2" "$3" "${MSES[@]}"
 }
 geom() { export ZEST_UVW_CONVENTION=geom; }
+cpum() {
+    geom
+    export ZEST_SOLVER=rk4 ZEST_MAXITER=5 ZEST_TOLERANCE=1e-4 ZEST_MINUVW=5
+    export ZEST_MIN_SOURCE_ELEVATION_DEG=0 ZEST_REQUIRE_CONVERGENCE=false
+}
+reg() {  # max offset from the variant name suffix
+    export ZEST_REG_MAX_OFFSET_DEG=$1
+    export ZEST_SAVE_GAINS_DIR=$STUDY/gains; mkdir -p "$ZEST_SAVE_GAINS_DIR"
+}
 rfi() { export ZEST_RFI_SOURCES=$RFI_MODEL; }
 
 t0=$(date +%s)
@@ -62,6 +85,49 @@ case $VARIANT in
         gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
     gpu_rfi_oldbr)
         rfi; export ZEST_RFI_GEOMETRY=none
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    gpu_cm_after) cpum; rfi; gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    gpu_cm_aftercpu) cpum; rfi; export ZEST_RFI_POSITION_ITRF=$CPU_RFI_ITRF
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    gpu_cm_joint) cpum; rfi; export ZEST_RFI_MODE=joint; reg 0
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    gpu_cm_jreg*) cpum; rfi; export ZEST_RFI_MODE=joint; reg "${VARIANT#gpu_cm_jreg}"
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    gpu_cm_areg*) cpum; rfi; export ZEST_REG_TARGETS=sky; reg "${VARIANT#gpu_cm_areg}"
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    abl_nogate_uvw5) export ZEST_REQUIRE_CONVERGENCE=false ZEST_MINUVW=5
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    abl_nogate_it5) export ZEST_REQUIRE_CONVERGENCE=false ZEST_MAXITER=5
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    abl_cm_uvw10) cpum; export ZEST_MINUVW=10
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    abl_cm_it30) cpum; export ZEST_MAXITER=30
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    abl_nogate_el0) export ZEST_REQUIRE_CONVERGENCE=false ZEST_MIN_SOURCE_ELEVATION_DEG=0
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    abl_nogate_el5) export ZEST_REQUIRE_CONVERGENCE=false ZEST_MIN_SOURCE_ELEVATION_DEG=5
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    abl_cm_skipshort) cpum; export ZEST_SKIP_SHORT=1
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    abl_cm_after_skipshort) cpum; rfi; export ZEST_SKIP_SHORT=1
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    abl_tol) export ZEST_TOLERANCE=1e-4 ZEST_MAXITER=100
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    abl_el0) export ZEST_MIN_SOURCE_ELEVATION_DEG=0
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    abl_nogate) export ZEST_REQUIRE_CONVERGENCE=false
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    abl_rk4) export ZEST_SOLVER=rk4 ZEST_TOLERANCE=1e-4 ZEST_REQUIRE_CONVERGENCE=false
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    abl_geom_rk4) geom; export ZEST_SOLVER=rk4 ZEST_TOLERANCE=1e-4 ZEST_REQUIRE_CONVERGENCE=false
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    gpu_joint) geom; rfi; export ZEST_RFI_MODE=joint
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    gpu_jreg*)
+        geom; rfi; export ZEST_RFI_MODE=joint
+        export ZEST_REG_MAX_OFFSET_DEG=${VARIANT#gpu_jreg}
+        export ZEST_REG_MAX_OFFSET_DEG=${ZEST_REG_MAX_OFFSET_DEG%%_*}
+        export ZEST_SAVE_GAINS_DIR=$STUDY/gains; mkdir -p "$ZEST_SAVE_GAINS_DIR"
         gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
     gpu_reg*)
         geom; rfi
