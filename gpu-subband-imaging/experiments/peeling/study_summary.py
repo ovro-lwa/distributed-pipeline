@@ -27,7 +27,8 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(__file__))
 from compare_img import load, robust_rms, target_pixels  # noqa: E402
 
-ORDER = ["prep", "cpu_sky", "cpu_sky_rfi", "gpu_prod", "gpu_exp", "gpu_geom", "gpu_cpumatch",
+ORDER = ["prep", "cpu_sky", "cpu_sky_rfi", "gpu_prod", "gpu_prodfix", "gpu_prodfix_rfi", "gpu_exp", "gpu_geom",
+         "gpu_cpumatch", "gpu_cm_exact", "gpu_cm_exact_joint",
          "gpu_geom_rfi", "gpu_geom_rficpu", "gpu_rfi_oldbr",
          "gpu_reg0.5", "gpu_reg1", "gpu_reg2", "gpu_reg5"]
 REFS = ("cpu_sky", "cpu_sky_rfi")

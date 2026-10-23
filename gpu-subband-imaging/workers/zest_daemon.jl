@@ -30,6 +30,9 @@
 #   ZEST_RESUBTRACT           1: when a solve is rejected, subtract the source again
 #                             with its restored (last accepted) gains instead of
 #                             leaving it in the data
+#   ZEST_GUARD                1: divergence guard; after subtracting a source with
+#                             new gains, revert to the previous state if the residual
+#                             power (unflagged XX+YY) went up
 #   ZEST_SAVE_GAINS_DIR       write per-source gains (<ms>.<pass>.<i>.gains.bin)
 push!(LOAD_PATH, joinpath(ENV["TTCALX_DIR"], "src"))
 include(joinpath(ENV["TTCALX_DIR"], "src", "TTCalX.jl"))
@@ -73,6 +76,10 @@ skip_short = envb("ZEST_SKIP_SHORT", false)
 flag_model = envb("ZEST_FLAG_MODEL", false)
 genvis_mode = get(ENV, "ZEST_GENVIS", "kernels")
 resubtract = envb("ZEST_RESUBTRACT", false)
+guard = envb("ZEST_GUARD", false)
+
+"""Residual power of the unflagged XX and YY visibilities."""
+residual_power(vis) = sum(abs2, vis.xx .* .!vis.flags) + sum(abs2, vis.yy .* .!vis.flags)
 experimental = solver != :damped || reg_offset > 0
 
 function elevation_deg(source, meta)
@@ -187,6 +194,8 @@ function safe_zest_gpu!(vis, meta, catalog_sources; pass="sky", maxiter=mi,
             source = peel_sources[index]
             coherency = coherencies[index]
             calibration = calibrations[index]
+            power_before = guard ? residual_power(vis) : 0.0
+            was_subtracted = subtracted[index]
             if subtracted[index]
                 corrupted = deepcopy_gpu(coherency)
                 gpu_corrupt!(corrupted, calibration, meta)
@@ -212,6 +221,23 @@ function safe_zest_gpu!(vis, meta, catalog_sources; pass="sky", maxiter=mi,
                 gpu_subsrc!(vis, corrupted)
                 subtracted[index] = true
                 accepted_final[index] = true
+                if guard
+                    power_after = residual_power(vis)
+                    if power_after > power_before
+                        # undo: put the new model back, restore and re-subtract the old one
+                        gpu_putsrc!(vis, corrupted)
+                        restore_calibration!(calibration, saved)
+                        if was_subtracted
+                            corrupted = deepcopy_gpu(coherency)
+                            gpu_corrupt!(corrupted, calibration, meta)
+                            gpu_subsrc!(vis, corrupted)
+                        end
+                        subtracted[index] = was_subtracted
+                        accepted_final[index] = was_subtracted
+                        @printf("PEEL_GUARD pass=%s name=\"%s\" iteration=%d power_ratio=%.4g reverted=true\n",
+                                pass, get_name(source), iteration, power_after / power_before)
+                    end
+                end
             else
                 restore_calibration!(calibration, saved)
                 if resubtract && accepted_final[index]

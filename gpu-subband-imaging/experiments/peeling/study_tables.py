@@ -10,12 +10,13 @@ For each variant, over the snapshots where both it and the reference exist:
 References: cpu_sky for the sky-only variants, cpu_sky_rfi for RFI variants.
 """
 import json
+import os
 import sys
 
 import numpy as np
 
-SKY = ["gpu_prod", "gpu_exp", "gpu_geom", "gpu_cpumatch"]
-RFI = ["gpu_cm_after", "gpu_cm_aftercpu", "gpu_cm_joint", "gpu_geom_rfi", "gpu_joint",
+SKY = ["gpu_prod", "gpu_prodfix", "gpu_exp", "gpu_geom", "gpu_cpumatch", "gpu_cm_exact"]
+RFI = ["gpu_cm_after", "gpu_cm_aftercpu", "gpu_cm_joint", "gpu_cm_exact_joint", "gpu_prodfix_rfi", "gpu_geom_rfi", "gpu_joint",
        "gpu_cm_jreg0.5", "gpu_cm_jreg1", "gpu_cm_jreg2", "gpu_cm_jreg5",
        "gpu_cm_areg0.5", "gpu_cm_areg1", "gpu_cm_areg2", "gpu_cm_areg5"]
 
@@ -25,8 +26,6 @@ def table(summary, variants, ref, bands=None):
     for v in variants:
         acc = {"rms": [], "corr": [], "noop": 0, "n": 0}
         for snap, r in summary.items():
-            if bands and int(snap.split("MHz")[0]) not in bands:
-                continue
             if v not in r or ref not in r:
                 continue
             acc["n"] += 1
@@ -52,17 +51,24 @@ def table(summary, variants, ref, bands=None):
 
 def main():
     study = sys.argv[1]
-    summary = json.load(open(f"{study}/summary.json"))
+    summary = {}
+    for st in sys.argv[1:]:  # several studies (dates) are pooled; snapshot keys get the date
+        for k, v in json.load(open(f"{st}/summary.json")).items():
+            summary[f"{os.path.basename(st)}/{k}"] = v
+    band = lambda s: int(s.split("/")[-1].split("MHz")[0])
+    sub = lambda lo, hi: {k: v for k, v in summary.items() if lo <= band(k) < hi}
     out = {"sky_all": table(summary, SKY, "cpu_sky"),
-           "sky_low": table(summary, SKY, "cpu_sky", bands=range(0, 50)),
-           "sky_high": table(summary, SKY, "cpu_sky", bands=range(50, 100)),
-           "rfi_low": table(summary, RFI, "cpu_sky_rfi", bands=range(0, 50))}
+           "sky_low": table(sub(0, 50), SKY, "cpu_sky"),
+           "sky_high": table(sub(50, 100), SKY, "cpu_sky"),
+           "rfi_all": table(summary, RFI, "cpu_sky_rfi"),
+           "rfi_low": table(sub(0, 50), RFI, "cpu_sky_rfi"),
+           "rfi_high": table(sub(50, 100), RFI, "cpu_sky_rfi")}
     for name, rows in out.items():
         print(f"== {name}")
         for v, r in rows.items():
             print(f"  {v:16s} " + " ".join(f"{k}={x:.3f}" if isinstance(x, float) else f"{k}={x}"
                                            for k, x in r.items()))
-    json.dump(out, open(f"{study}/tables.json", "w"), indent=1)
+    json.dump(out, open(f"{sys.argv[1]}/tables.json", "w"), indent=1)
 
 
 if __name__ == "__main__":

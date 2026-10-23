@@ -22,6 +22,7 @@
 #   gpu_prodfix_rfi gpu_prodfix + joint RFI source (damped solver)
 #   gpu_cm_exact    gpu_cpumatch with the CPU-exact host model (ZEST_GENVIS=exact)
 #   gpu_cm_exact_joint  gpu_cm_exact + joint RFI
+#   gpu_prodfix_guard / gpu_cm_joint_guard / gpu_cm_after_guard: + divergence guard (ZEST_GUARD)
 #   gpu_cm_after    gpu_cpumatch + RFI pass after sky (the main pipeline's scheme)
 #   gpu_cm_aftercpu gpu_cm_after at ttcal_dev's (misread) emitter position
 #   gpu_cm_joint    gpu_cpumatch with the RFI zested jointly with the sky
@@ -101,6 +102,12 @@ case $VARIANT in
     gpu_cm_exact) cpum; export ZEST_GENVIS=exact
         gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
     gpu_cm_exact_joint) cpum; rfi; export ZEST_GENVIS=exact ZEST_RFI_MODE=joint
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    gpu_prodfix_guard) export ZEST_REQUIRE_CONVERGENCE=false ZEST_MIN_SOURCE_ELEVATION_DEG=0 ZEST_FLAG_MODEL=1 ZEST_RESUBTRACT=1 ZEST_GUARD=1
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    gpu_cm_joint_guard) cpum; rfi; export ZEST_RFI_MODE=joint ZEST_GUARD=1
+        gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    gpu_cm_after_guard) cpum; rfi; export ZEST_GUARD=1
         gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
     gpu_cm_after) cpum; rfi; gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
     gpu_cm_aftercpu) cpum; rfi; export ZEST_RFI_POSITION_ITRF=$CPU_RFI_ITRF
