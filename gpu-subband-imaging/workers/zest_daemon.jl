@@ -34,6 +34,13 @@
 #                             new gains, revert to the previous state if the residual
 #                             power (unflagged XX+YY) went up
 #   ZEST_SAVE_GAINS_DIR       write per-source gains (<ms>.<pass>.<i>.gains.bin)
+#   ZEST_DEVICE               gpu | cpu (TTCalX on host arrays, one channel per
+#                             Julia thread: run with JULIA_NUM_THREADS; needs
+#                             ZEST_GENVIS=exact, no phase prior)
+#   ZEST_FAST_WRITE           1: write back with write_ms_fast! (numpy row scatter;
+#                             same DATA/FLAG as write_gpu_to_ms!)
+#   ZEST_FAST_READ            1: read with read_ms_fast (numpy row gather; same
+#                             arrays as read_ms_to_gpu)
 push!(LOAD_PATH, joinpath(ENV["TTCALX_DIR"], "src"))
 include(joinpath(ENV["TTCALX_DIR"], "src", "TTCalX.jl"))
 using .TTCalX
@@ -77,6 +84,10 @@ flag_model = envb("ZEST_FLAG_MODEL", false)
 genvis_mode = get(ENV, "ZEST_GENVIS", "kernels")
 resubtract = envb("ZEST_RESUBTRACT", false)
 guard = envb("ZEST_GUARD", false)
+use_gpu = get(ENV, "ZEST_DEVICE", "gpu") != "cpu"
+fast_write = envb("ZEST_FAST_WRITE", false)
+fast_read = envb("ZEST_FAST_READ", false)
+use_gpu || genvis_mode == "exact" || error("ZEST_DEVICE=cpu needs ZEST_GENVIS=exact")
 
 """Residual power of the unflagged XX and YY visibilities."""
 residual_power(vis) = sum(abs2, vis.xx .* .!vis.flags) + sum(abs2, vis.yy .* .!vis.flags)
@@ -151,19 +162,19 @@ function safe_zest_gpu!(vis, meta, catalog_sources; pass="sky", maxiter=mi,
 
     reg = nothing
     if reg_offset > 0 && (reg_targets == "all" || reg_targets == pass)
-        reg = phase_regularization(meta, reg_offset, reg_taper; lambda=reg_lambda)
+        reg = phase_regularization(meta, reg_offset, reg_taper; lambda=reg_lambda, gpu=use_gpu)
         @printf("PEEL_REG pass=%s max_offset_deg=%.3f taper_deg=%.3f lambda=%.3g regularized_fraction=%.3f\n",
                 pass, reg_offset, reg_taper, reg_lambda, regularized_fraction(reg))
     end
 
     peel_sources = [GPUZestingSource(source) for source in selected_sources]
     calibrations = [
-        calibration_type(source, meta.Nant, meta.Nfreq; gpu=true)
+        calibration_type(source, meta.Nant, meta.Nfreq; gpu=use_gpu)
         for source in peel_sources
     ]
     coherencies = GPUVisibilities[]
     for source in peel_sources
-        coherency = GPUVisibilities(meta.Nbase, meta.Nfreq; gpu=true)
+        coherency = GPUVisibilities(meta.Nbase, meta.Nfreq; gpu=use_gpu)
         if genvis_mode == "exact" && !is_rfi(source)
             genvis_exact!(coherency, meta, unwrap(source), mjd)
         elseif is_rfi(source)
@@ -272,7 +283,8 @@ init_pycasacore() || error("python-casacore not available")
 sources = sources_path == "none" ? GPUSource[] : read_gpu_sources(sources_path)
 rfi_sources = isempty(rfi_path) ? GPUSource[] : read_gpu_sources(rfi_path)
 set_verbosity(:quiet)
-device_name = CUDA.functional() ? CUDA.name(CUDA.device()) : "unavailable"
+device_name = !use_gpu ? "cpu threads=$(Threads.nthreads())" :
+              CUDA.functional() ? CUDA.name(CUDA.device()) : "unavailable"
 println(
     "DAEMON_READY sources=$(length(sources)) device=$device_name " *
     "min_elevation=$min_elevation require_convergence=$require_convergence " *
@@ -287,7 +299,9 @@ for line in eachline(stdin)
     ms == "QUIT" && break
     t0 = time()
     try
-        vis, cal, meta, bl, nrows = read_ms_to_gpu(ms; gpu=true, column=col)
+        t_read = time()
+        vis, cal, meta, bl, nrows = (fast_read ? read_ms_fast : read_ms_to_gpu)(ms; gpu=use_gpu, column=col)
+        t_read = time() - t_read
         mjd = genvis_mode == "exact" ? ms_mjd(ms) : NaN
         if uvw_convention == "auto"
             println("UVW_CONVENTION sign=$(apply_uvw_convention!(meta))")
@@ -306,12 +320,15 @@ for line in eachline(stdin)
                            tolerance=rfi_tol, minuvw=rfi_muvw, peeliter=rfi_piter,
                            ms=ms, mjd=mjd)
         end
-        write_gpu_to_ms!(ms, vis, bl, nrows; column=col)
+        t_write = time()
+        (fast_write ? write_ms_fast! : write_gpu_to_ms!)(ms, vis, bl, nrows; column=col)
+        t_write = time() - t_write
         @printf("ZESTED %s %.2f\n", ms, time() - t0)
+        @printf("ZEST_TIMING read=%.2f write=%.2f peel=%.2f\n", t_read, t_write, time() - t0 - t_read - t_write)
     catch e
         println("FAILED $ms $(sprint(showerror, e))")
     end
     flush(stdout)
-    CUDA.reclaim()
+    use_gpu && CUDA.reclaim()
 end
 println("DAEMON_EXIT"); flush(stdout)
