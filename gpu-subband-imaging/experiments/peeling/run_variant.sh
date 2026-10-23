@@ -35,6 +35,9 @@
 #                   no gate), abl_geom_rk4 (abl_rk4 + geometric UVW)
 #                   abl_nogate_{uvw5,it5}: abl_nogate + minuvw 5 / maxiter 5;
 #                   abl_cm_{uvw10,it30}: gpu_cpumatch with production minuvw / maxiter
+#   fast_sky / fast_after / fast_joint   optimized TTCalX ($PX/ttcalx_fast, $PX/repo_fast daemon):
+#                   gpu_cm_exact / gpu_cm_exact with RFI after / gpu_cm_exact_joint, plus the
+#                   exact-model kernel, GPU flags, coalesced step and numpy MS read/write
 #   gpu_reg<D>      gpu_geom_rfi with the Tukey phase prior, max offset D deg
 #                   (ZEST_REG_TAPER_DEG / ZEST_REG_LAMBDA / ZEST_REG_TARGETS from env)
 set -eo pipefail
@@ -70,6 +73,8 @@ reg() {  # max offset from the variant name suffix
     export ZEST_SAVE_GAINS_DIR=$STUDY/gains; mkdir -p "$ZEST_SAVE_GAINS_DIR"
 }
 rfi() { export ZEST_RFI_SOURCES=$RFI_MODEL; }
+fastx() { export ZEST_GENVIS=exact ZEST_FAST_READ=1 ZEST_FAST_WRITE=1; }
+fast_run() { gpu_run "$PX/ttcalx_fast" "$PX/repo_fast/workers/zest_daemon.jl" "$SKY_MODEL"; }
 
 t0=$(date +%s)
 case $VARIANT in
@@ -99,6 +104,12 @@ case $VARIANT in
     gpu_prodfix_rfi) export ZEST_REQUIRE_CONVERGENCE=false ZEST_MIN_SOURCE_ELEVATION_DEG=0 ZEST_FLAG_MODEL=1 ZEST_RESUBTRACT=1
         rfi; export ZEST_RFI_MODE=joint
         gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
+    fast_sky) cpum; fastx; fast_run ;;
+    fast_after) cpum; rfi; fastx; fast_run ;;
+    fast_joint) cpum; rfi; fastx; export ZEST_RFI_MODE=joint; fast_run ;;
+    fast_after_nolim) cpum; rfi; fastx; export ZEST_MAX_GAIN_AMPLITUDE=1e30; fast_run ;;
+    fast_sky_nolim) cpum; fastx; export ZEST_MAX_GAIN_AMPLITUDE=1e30; fast_run ;;
+    fast_aftercpu) cpum; rfi; fastx; export ZEST_RFI_POSITION_ITRF=$CPU_RFI_ITRF; fast_run ;;
     gpu_cm_exact) cpum; export ZEST_GENVIS=exact
         gpu_run "$TTCALX_EXP" "$DAEMON_EXP" "$SKY_MODEL" ;;
     gpu_cm_exact_joint) cpum; rfi; export ZEST_GENVIS=exact ZEST_RFI_MODE=joint

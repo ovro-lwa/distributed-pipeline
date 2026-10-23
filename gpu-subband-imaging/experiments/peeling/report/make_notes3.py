@@ -11,7 +11,8 @@ N["answers"][3] = (
     "type-unstable host loop (~5.5 s per snapshot). It now runs as a GPU kernel (0.01 s, identical to 1e-9). With the other "
     "speed-ups (short-baseline flags on the GPU, coalesced StefCal step, numpy MS read and write-back), a whole CPU-exact sky+RFI "
     "snapshot takes <b>2.4 s</b> on the GPU (read 0.4 + peel 1.8 + write 0.2 s) instead of ~22 s. That is ~50× faster than CPU "
-    "TTCal's ~130 s, and the DATA and FLAG written are byte-identical to the unoptimized run.")
+    "TTCal's ~130 s, and the DATA and FLAG written are byte-identical to the unoptimized run. Over all 96 snapshots on lustre: median "
+    "2.5 s (sky) and 3.2 s (sky then RFI) per snapshot, with results equal to CPU TTCal.")
 N["answers"].insert(4,
     "<b>TTCalX on the CPU</b> (same code on host arrays, one channel per thread) gives the same output as the GPU to ≤3e-8 of the "
     "rms (the last bit of the stored complex64). A snapshot takes 7.2 s end-to-end with 24 threads (peel 6.5 s); the peel takes "
@@ -126,6 +127,10 @@ N["recommendations"].insert(1,
     "parallelise its inner sum over antennas (only N<sub>ant</sub>N<sub>ν</sub> ≈ 17k threads today) and keep the measured square "
     "matrix between the RK4 sub-steps.")
 N["recommendations"].insert(2,
+    "To match CPU TTCal everywhere, drop (or raise) the daemon's ZEST_MAX_GAIN_AMPLITUDE=100 rejection. It is the only remaining "
+    "GPU/CPU difference in sky and sky-then-RFI mode (13 MHz 03h). Better still, skip the RFI zest outside the RFI model's "
+    "14.8–40.9 MHz range, where it can only fit noise.")
+N["recommendations"].insert(3,
     "TTCalX on the CPU is a usable fallback for nodes without a GPU: same output, ~7 s per snapshot with 24 threads, or ~20 s "
     "single-threaded (vs ~130 s for CPU TTCal), so even one core per snapshot is ~6× faster.")
 N["where"].append(
@@ -133,5 +138,69 @@ N["where"].append(
     "stefcal_step_full_herm_kernel!, write_ms_fast!, read_ms_fast), zest_daemon.jl (ZEST_DEVICE, ZEST_FAST_READ, ZEST_FAST_WRITE, ZEST_TIMING), "
     "experiments/peeling: bench_exact.jl, prof_solve.jl, bench2.sh, speed/ (mem_zest.jl, run_mem.sh, writetest.sh, extract.py, "
     "imaging.py, figs_speed.py, readtest.jl, e2e.sh). TTCalX commits edbd26e, a72f4e5 (local).")
+N["glance_intro"] = (
+    "The optimized code uses the same configuration (CPU-matched solver, CPU-exact model, sky then RFI or joint) and gives the "
+    "same output as before. Each change was checked against the code it replaces; rows below are in the order they were applied.")
+N["glance_rows"] = [
+    ["step", "what was slow → what it does now", "code (TTCalX src/gpu/experimental.jl unless noted)", "time before → after", "check"],
+    ["1. CPU-exact sky model", "single-threaded host loop over an abstract-typed component list (every operation dynamically "
+     "dispatched), then a host→GPU copy → per-component tables on the host, one GPU thread per (baseline, channel)",
+     "genvis_exact! :832, genvis_exact_kernel! :812, _exact_vis :790, _exact_tables :759 (old: genvis_exact_reference! :713)",
+     "5.5 s → 0.01 s per snapshot", "≤2e-9 relative"],
+    ["2. Short-baseline flags", "TTCalX's flag_short_baselines! copies the four N<sub>ant</sub>×N<sub>ant</sub>×N<sub>chan</sub> "
+     "matrices to the host and back, twice per solve → a broadcast mask on the GPU",
+     "flag_short_baselines_gpu! :929, used in gpu_stefcal_exp! :564", "87 ms → 0.2 ms per call", "bit-identical"],
+    ["3. StefCal step", "thread j read M[i, j] (addresses N<sub>ant</sub> apart) → reads M[j, i]<super>H</super> (Hermitian), so "
+     "neighbouring threads read neighbouring addresses", "stefcal_step_full_herm_kernel! :951, called from _stefcal_steps! :514",
+     "10.4 → 8.5 ms per step; one solve 0.48 → 0.15 s (with 2)", "2e-16"],
+    ["4. MS read", "whole columns converted numpy→Julia through PyCall, rows gathered in Julia → rows gathered in numpy",
+     "read_ms_fast (end of file), _ms_subtables", "1.3 → 0.4 s", "all arrays identical"],
+    ["5. MS write", "DATA and FLAG re-read, converted to Julia, scattered, converted back as complex128 → numpy scatter on "
+     "casacore's own arrays", "write_ms_fast!", "1.6–1.9 → 0.23 s (/tmp)", "byte-identical DATA, FLAG"],
+    ["6. TTCalX on CPU (new)", "CUDA kernels were launched unconditionally; the cpu_* fallbacks were single-threaded → the same "
+     "per-element arithmetic on host arrays, one channel per Julia thread", "gpu_corrupt!/gpu_subsrc! host methods :874, "
+     "host_makesquare! :886, _host_stefcal_steps! :907; daemon ZEST_DEVICE=cpu", "– → 7.2 s per snapshot (24 threads)", "≤3e-8 of rms"],
+]
+N["code_used"] = [
+    "<b>Code:</b> TTCalX branch exp/peeling-experiments @ a72f4e5 (src/gpu/experimental.jl; the original TTCalX files are unchanged) "
+    "and distributed-pipeline branch exp/gpu-peeling-experiments @ 3054c20 (gpu-subband-imaging/workers/zest_daemon.jl). Both are "
+    "local only.",
+    "<b>Settings</b> (environment of the daemon): ZEST_SOLVER=rk4 ZEST_MAXITER=5 ZEST_TOLERANCE=1e-4 ZEST_MINUVW=5 "
+    "ZEST_PEELITER=3 ZEST_MIN_SOURCE_ELEVATION_DEG=0 ZEST_REQUIRE_CONVERGENCE=false ZEST_UVW_CONVENTION=geom ZEST_FLAG_MODEL=1 "
+    "ZEST_RESUBTRACT=1 ZEST_GENVIS=exact ZEST_FAST_READ=1 ZEST_FAST_WRITE=1; RFI: ZEST_RFI_SOURCES=rfi_43.2_ver20251101.json with "
+    "ZEST_RFI_MODE=after (main pipeline's order) or joint; CPU: ZEST_DEVICE=cpu JULIA_NUM_THREADS=24. Sky model: the main "
+    "pipeline's sources.json.",
+    "<b>Tests and benchmarks</b> (experiments/peeling): bench_exact.jl (model and solve: timing and equality), prof_solve.jl "
+    "(solve breakdown), speed/readtest.jl (reader equality), speed/writetest.sh and speed/e2e.sh (end-to-end, byte "
+    "comparison), speed/mem_zest.jl + run_mem.sh (in-memory GPU/CPU peel, thread scaling), run_variant.sh fast_sky / fast_after / "
+    "fast_joint + compare_fast.py (all 96 snapshots).",
+]
+N["vpol"] = [
+    "<b>Polarization calibration as in the pipeline.</b> Every snapshot was prepared like prepare_one_ms_task "
+    "(orca/tasks/subband_tasks.py): bad antennas flagged, then CASA applycal with the night's bandpass and the regular XY-phase "
+    "table /lustre/gh/polcal/xyphase_delay_pos_3.8643ns.Xf (the only table in polcal), then zest: sky, then RFI. CPU = the main "
+    "pipeline's ttcal.jl zest commands (julia060 sky, ttcal_dev RFI). GPU = the optimized TTCalX daemon. Stokes V comes from the same "
+    "WSClean runs as I (-pol IV).",
+    "<b>Result:</b> Stokes V after peeling equals CPU's. V rms ratio median 1.000 in all three modes. |V| at Cas A, Cyg A and "
+    "Vir A is 1.000–1.013× CPU (boxes where peeling removed most of the V). At the RFI emitter, whose model carries Stokes V up to "
+    "10 kJy, the GPU leaves 0.98× CPU's |V|. That also confirms the V sign convention (xy = U − iV) in the GPU RFI and sky models: "
+    "the opposite sign would add V instead of removing it.",
+    "The V outliers are the same snapshots as in Stokes I: 13 MHz 03h (gain limit, see above; 1.11× CPU, 1.004× without the "
+    "limit) and the unstable joint cases. The deployed production GPU settings leave 3× CPU's |V| at Vir A (Vir A skipped by "
+    "the gate/elevation cut) and up to 2.8× the V rms.",
+]
+N["vpol_figs"] = [
+    ["charts/vpol_band.png", "Per subband: Stokes V rms after peeling relative to CPU TTCal."],
+    ["vpol/V_fullsky_full_1220_23MHz_0300.png", "12-20 23 MHz 03h Stokes V: before, CPU sky→RFI, GPU sky→RFI, GPU − CPU (difference rms 0.45 vs 4.35 image rms)."],
+    ["vpol/V_onsource_full_1220_23MHz_0300.png", "12-20 23 MHz 03h Stokes V ±4° around Cas A, Cyg A and the RFI emitter."],
+    ["vpol/V_fullsky_full_1227_23MHz_0800.png", "12-27 23 MHz 08h Stokes V."],
+    ["vpol/V_onsource_full_1227_23MHz_0800.png", "12-27 23 MHz 08h Stokes V around the targets."],
+    ["vpol/V_fullsky_full_1220_41MHz_1200.png", "12-20 41 MHz 12h Stokes V."],
+    ["vpol/V_fullsky_full_1227_69MHz_1200.png", "12-27 69 MHz 12h Stokes V."],
+    ["vpol/V_fullsky_full_1220_13MHz_0300.png", "12-20 13 MHz 03h Stokes V: the gain-limit outlier (Cyg A and RFI solves rejected by ZEST_MAX_GAIN_AMPLITUDE=100)."],
+]
+N["answers"].insert(5,
+    "<b>Polarization:</b> with the pipeline's own bandpass + XY-phase calibration applied before zest, Stokes V after GPU sky and "
+    "sky+RFI zest equals CPU TTCal's on all 96 snapshots (V rms ratio 1.000; |V| at the sources 1.00–1.01×; RFI emitter 0.98×).")
 json.dump(N, open("notes3.json", "w"), indent=1)
 print("ok", len(N["math"]))

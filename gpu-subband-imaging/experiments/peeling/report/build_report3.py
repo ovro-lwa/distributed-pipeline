@@ -197,6 +197,23 @@ def main():
     figs(story, [("charts/bench.png", "Median time per snapshot (log scale).")])
 
     story.append(para("5. Speeding up the CPU-exact model, and TTCalX on the CPU", H2))
+    story.append(para("<b>At a glance.</b> " + N["glance_intro"], P))
+    story.append(Spacer(1, 3))
+    story.append(table(N["glance_rows"], widths=[3.3 * cm, 8.6 * cm, 6.9 * cm, 4.2 * cm, 2.8 * cm]))
+    story.append(Spacer(1, 4))
+    story.append(fig(os.path.join(HERE, "charts", "speed_breakdown.png"), width=24 * cm, maxh=7.6 * cm))
+    story += [para(t, SMALL) for t in N["code_used"]]
+    if os.path.exists(os.path.join(HERE, "fast96.json")):
+        story.append(PageBreak())
+        F = json.load(open(os.path.join(HERE, "fast96.json")))
+        story.append(para("Optimized code on all 96 snapshots (both dates, all subbands)", H2))
+        story += bullets(F["bullets"])
+        story.append(table(F["table"], widths=[4.6 * cm] + [2.0 * cm] * (len(F["table"][0]) - 2) + [2.4 * cm]))
+        story.append(Spacer(1, 4))
+        for path, cap in F["figs"]:
+            story.append(fig(os.path.join(HERE, path), width=24 * cm, maxh=7.2 * cm, caption=cap))
+    story.append(PageBreak())
+    story.append(para("Details", H2))
     story += bullets(N["speed2_intro"])
     story.append(Spacer(1, 4))
     rows = [["configuration (same CPU-matched sky+RFI zest unless noted)", "MS read", "peel", "MS write", "per snapshot", "output vs CPU-exact GPU"]]
@@ -215,13 +232,21 @@ def main():
     story.append(PageBreak())
     figs(story, N["speed2_figs"])
 
-    story.append(para("6. Regularized Peeling (Tukey phase prior): where does it help?", H2))
+    story.append(para("6. Polarization: Stokes V after CPU and GPU zest (sky and RFI)", H2))
+    story += bullets(N["vpol"])
+    VP = json.load(open(os.path.join(HERE, "vpol_section.json")))
+    story.append(table(VP["table"], widths=[5.6 * cm, 1.9 * cm, 2.6 * cm, 2.4 * cm, 3.2 * cm, 2.6 * cm, 2.6 * cm, 2.8 * cm, 3.0 * cm]))
+    story.append(para("|V| peak ratios use 4° boxes and only snapshots where CPU peeling reduced |V| there by more than 2×.", SMALL))
+    story.append(PageBreak())
+    figs(story, N["vpol_figs"])
+
+    story.append(para("7. Regularized Peeling (Tukey phase prior): where does it help?", H2))
     story += bullets(N["reg"])
     figs(story, N["reg_figs"])
 
-    story.append(para("7. Recommendations", H2))
+    story.append(para("8. Recommendations", H2))
     story += bullets(N["recommendations"])
-    story.append(para("8. Where everything is", H2))
+    story.append(para("9. Where everything is", H2))
     story += bullets(N["where"])
     story.append(PageBreak())
     story.append(para("Appendix A: the math, and where it is in the code", H2))
