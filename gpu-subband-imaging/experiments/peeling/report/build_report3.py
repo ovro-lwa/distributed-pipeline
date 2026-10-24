@@ -258,6 +258,31 @@ def main():
     story.append(Spacer(1, 4))
     story += [para(t, SMALL) for t in N["review_notes"]]
     story.append(PageBreak())
+    G = json.load(open(os.path.join(HERE, "gsi_section.json")))
+    story.append(para("11. GPU pipeline integration test on last night's data (2026-10-23)", H2))
+    story += bullets(N["gsi_intro"])
+    story += bullets(N["gsi_results"])
+    story.append(Spacer(1, 3))
+    story.append(table(G["accuracy"], widths=[1.6 * cm, 4.6 * cm, 3.8 * cm, 1.7 * cm, 4.2 * cm, 2.0 * cm, 2.0 * cm,
+                                             2.0 * cm, 2.0 * cm, 2.2 * cm]))
+    story.append(para("Reference set, good snapshots (41 MHz: 6 of 10, see findings). Ratios are GPU / CPU TTCal per snapshot; "
+                      "the CPU-matched 69 MHz row without RFI is compared with CPU sky-only. " + G["ref_timing"], SMALL))
+    story.append(PageBreak())
+    story.append(fig(os.path.join(HERE, "charts", "gsi_zest.png"), width=24 * cm, maxh=7.6 * cm))
+    story.append(para("The 69 MHz worker run had the RFI pass off (peel_overrides); last night's production timings include "
+                      "two workers per node, retries and daemon restarts.", SMALL))
+    story.append(table(G["perf"], widths=[1.6 * cm, 6.4 * cm, 1.4 * cm, 2.8 * cm, 2.8 * cm, 4.2 * cm, 3.0 * cm, 1.8 * cm]))
+    story.append(Spacer(1, 4))
+    story.append(para("<b>Findings along the way</b>", P))
+    story += bullets(N["gsi_findings"])
+    story.append(para("<b>Review guide for the pipeline branch</b>", P))
+    story.append(table(N["gsi_review"], widths=[8.0 * cm, 18.6 * cm]))
+    figs(story, [["gsi/fullsky_32MHz_080003.png", "32 MHz 08:00:03: before peeling, CPU TTCal sky+RFI (main pipeline), GPU production settings, GPU CPU-matched + RFI."],
+                 ["gsi/onsource_32MHz_080003.png", "32 MHz on-source residuals."],
+                 ["gsi/fullsky_41MHz_080043.png", "41 MHz 08:00:43."],
+                 ["gsi/fullsky_69MHz_080003.png", "69 MHz 08:00:03, GPU CPU-matched with the RFI pass (as the main pipeline)."],
+                 ["gsi/onsource_69MHz_080003.png", "69 MHz on-source residuals: production settings leave 2× CPU's Cas A residual."]])
+
     story.append(para("Appendix A: the math, and where it is in the code", H2))
     story.append(para("TTCalX references are to the submitted branch feature/cpu-matched-zest (src/gpu/…); zest_daemon.jl to "
                       "distributed-pipeline exp/gpu-peeling-experiments (gpu-subband-imaging/workers/); CPU TTCal to the main "

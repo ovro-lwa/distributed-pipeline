@@ -280,6 +280,64 @@ N["where"].append("<b>Submitted:</b> TTCalX branch feature/cpu-matched-zest (Git
 N["answers"].insert(6, "<b>Code submitted for review:</b> TTCalX branch feature/cpu-matched-zest, with unit tests. Its real-data "
                     "output is byte-identical to the validated code. Section 10 lists the ~450 high-risk lines to review "
                     "and what can be skimmed.")
+N["gsi_intro"] = [
+    "<b>What was tested:</b> the GPU subband-imaging pipeline from the distributed-pipeline branch "
+    "<b>feature/gpu-cpu-matched-zest</b> (pushed), run with its own worker (run_worker.sh → Worker.run_batch: stage, bad "
+    "antennas, bandpass + XY-phase applycal, 4× averaging, quality gate, zest daemon, WSClean, fpack). Input: last night's "
+    "data (2026-10-23, hour 08, the first 10 snapshots at 32, 41 and 69 MHz) from /lustre/pipeline/slow, with last night's "
+    "bandpass. Outputs went only to /lustre/nkosogor/peel_exp/gsi_test; nothing in production was touched.",
+    "<b>Configurations:</b> production settings with the deployed TTCalX; the same with the TTCalX branch; CPU-matched + "
+    "RFI (solver rk4, maxiter 5, tol 1e-4, minuvw 5, elevation 0, no gate, exact model, geometric UVW, model flags, "
+    "re-subtract, fast I/O; RFI pass at 32/41 MHz); and the same on CPU threads (32 MHz). All were run alone on calim03, GPU 0.",
+    "<b>Exact comparison</b> (reference set): worker products are fpack-compressed with dithered quantization, which differs "
+    "between runs by a few % of the rms, so bit-level comparisons were made on a reference set instead. The same 30 "
+    "snapshots were prepared with the pipeline's own functions (stage_ms, flag_cal_average) and peeled by CPU TTCal with the "
+    "main pipeline's commands (julia060 sky + ttcal_dev RFI), by the GPU daemon with production settings, and by the GPU "
+    "daemon with CPU-matched + RFI settings. All copies were imaged identically; re-imaging the same MS reproduces an image "
+    "to 2e-5 of its rms.",
+]
+N["gsi_results"] = [
+    "<b>The new GPU zest equals the main pipeline's CPU TTCal</b> on every good snapshot: image rms ratio 1.0000 (worst "
+    "0.9999–1.0002), Cas A, Cyg A and RFI residuals 1.000, Stokes V rms 1.0000, at 32, 41 and 69 MHz. With the RFI pass "
+    "also at 69 MHz (as the main pipeline runs it on every band), 0.998. The deployed GPU settings are 1.23–1.24× CPU's "
+    "rms, with Cas A residuals up to 2.2× (69 MHz).",
+    "<b>Speed per snapshot:</b> the worker's zest phase (MS read + peel + write) drops from 5.6–6.3 s with production "
+    "settings to 1.9–3.0 s with CPU-matched + RFI on the same node, and the batch wall-clock from 92–150 s to 71–98 s, "
+    "where preprocessing (~11–14 s per snapshot on CPU, 8 in parallel) now dominates. CPU TTCal takes ~123 s per "
+    "snapshot (73 s sky + 50 s RFI). TTCalX on CPU threads in the worker: 6.8 s per snapshot.",
+    "<b>Defaults unchanged:</b> the branch with production settings runs the same code path as before (gpu_stefcal!, "
+    "kernel model, MS UVW); 73 Python tests pass (Python 3.8 on calim and 3.13 locally), including tests that the default "
+    "ZEST_* environment is the original one.",
+]
+N["gsi_findings"] = [
+    "Last night's production images cannot be reproduced bit for bit today: the MNC bad-antenna lookup now returns 54 "
+    "antennas where production used 84 (32 MHz) and 60 (41/69 MHz). This is the known live-lookup issue; the comparison "
+    "therefore uses the reference set.",
+    "Three of the ten 41 MHz snapshots are empty (0% nonzero) and are skipped by the quality gate. A fourth (080023) is 49% "
+    "zero, passes the 1% gate and is peeled into garbage by CPU and GPU alike (image rms 7–12 vs 1.9). A stricter "
+    "min_visibility_nonzero_fraction (e.g. 0.9) would skip it.",
+    "23 MHz input was all zero last night (every snapshot skipped by the quality gate).",
+    "Last night's production run itself: many batches produced 0 files because preprocessing failed with "
+    "'_calcache/calibration_2026-10-23_04h.B.flagged/SPECTRAL_WINDOW does not exist' (the node-local calibration cache), "
+    "and were retried; the slow batches took 2000–2700 s for 45 files. This is unrelated to peeling and was only "
+    "observed in the logs.",
+]
+N["gsi_review"] = [
+    ["file (distributed-pipeline branch)", "what to check"],
+    ["gpu-subband-imaging/workers/zest_daemon.jl", "<b>High.</b> safe_zest! (same order of operations as before for the defaults), solve! "
+     "(damped without prior → gpu_stefcal!, else solve_gains!), the guard/re-subtract branches, the RFI pass after the "
+     "sky, the startup checks for the TTCalX API, and that ZEST_TIMING is printed before ZESTED."],
+    ["gpu-subband-imaging/src/gpu_subband_imaging/config.py (PeelParams)", "<b>High.</b> New fields and defaults, validation, and "
+     "daemon_env (the ZEST_* environment; rfi needs cal.rfi_sources)."],
+    ["src/gpu_subband_imaging/worker.py, stages/peel.py", "Low. Pass daemon_env to the daemon; log ZEST_TIMING; JULIA_NUM_THREADS for device=cpu."],
+    ["tests/test_peel_params.py, tests/test_zest_daemon.py, README.md, examples/config/pipeline.yaml", "Low. Tests and documentation."],
+]
+N["answers"].insert(7, "<b>GPU pipeline integration:</b> distributed-pipeline branch feature/gpu-cpu-matched-zest (pushed), tested "
+                    "on last night's data (section 11). The new settings reproduce the main pipeline's CPU TTCal at rms ratio "
+                    "1.0000 on every good snapshot, and the worker's zest phase takes 1.9–3.0 s per snapshot.")
+N["where"].append("<b>Pipeline branch:</b> distributed-pipeline feature/gpu-cpu-matched-zest. Test outputs: "
+                  "/lustre/nkosogor/peel_exp/gsi_test (configs, manifests, out/, ref/, figs/).")
+
 SUB = {"₀": "0", "₁": "1", "₂": "2", "₃": "3", "ₙ": "n"}
 
 
