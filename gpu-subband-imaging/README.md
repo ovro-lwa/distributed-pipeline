@@ -133,12 +133,13 @@ peel:
   resubtract: true               # keep the last accepted solution on rejection
   fast_io: true                  # faster MS read/write, same result
   rfi: true                      # zest cal.rfi_sources after the sky
-
-peel_overrides:                  # the RFI model has flux only at 14.8-40.9 MHz
-  46: {rfi: false}
-  50: {rfi: false}
-  # ... and the other bands above 41 MHz
 ```
+
+The main pipeline runs the RFI zest on every band, although the RFI model
+has flux only at 14.8-40.9 MHz. Above that the RFI direction still acts as
+an extra free gain direction (it lowered the 69 MHz image rms by ~15% in
+tests), so keep `rfi: true` on all bands to reproduce the main pipeline, or
+switch it off per band with `peel_overrides` (e.g. `46: {rfi: false}`).
 
 Further options: `rfi_mode: joint` zests the RFI emitter together with the
 sky sources; `guard: true` reverts a source update that raises the residual
