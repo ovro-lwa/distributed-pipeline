@@ -56,5 +56,14 @@ PY
 )
 mkdir -p "$LOG_ROOT"
 LOG="$LOG_ROOT/worker-${BAND}_${BATCH}-$(hostname -s)-gpu${GPU}.log"
-python -m gpu_subband_imaging.worker \
+if [[ $MANIFEST == HOUR_IMAGE:* ]]; then
+    LOG="$LOG_ROOT/hour_image-${BAND}_${MANIFEST#HOUR_IMAGE:}-$(hostname -s)-gpu${GPU}.log"
+fi
+# Optional CPU pinning / priority (inherited by wsclean, Julia, casa children):
+# GSI_TASKSET_CPUS=0-23 GSI_NICE=10 GSI_IONICE="-c2 -n7".
+WRAP=()
+[[ -n ${GSI_TASKSET_CPUS:-} ]] && WRAP+=(taskset -c "$GSI_TASKSET_CPUS")
+[[ -n ${GSI_NICE:-} ]] && WRAP+=(nice -n "$GSI_NICE")
+[[ -n ${GSI_IONICE:-} ]] && WRAP+=(ionice $GSI_IONICE)
+"${WRAP[@]}" python -m gpu_subband_imaging.worker \
     "$CONFIG_DIR" "$BAND" "$BATCH" "$MANIFEST" --gpu "$GPU" 2>&1 | tee "$LOG"

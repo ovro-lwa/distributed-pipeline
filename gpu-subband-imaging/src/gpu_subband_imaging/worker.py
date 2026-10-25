@@ -164,8 +164,12 @@ class Worker:
         hour = _hour(stamp)
         t0 = time.perf_counter()
         prefix = self.work / stamp / f"img_{stamp}"
+        steps: dict = {}
         fits_files = image.image(avg, prefix, self.geom, self.cfg.pipeline.imaging,
-                                 self.cfg.cluster.wsclean_threads)
+                                 self.cfg.cluster.wsclean_threads, timings=steps)
+        for name, dt in steps.items():
+            log.info("timing %sMHz batch%d stamp=%s phase=%s elapsed=%.2f s",
+                     self.band, self.batch, stamp, name, dt)
         log.info("timing %sMHz batch%d stamp=%s phase=image elapsed=%.2f s",
                  self.band, self.batch, stamp, time.perf_counter() - t0)
 
@@ -202,7 +206,31 @@ class Worker:
             dst = self.fits_dir(hour)
             dst.mkdir(parents=True, exist_ok=True)
             shutil.move(str(fz), str(dst / fz.name))
+        if self.cfg.pipeline.keep_ms_root:
+            t0 = time.perf_counter()
+            kept = self.keep_ms(stamp, avg)
+            log.info("timing %sMHz batch%d stamp=%s phase=keep_ms elapsed=%.2f s dst=%s",
+                     self.band, self.batch, stamp, time.perf_counter() - t0, kept)
         shutil.rmtree(self.work / stamp, ignore_errors=True)
+
+    def kept_ms_path(self, stamp: str) -> Path:
+        """<keep_ms_root>/<band>MHz/<date>/<hour>/<stamp>.ms (stamp ends in _<band>MHz)."""
+        name = stamp if stamp.endswith(f"_{self.band}MHz") else f"{stamp}_{self.band}MHz"
+        return (Path(self.cfg.pipeline.keep_ms_root) / f"{self.band}MHz" /
+                self.cfg.pipeline.date / _hour(stamp) / f"{name}.ms")
+
+    def keep_ms(self, stamp: str, avg: Path) -> Path:
+        """Move the peeled MS to the keep root (atomic rename into place)."""
+        import os
+        dst = self.kept_ms_path(stamp)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dst.parent / f".{dst.name}.tmp{os.getpid()}"
+        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.move(str(avg), str(tmp))
+        if dst.exists():
+            shutil.rmtree(dst)
+        os.rename(str(tmp), str(dst))
+        return dst
 
     def run_batch(self, tars: List[str]) -> None:
         todo = [t for t in tars
@@ -229,7 +257,7 @@ class Worker:
         n_ok, n_fail = 0, 0
         try:
             with ThreadPoolExecutor(max_workers=self.cfg.cluster.max_feeders) as pool, \
-                 ThreadPoolExecutor(max_workers=1) as archiver:
+                 ThreadPoolExecutor(max_workers=max(1, self.cfg.cluster.archive_workers)) as archiver:
                 futs = [pool.submit(self._preprocess, t) for t in todo]
                 archive_futs = []
                 n_zested = 0
@@ -319,6 +347,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--gpu", type=int, default=0)
     a = ap.parse_args(argv)
     cfg = Config.load(a.config_dir)
+    from . import hour_image
+    if a.manifest.startswith(hour_image.MANIFEST_PREFIX):
+        hour_image.run_band(cfg, a.band, a.manifest[len(hour_image.MANIFEST_PREFIX):], a.gpu)
+        return 0
     w = Worker(cfg, a.band, a.batch, a.gpu)
     if a.manifest == "STITCH" or a.batch < 0:
         w.stitch()

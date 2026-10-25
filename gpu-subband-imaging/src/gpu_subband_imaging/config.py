@@ -11,9 +11,10 @@ import yaml
 DEFAULT_LUSTRE_WRITE_ROOT = "/lustre/pipeline/snapshots_gpu_pipeline"
 
 
-def _allowed_lustre_write_root() -> Path:
-    return Path(os.environ.get("GSI_ALLOWED_LUSTRE_WRITE_ROOT",
-                               DEFAULT_LUSTRE_WRITE_ROOT))
+def _allowed_lustre_write_roots() -> List[Path]:
+    """Allowed Lustre write roots (GSI_ALLOWED_LUSTRE_WRITE_ROOT, ':'-separated)."""
+    env = os.environ.get("GSI_ALLOWED_LUSTRE_WRITE_ROOT", DEFAULT_LUSTRE_WRITE_ROOT)
+    return [Path(p) for p in env.split(os.pathsep) if p]
 
 
 class ConfigError(ValueError):
@@ -36,12 +37,12 @@ def _under(parent: Path, child: Path) -> bool:
 
 def _validate_lustre_write_path(label: str, path: Union[str, Path]) -> None:
     p = Path(path)
-    allowed_root = _allowed_lustre_write_root()
+    allowed = _allowed_lustre_write_roots()
     if p.is_absolute() and p.parts[:2] == ("/", "lustre"):
-        if not _under(allowed_root, p):
+        if not any(_under(root, p) for root in allowed):
             raise ConfigError(
                 f"{label}={p} is a Lustre write path outside "
-                f"{allowed_root}"
+                f"{os.pathsep.join(str(r) for r in allowed)}"
             )
 
 
@@ -51,6 +52,8 @@ def _validate_lustre_write_roots(cluster: "ClusterConfig",
     _validate_lustre_write_path("pipeline.output_root", pipeline.output_root)
     _validate_lustre_write_path("cluster.state_dir", cluster.state_dir)
     _validate_lustre_write_path("cluster.work_root", cluster.work_root)
+    if pipeline.keep_ms_root:
+        _validate_lustre_write_path("pipeline.keep_ms_root", pipeline.keep_ms_root)
 
 
 # ---- cluster ---------------------------------------------------------------
@@ -75,6 +78,7 @@ class ClusterConfig:
     free_core_budget: int
     work_root: str
     nodes: List[NodeSpec]
+    archive_workers: int = 1          # parallel image+archive threads per GPU slot
 
     def slots(self) -> List["Slot"]:
         return [Slot(n.alias, g) for n in self.nodes if not n.skip
@@ -106,6 +110,7 @@ def load_cluster(path: Union[str, Path]) -> ClusterConfig:
         free_core_budget=int(dfl.get("free_core_budget", 12)),
         work_root=dfl.get("work_root", "/fast/pipeline/gpu_peel"),
         nodes=nodes,
+        archive_workers=int(dfl.get("archive_workers", 1)),
     )
 
 
@@ -202,9 +207,50 @@ class PeelParams:
 
 @dataclass(frozen=True)
 class ImagingParams:
+    """Snapshot imaging.
+
+    mode=dirty: one WSClean run, dirty Stokes I and V (``-pol IV -niter 0``).
+    mode=clean: Stokes I CLEAN with the main pipeline's SNAPSHOT_CLEAN_I_PARAMS
+    (clean_* fields; -size/-scale from the band tier) plus a dirty Stokes V run
+    (the main pipeline's pilot SNAPSHOT_PARAMS with -pol V).  Both modes write
+    <prefix>-I-image.fits and <prefix>-V-image.fits.
+    """
     weight: str = "briggs"
     robust: float = 0.0
     taper_inner_tukey: float = 30.0
+    mode: str = "dirty"                 # dirty | clean
+    clean_niter: int = 50000
+    clean_mgain: float = 0.9999
+    clean_auto_mask: float = 5.0
+    clean_auto_threshold: float = 1.0
+    clean_local_rms: bool = True
+    clean_horizon_mask: str = "10deg"
+    clean_mem: int = 50
+    dirty_mem: int = 20
+
+    def __post_init__(self) -> None:
+        if self.mode not in ("dirty", "clean"):
+            raise ConfigError(f"imaging.mode must be 'dirty' or 'clean', got {self.mode!r}")
+
+
+@dataclass(frozen=True)
+class HourImagingParams:
+    """1-h / 10-min products from the kept peeled MSes with ``ttcalx-image hour``.
+
+    products are main-pipeline names (I-Deep-Taper-Robust-0, I-Deep-Taper-Robust-0.75,
+    I-Deep-NoTaper-Robust-0.75, I-Deep-NoTaper-Robust-0, I-Taper-10min; V-Taper-Deep and
+    V-Taper-10min come with the Robust-0 tapered products).
+    """
+    ttcalx_image: str = "ttcalx-image"
+    products: List[str] = field(default_factory=lambda: [
+        "I-Deep-Taper-Robust-0", "I-Deep-Taper-Robust-0.75",
+        "I-Deep-NoTaper-Robust-0.75", "I-Deep-NoTaper-Robust-0",
+        "I-Taper-10min", "V-Taper-Deep", "V-Taper-10min"])
+    nproc: int = 8                      # MS reader processes
+    qa: str = "compute"                 # ttcalx-image --qa
+    extra_args: List[str] = field(default_factory=list)
+    env: Dict[str, str] = field(default_factory=dict)
+    timeout_seconds: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -258,6 +304,8 @@ class PipelineConfig:
     do_aoflag: bool
     do_badants: bool
     env: RuntimeEnv
+    keep_ms_root: Optional[str] = None  # move peeled MSes here instead of deleting them
+    hour_imaging: HourImagingParams = field(default_factory=HourImagingParams)
 
     def peel_for_band(self, band: int) -> PeelParams:
         return self.peel_overrides.get(band, self.peel)
@@ -294,6 +342,8 @@ def load_pipeline(path: Union[str, Path]) -> PipelineConfig:
         do_aoflag=bool(d.get("do_aoflag", True)),
         do_badants=bool(d.get("do_badants", True)),
         env=RuntimeEnv(**env),
+        keep_ms_root=d.get("keep_ms_root") or None,
+        hour_imaging=HourImagingParams(**d.get("hour_imaging", {})),
     )
 
 

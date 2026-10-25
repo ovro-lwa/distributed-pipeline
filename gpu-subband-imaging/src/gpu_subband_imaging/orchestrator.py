@@ -37,7 +37,9 @@ class Orchestrator:
             "GSI_TTCALX_DIR": runtime.ttcalx,
             "GSI_SHARED_DEPOT": runtime.shared_depot,
         }
-        for key in ("GSI_CONDA_SH", "GSI_ALLOWED_LUSTRE_WRITE_ROOT"):
+        for key in ("GSI_CONDA_SH", "GSI_ALLOWED_LUSTRE_WRITE_ROOT",
+                    "GSI_TASKSET_CPUS", "GSI_NICE", "GSI_IONICE",
+                    "NUMPY_MADVISE_HUGEPAGE"):
             if key in os.environ:
                 self.worker_env[key] = os.environ[key]
 
