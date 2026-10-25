@@ -147,3 +147,26 @@ power; `reg_max_offset_deg` (with `reg_taper_deg`, `reg_lambda`) adds a
 Tukey phase prior on the gains; `device: cpu` runs TTCalX on CPU threads
 (`JULIA_NUM_THREADS`, default `auto`). The daemon logs
 `ZEST_TIMING read=… peel=… write=…` for every snapshot.
+
+## CLEAN snapshots, kept MSes and hourly images (optional, default off)
+
+```yaml
+# pipeline.yaml
+imaging:
+  mode: clean              # dirty (default): one -pol IV -niter 0 run
+                           # clean: orca SNAPSHOT_CLEAN_I_PARAMS for I (clean_* keys) + dirty V
+keep_ms_root: /lustre/.../keep   # move peeled MSes to <root>/<band>MHz/<date>/<hour>/<stamp>.ms
+hour_imaging:                    # used by `gsi hour-image`
+  ttcalx_image: /path/to/venv/bin/ttcalx-image   # TTCalX python/ttcalx_imager
+  products: [I-Deep-Taper-Robust-0, I-Deep-Taper-Robust-0.75, I-Deep-NoTaper-Robust-0.75,
+             I-Deep-NoTaper-Robust-0, I-Taper-10min, V-Taper-Deep, V-Taper-10min]
+# cluster.yaml defaults
+archive_workers: 2         # parallel image+archive threads per GPU slot (default 1)
+```
+
+`gsi hour-image --config ...` (after `gsi run`) images each band-hour of kept MSes on one GPU
+slot into `<output_root>/<band>MHz/<date>/<hour>/hour_images/` (main-pipeline file names, a
+`<band>MHz-summary.json` from the imager and `<band>MHz-hour-timing.json`). The keep root must
+be inside the Lustre write guard; `GSI_ALLOWED_LUSTRE_WRITE_ROOT` accepts several roots
+separated by `:`. `GSI_TASKSET_CPUS`, `GSI_NICE` and `GSI_IONICE` (e.g. `0-23`, `10`,
+`-c2 -n7`) pin and deprioritise the remote workers and all their children.
