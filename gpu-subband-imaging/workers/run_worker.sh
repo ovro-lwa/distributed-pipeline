@@ -4,6 +4,11 @@
 set -eo pipefail
 GPU=$1; CONFIG_DIR=$2; BAND=$3; BATCH=$4; MANIFEST=$5
 
+# Pin this launcher too (its tee and the conda helpers), not only the worker.
+if [[ -n ${GSI_TASKSET_CPUS:-} ]]; then
+    taskset -cp "$GSI_TASKSET_CPUS" $$ >/dev/null
+fi
+
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
 
