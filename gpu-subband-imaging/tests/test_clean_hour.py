@@ -59,7 +59,7 @@ def test_imaging_mode_validated():
 def test_clean_image_renames_and_times(tmp_path, monkeypatch):
     calls = []
 
-    def fake_run(cmd):
+    def fake_run(cmd, retries=0):
         calls.append(cmd)
         name = cmd[cmd.index("-name") + 1]
         Path(f"{name}-image.fits").write_text("img")
@@ -165,3 +165,26 @@ def test_pipeline_yaml_parses_new_sections(tmp_path):
     assert cfg.pipeline.imaging.mode == "clean" and cfg.pipeline.keep_ms_root == "/fast/keep"
     assert cfg.pipeline.hour_imaging.products == ["I-Taper-10min"]
     assert cfg.pipeline.hour_imaging.nproc == 4 and cfg.cluster.archive_workers == 2
+
+
+def test_abs_mem_and_retries(monkeypatch):
+    p = ImagingParams(mode="clean", abs_mem=20, retries=1)
+    for cmd in (image.clean_i_cmd(Path("x.ms"), "/w/n", GEOM, p, 4),
+                image.dirty_v_cmd(Path("x.ms"), "/w/v", GEOM, p, 4),
+                image.dirty_iv_cmd(Path("x.ms"), Path("/w/d"), GEOM, p, 4)):
+        assert cmd[cmd.index("-abs-mem") + 1] == "20"
+    assert "-abs-mem" not in image.clean_i_cmd(Path("x.ms"), "/w/n", GEOM, ImagingParams(), 4)
+    rcs = iter([1, 0])
+    calls = []
+
+    def fake(cmd, capture_output, text):
+        calls.append(cmd)
+        return SimpleNamespace(returncode=next(rcs), stdout="", stderr="bad_alloc")
+
+    monkeypatch.setattr(image.subprocess, "run", fake)
+    monkeypatch.setattr(image.time, "sleep", lambda s: None)
+    image._run(["wsclean"], retries=1)
+    assert len(calls) == 2
+    rcs = iter([1, 1])
+    with pytest.raises(RuntimeError):
+        image._run(["wsclean"], retries=1)

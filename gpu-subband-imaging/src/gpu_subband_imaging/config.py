@@ -227,6 +227,8 @@ class ImagingParams:
     clean_horizon_mask: str = "10deg"
     clean_mem: int = 50
     dirty_mem: int = 20
+    abs_mem: Optional[float] = None     # WSClean -abs-mem [GB] (caps -mem on busy nodes)
+    retries: int = 0                    # re-run a failed WSClean call this many times
 
     def __post_init__(self) -> None:
         if self.mode not in ("dirty", "clean"):
