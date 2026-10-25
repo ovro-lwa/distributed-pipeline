@@ -21,6 +21,10 @@ cal:
 chanbin: 4
 do_aoflag: false
 do_badants: true
+# Recompute UVW in J2000 after averaging (the raw (u, v) are rotated ~0.34 deg,
+# rotating every snapshot image): centroid (default) | time (chgcentre/main
+# pipeline epoch, 5 s early) | off.
+fix_uvw: centroid
 
 peel:
   maxiter: 30

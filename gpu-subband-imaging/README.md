@@ -148,6 +148,25 @@ Tukey phase prior on the gains; `device: cpu` runs TTCalX on CPU threads
 (`JULIA_NUM_THREADS`, default `auto`). The daemon logs
 `ZEST_TIMING read=… peel=… write=…` for every snapshot.
 
+## Snapshot astrometry: J2000 UVW (`fix_uvw`, default `centroid`)
+
+The raw OVRO-LWA snapshot MSes label PHASE_DIR J2000 (the geocentric zenith at
+TIME_CENTROID), and their stored `w` is exact for it, but the stored (u, v)
+axes are rotated about `w` by ~0.34 deg (2026; 0.335-0.350 deg over
+2026-10-24 10h).  WSClean uses UVW as given, so without the fix every snapshot
+image is rotated by that angle about its centre (~15-19' at 40-60 deg from
+zenith).  After averaging, `stages/uvw.py` recomputes UVW with casacore
+measures for the MS's own PHASE_DIR (~0.1 s per snapshot):
+
+* `centroid` (default): at TIME_CENTROID, where PHASE_DIR and the stored `w`
+  agree (no rephasing).  The raw TIME is the integration start, 5 s earlier.
+* `time`: at TIME, like `chgcentre` (and the main pipeline), with the `w`
+  change applied to the data; images then match the main pipeline exactly,
+  which is 5 s of Earth rotation (~75" in RA) behind the sky.
+* `off`: keep the stored UVW (old behaviour).
+
+`uvw.fix_uvw(ms, dry_run=True)` reports how far an MS's UVW are from J2000.
+
 ## CLEAN snapshots, kept MSes and hourly images (optional, default off)
 
 ```yaml

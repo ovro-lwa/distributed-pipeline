@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from .config import Config
-from .stages import average, calibrate, compress, flag, image, movie, quality, stage_ms
+from .stages import average, calibrate, compress, flag, image, movie, quality, stage_ms, uvw
 from .stages.peel import ZestDaemon
 
 log = logging.getLogger("gsi.worker")
@@ -130,6 +130,8 @@ class Worker:
                 log.info("timing %sMHz batch%d stamp=%s phase=flag_cal_avg elapsed=%.2f s",
                          self.band, self.batch, stamp, time.perf_counter() - t0)
 
+            self._fix_uvw(stamp, avg)
+
             peel = self.cfg.pipeline.peel_for_band(self.band)
             stats = quality.visibility_stats(
                 avg, "DATA", peel.quality_sample_rows,
@@ -155,6 +157,24 @@ class Worker:
             log.error("preprocess %s failed: %s", stamp, e)
             shutil.rmtree(d, ignore_errors=True)
             return None
+
+    def _fix_uvw(self, stamp: str, ms: Path) -> None:
+        """Replace the raw (rotated) UVW with J2000 UVW; keep the MS if it fails."""
+        mode = self.cfg.pipeline.fix_uvw
+        if mode == "off":
+            return
+        t0 = time.perf_counter()
+        try:
+            st = uvw.fix_uvw(ms, epoch=mode)
+        except Exception as e:  # image with the stored UVW rather than lose the snapshot
+            log.warning("fix_uvw %sMHz stamp=%s failed, stored UVW kept: %s",
+                        self.band, stamp, e)
+            return
+        log.info("fix_uvw %sMHz stamp=%s epoch=%s rot_deg=%.4f rms_duv_m=%.3f "
+                 "max_dw_m=%.2e rephased=%s", self.band, stamp, mode, st.rot_deg,
+                 st.rms_duv_m, st.max_dw_m, st.rephased)
+        log.info("timing %sMHz batch%d stamp=%s phase=fix_uvw elapsed=%.2f s",
+                 self.band, self.batch, stamp, time.perf_counter() - t0)
 
     # -- image + archive (background thread; GPU moves on to the next zest) --
 

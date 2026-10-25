@@ -287,6 +287,14 @@ class RuntimeEnv:
     shared_depot: str
 
 
+FIX_UVW_MODES = ("off", "centroid", "time")
+
+
+def _fix_uvw_mode(v) -> str:
+    # YAML reads a bare `off` as False.
+    return "off" if v is False or v is None else str(v)
+
+
 @dataclass(frozen=True)
 class PipelineConfig:
     date: str
@@ -308,6 +316,15 @@ class PipelineConfig:
     env: RuntimeEnv
     keep_ms_root: Optional[str] = None  # move peeled MSes here instead of deleting them
     hour_imaging: HourImagingParams = field(default_factory=HourImagingParams)
+    # Recompute UVW in J2000 after averaging (stages/uvw.py): the raw MS (u, v) are
+    # rotated ~0.34 deg about w, which rotates every snapshot image.  centroid: at
+    # TIME_CENTROID (exact phase centre); time: at TIME like chgcentre (5 s early,
+    # matches the main pipeline); off: keep the stored UVW.
+    fix_uvw: str = "centroid"
+
+    def __post_init__(self) -> None:
+        if self.fix_uvw not in FIX_UVW_MODES:
+            raise ConfigError(f"fix_uvw must be one of {FIX_UVW_MODES}, got {self.fix_uvw!r}")
 
     def peel_for_band(self, band: int) -> PeelParams:
         return self.peel_overrides.get(band, self.peel)
@@ -346,6 +363,7 @@ def load_pipeline(path: Union[str, Path]) -> PipelineConfig:
         env=RuntimeEnv(**env),
         keep_ms_root=d.get("keep_ms_root") or None,
         hour_imaging=HourImagingParams(**d.get("hour_imaging", {})),
+        fix_uvw=_fix_uvw_mode(d.get("fix_uvw", "centroid")),
     )
 
 
