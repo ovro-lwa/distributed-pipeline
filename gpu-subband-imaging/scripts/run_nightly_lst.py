@@ -85,6 +85,17 @@ def run_gsi(config_dir: Path, log_path: Path) -> int:
         return subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, env=env).returncode
 
 
+def wideband(run_dir: Path, log_path: Path) -> None:
+    """Main pipeline's pipeline/wideband_summary.py on one LST hour (V rms vs band, stacks, 3-colour)."""
+    script = REPO_ROOT.parent / "pipeline" / "wideband_summary.py"
+    if not run_dir.is_dir() or not script.exists():
+        return
+    with open(log_path, "a") as log:
+        rc = subprocess.run([sys.executable, str(script), str(run_dir)], stdout=log,
+                            stderr=subprocess.STDOUT).returncode
+    print(f"wideband summary {run_dir} rc={rc}", flush=True)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", default=utcnow().strftime("%Y-%m-%d"))
@@ -101,6 +112,7 @@ def main(argv=None) -> int:
     ap.add_argument("--max-attempts", type=int, default=2)
     ap.add_argument("--lock-path", default=None)
     ap.add_argument("--log-dir", default=None)
+    ap.add_argument("--no-wideband", action="store_true", help="skip pipeline/wideband_summary.py per LST hour")
     ap.add_argument("--no-run", action="store_true", help="print the plan and the first config, then exit")
     a = ap.parse_args(argv)
 
@@ -165,6 +177,9 @@ def main(argv=None) -> int:
             fcntl.flock(lock, fcntl.LOCK_UN)
         print(f"{utcnow():%H:%M:%S} gsi run for {[lst.label(h) for h in ready]} rc={rc} "
               f"in {time.time() - t0:.0f} s", flush=True)
+        if rc == 0 and not a.no_wideband:
+            for h in ready:
+                wideband(out_root / lst.label(h) / a.date / run_label, log_dir / f"wideband_{a.date}.log")
         for h in ready:
             state["attempts"][str(h)] = state["attempts"].get(str(h), 0) + 1
             if rc == 0:

@@ -354,7 +354,7 @@ class PipelineConfig:
         """Ledger/manifest key: the date, plus the LST hours for layout=lst (one run per set)."""
         if self.layout != "lst":
             return self.date
-        return f"{self.date}_lst" + "-".join(f"{h:02d}" for h in self.lst_hours)
+        return f"{self.date}_{self.run_label}_lst" + "-".join(f"{h:02d}" for h in self.lst_hours)
 
     def peel_for_band(self, band: int) -> PeelParams:
         return self.peel_overrides.get(band, self.peel)

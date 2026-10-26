@@ -117,5 +117,5 @@ def test_config_lst_validation():
     with pytest.raises(ConfigError):
         PipelineConfig(**base, snapshot_phase_centre="lst")         # needs layout=lst
     p = PipelineConfig(**base, layout="lst", run_label="Run_X", lst_hours=[4, 5])
-    assert p.run_key == "2026-10-24_lst04-05"
+    assert p.run_key == "2026-10-24_Run_X_lst04-05"
     assert PipelineConfig(**base).run_key == "2026-10-24"
