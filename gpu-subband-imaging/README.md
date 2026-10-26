@@ -189,3 +189,36 @@ slot into `<output_root>/<band>MHz/<date>/<hour>/hour_images/` (main-pipeline fi
 be inside the Lustre write guard; `GSI_ALLOWED_LUSTRE_WRITE_ROOT` accepts several roots
 separated by `:`. `GSI_TASKSET_CPUS`, `GSI_NICE` and `GSI_IONICE` (e.g. `0-23`, `10`,
 `-c2 -n7`) pin and deprioritise the remote workers and all their children.
+
+## LST-hour layout and nightly runs (`layout: lst`)
+
+Groups snapshots by LST hour (mean LST, the main pipeline's Sun cut) and writes the
+main pipeline's layout:
+
+```
+<output_root>/<LST>h/<date>/<run_label>/<band>MHz/
+    snapshots/        <band>MHz-Pilot-Snapshot-<YYYYMMDD_HHMMSS>-image.fits.fz   dirty V
+    snapshots_clean/  <band>MHz-Clean-Snapshot-<YYYYMMDD_HHMMSS>-image.fits.fz   CLEAN I
+    I/deep  I/10min  V/deep  V/10min                                            ttcalx-image hour
+    QA/               snapshot_qa_<band>MHz.csv, pilot_qa_rejected.txt, plot, timings, imager log
+    Movies/           <band>MHz_I_Clean.mp4
+    provenance.json
+```
+
+- `snapshot_phase_centre: lst` images a `chgcentre`d copy of each peeled snapshot at
+  `<LST>h30m00s 37d12m57.057s`; the kept MS stays zenith-phased for the hour imager.
+- After the snapshots, one job per band and LST hour (`hour_lst.py`): orca's pilot-V QA
+  (median + 3 MAD-std / 0.5 x median), `ttcalx-image hour --lst-hour` without the rejected
+  snapshots, products renamed as the main pipeline, movie, provenance; kept MSes deleted
+  with `hour_imaging.delete_kept_ms`.
+- Worker logs: `<output_root>/_logs/<date>/<run_label>/<band>MHz/`.
+
+Nightly, as the data arrive (newest bandpass at each launch, one run label per night):
+
+```bash
+source /opt/devel/pipeline/gsi-v2/gsi_env.sh
+python $GSI_HOME/scripts/run_nightly_lst.py --date 2026-10-26 \
+    --template /opt/devel/pipeline/gsi-v2/config-lst-template \
+    --output-config /opt/devel/pipeline/gsi-v2/config-lst-auto
+python $GSI_HOME/scripts/night_report.py /lustre/pipeline/snapshots_gpu_pipeline 2026-10-26 <run_label>
+```
