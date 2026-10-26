@@ -59,7 +59,17 @@ def build(pl: PipelineConfig, list_via_node: str, manifest_dir: Path
             log.warning("no measurement sets found for %sMHz under %s",
                         band, band_dir)
             continue
-        for i, chunk in enumerate(_chunk(tars, pl.batch_size)):
+        if pl.layout == "lst":
+            from . import lst
+            groups = lst.group(tars, pl.lst_hours, pl.sun_cut)
+            log.info("band %sMHz: %d of %d files in LST hours %s after the Sun cut: %s",
+                     band, sum(len(v) for v in groups.values()), len(tars), pl.lst_hours,
+                     {lst.label(h): len(v) for h, v in sorted(groups.items())})
+            # batches never span two LST hours
+            chunks = [c for h in sorted(groups) for c in _chunk(groups[h], pl.batch_size)]
+        else:
+            chunks = _chunk(tars, pl.batch_size)
+        for i, chunk in enumerate(chunks):
             mf = manifest_dir / f"{band}_{i}.txt"
             mf.write_text("\n".join(chunk) + "\n")
             log.info("band %sMHz batch %d -> %d files (manifest %s)",

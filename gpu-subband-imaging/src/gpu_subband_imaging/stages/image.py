@@ -111,3 +111,24 @@ def image(ms: Path, out_prefix: Path, geom: ImagingGeom, p: ImagingParams,
     _single_pol_image(name_v, "V").rename(out[1])
     timings["image_dirty_v"] = time.perf_counter() - t0
     return out
+
+
+def chgcentre(ms: Path, centre: str, binary: str = "/opt/bin/chgcentre") -> None:
+    """Rephase ``ms`` in place to ``centre`` ('02h30m00s 37d12m57.057s'), as orca."""
+    ra, dec = centre.split()
+    r = subprocess.run([binary, str(ms), ra, dec], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"chgcentre failed (rc={r.returncode}): {(r.stdout + r.stderr)[-1000:]}")
+
+
+def v_stats(path: Path, box_r: int = 512) -> Dict[str, float]:
+    """orca analyze_snapshot_quality statistics of one pilot V image: std in the
+    central 1024 x 1024 box and max |V| over the image."""
+    import numpy as np
+    from astropy.io import fits
+    with fits.open(str(path)) as hdul:
+        data = hdul[0].data.squeeze()
+    h, w = data.shape
+    cw, ch = w // 2, h // 2
+    centre = data[ch - box_r:ch + box_r, cw - box_r:cw + box_r]
+    return {"rms": float(np.nanstd(centre)), "peak": float(np.nanmax(np.abs(data)))}

@@ -67,6 +67,9 @@ def run_band(cfg: Config, band: int, hour: str, gpu: Optional[int] = None) -> Di
     """Image one band-hour on this node (CUDA_VISIBLE_DEVICES set by the launcher)."""
     if not cfg.pipeline.keep_ms_root:
         raise RuntimeError("hour imaging needs pipeline.keep_ms_root")
+    if getattr(cfg.pipeline, "layout", "utc") == "lst":
+        from . import hour_lst
+        return hour_lst.run_band(cfg, band, hour, gpu)
     ms = list_kept(cfg, band, hour)
     od = out_dir(cfg, band, hour)
     od.mkdir(parents=True, exist_ok=True)
@@ -118,6 +121,9 @@ def run_band(cfg: Config, band: int, hour: str, gpu: Optional[int] = None) -> Di
 
 
 def _hours(cfg: Config) -> List[str]:
+    if getattr(cfg.pipeline, "layout", "utc") == "lst":
+        from . import lst
+        return [lst.label(h) for h in cfg.pipeline.lst_hours]
     if cfg.pipeline.hours == "all":
         root = Path(cfg.pipeline.keep_ms_root)
         found = set()

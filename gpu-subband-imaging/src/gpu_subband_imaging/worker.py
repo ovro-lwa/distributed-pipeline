@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from . import lst
 from .config import Config
 from .stages import average, calibrate, compress, flag, image, movie, quality, stage_ms, uvw
 from .stages.peel import ZestDaemon
@@ -57,6 +58,28 @@ class Worker:
         self._badants = ""
         self._bp = pl.cal.bp
         self._xy = pl.cal.xy
+        self._lst: dict = {}
+        self._qa: List[dict] = []      # pilot V statistics of this batch (layout=lst)
+
+    # -- layout ------------------------------------------------------------------
+    # layout=utc keys everything by the UTC hour of the stamp, layout=lst by its
+    # LST hour ("HHh") under the main-pipeline tree (lst.py).
+
+    @property
+    def lst_layout(self) -> bool:
+        return getattr(self.cfg.pipeline, "layout", "utc") == "lst"
+
+    def lst_hour(self, stamp: str) -> int:
+        if stamp not in self._lst:
+            self._lst[stamp] = lst.lst_hours([stamp])[0]
+        return self._lst[stamp]
+
+    def group(self, stamp: str) -> str:
+        return lst.label(self.lst_hour(stamp)) if self.lst_layout else _hour(stamp)
+
+    def band_dir(self, stamp: str) -> Path:
+        pl = self.cfg.pipeline
+        return lst.band_dir(pl.output_root, self.lst_hour(stamp), pl.date, pl.run_label, self.band)
 
     def hour_dir(self, hour: str) -> Path:
         return self.out / hour
@@ -67,8 +90,22 @@ class Worker:
     def frame_dir(self, hour: str) -> Path:
         return self.hour_dir(hour) / "images"
 
+    def _frame_dir_for_stamp(self, stamp: str) -> Path:
+        if self.lst_layout:
+            return self.band_dir(stamp) / "Movies" / "frames"
+        return self.frame_dir(_hour(stamp))
+
+    def _archive_paths(self, stamp: str) -> Tuple[Path, Path]:
+        """Archive paths (uncompressed names) of the I and V snapshot images."""
+        if self.lst_layout:
+            d, ts = self.band_dir(stamp), lst.timestamp(stamp)
+            return (d / "snapshots_clean" / lst.clean_name(self.band, ts),
+                    d / "snapshots" / lst.pilot_name(self.band, ts))
+        d = self.fits_dir(_hour(stamp))
+        return d / f"img_{stamp}-I-image.fits", d / f"img_{stamp}-V-image.fits"
+
     def _fits_path_for_stamp(self, stamp: str) -> Path:
-        return self.fits_dir(_hour(stamp)) / f"img_{stamp}-I-image.fits.fz"
+        return Path(f"{self._archive_paths(stamp)[0]}.fz")
 
     def _stage_cal(self, src: str) -> str:
         """Cache one calibration table on local NVMe using an atomic rename."""
@@ -181,12 +218,22 @@ class Worker:
     def _image_archive(self, stamp: str, avg: Path) -> None:
         """Image, render frame, compress+archive FITS for one peeled MS."""
         vmax = self.cfg.pipeline.movie.fixed_vmax
-        hour = _hour(stamp)
         t0 = time.perf_counter()
         prefix = self.work / stamp / f"img_{stamp}"
         steps: dict = {}
-        fits_files = image.image(avg, prefix, self.geom, self.cfg.pipeline.imaging,
+        src = avg
+        if getattr(self.cfg.pipeline, "snapshot_phase_centre", "zenith") == "lst":
+            # chgcentre a copy: the kept MS stays zenith-phased for the hour imager
+            t1 = time.perf_counter()
+            src = self.work / stamp / f"{stamp}_lst.ms"
+            shutil.rmtree(src, ignore_errors=True)
+            shutil.copytree(str(avg), str(src))
+            image.chgcentre(src, lst.phase_centre(self.lst_hour(stamp)), self.cfg.pipeline.chgcentre)
+            steps["chgcentre"] = time.perf_counter() - t1
+        fits_files = image.image(src, prefix, self.geom, self.cfg.pipeline.imaging,
                                  self.cfg.cluster.wsclean_threads, timings=steps)
+        if src != avg:
+            shutil.rmtree(src, ignore_errors=True)
         for name, dt in steps.items():
             log.info("timing %sMHz batch%d stamp=%s phase=%s elapsed=%.2f s",
                      self.band, self.batch, stamp, name, dt)
@@ -208,7 +255,7 @@ class Worker:
         if self.cfg.pipeline.movie.enabled:
             try:
                 t0 = time.perf_counter()
-                movie.render_frame(str(fits_files[0]), self.frame_dir(hour) / f"{stamp}.png",
+                movie.render_frame(str(fits_files[0]), self._frame_dir_for_stamp(stamp) / f"{stamp}.png",
                                    vmax, self.cfg.pipeline.movie.max_px,
                                    horizon_mask=self.cfg.pipeline.movie.horizon_mask,
                                    horizon_radius_fraction=(
@@ -218,14 +265,18 @@ class Worker:
             except Exception as e:
                 log.error("render_frame %s failed: %s", stamp, e)
 
-        for f in fits_files:
+        if self.lst_layout:
+            self._qa.append(dict(stamp=stamp, ts=lst.timestamp(stamp),
+                                 file=self._archive_paths(stamp)[1].name,
+                                 **image.v_stats(fits_files[1])))
+        for f, target in zip(fits_files, self._archive_paths(stamp)):
             t0 = time.perf_counter()
+            f = f.rename(f.parent / target.name)
             fz = compress.fpack(f)
             log.info("timing %sMHz batch%d stamp=%s phase=fpack file=%s elapsed=%.2f s",
                      self.band, self.batch, stamp, f.name, time.perf_counter() - t0)
-            dst = self.fits_dir(hour)
-            dst.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(fz), str(dst / fz.name))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(fz), str(target.parent / fz.name))
         if self.cfg.pipeline.keep_ms_root:
             t0 = time.perf_counter()
             kept = self.keep_ms(stamp, avg)
@@ -237,7 +288,7 @@ class Worker:
         """<keep_ms_root>/<band>MHz/<date>/<hour>/<stamp>.ms (stamp ends in _<band>MHz)."""
         name = stamp if stamp.endswith(f"_{self.band}MHz") else f"{stamp}_{self.band}MHz"
         return (Path(self.cfg.pipeline.keep_ms_root) / f"{self.band}MHz" /
-                self.cfg.pipeline.date / _hour(stamp) / f"{name}.ms")
+                self.cfg.pipeline.date / self.group(stamp) / f"{name}.ms")
 
     def keep_ms(self, stamp: str, avg: Path) -> Path:
         """Move the peeled MS to the keep root (atomic rename into place)."""
@@ -314,12 +365,26 @@ class Worker:
         finally:
             daemon.close()
             shutil.rmtree(self.work, ignore_errors=True)
+            self._write_qa_stats()
         log.info("batch %sMHz/%d: total elapsed %.2f s for %d files (%d failed)",
                  self.band, self.batch, time.perf_counter() - batch_start, n_ok, n_fail)
         if n_fail:
             log.warning("batch %sMHz/%d completed with %d failed file(s); continuing",
                         self.band, self.batch, n_fail)
         _require_batch_outputs(self.band, self.batch, len(todo), n_ok)
+
+    def _write_qa_stats(self) -> None:
+        """Pilot V statistics of this batch -> QA/.snapshot_stats/<batch>.jsonl (hour step reads them)."""
+        if not self._qa:
+            return
+        import json
+        import os
+        d = self.band_dir(self._qa[0]["stamp"]) / "QA" / ".snapshot_stats"
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / f"b{self.batch}_{os.uname().nodename}_{os.getpid()}.jsonl"
+        path.write_text("".join(json.dumps(r) + "\n" for r in self._qa))
+        log.info("batch %sMHz/%d: wrote %d pilot QA rows to %s", self.band, self.batch,
+                 len(self._qa), path)
 
     def _start_daemon(self) -> ZestDaemon:
         import os

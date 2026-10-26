@@ -74,7 +74,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if a.cmd == "status":
         cfg = Config.load(cdir)
-        led = Ledger(Path(cfg.cluster.state_dir) / f"ledger_{cfg.pipeline.date}.sqlite")
+        led = Ledger(Path(cfg.cluster.state_dir) / f"ledger_{cfg.pipeline.run_key}.sqlite")
         print(cfg.pipeline.date, led.summary())
         led.close()
         return 0

@@ -53,8 +53,8 @@ def write_run_metadata(cfg: Config, config_dir: str, status: str,
                        summary: Optional[Dict[str, int]] = None,
                        error: Optional[str] = None) -> Path:
     """Atomically create or update this date's provenance record."""
-    out = (Path(cfg.pipeline.output_root) / "_metadata" /
-           cfg.pipeline.date / "run.json")
+    name = "run.json" if cfg.pipeline.layout != "lst" else f"run_{cfg.pipeline.run_key}.json"
+    out = Path(cfg.pipeline.output_root) / "_metadata" / cfg.pipeline.date / name
     out.parent.mkdir(parents=True, exist_ok=True)
     previous = {}
     if out.is_file():

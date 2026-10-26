@@ -18,6 +18,10 @@ from .metadata import write_run_metadata
 log = logging.getLogger("gsi.orchestrator")
 
 
+def _run_key(pl) -> str:
+    return getattr(pl, "run_key", pl.date)
+
+
 class Orchestrator:
     def __init__(self, cfg: Config, config_dir: str, worker_sh: str,
                  list_via_node: Optional[str] = None):
@@ -27,7 +31,7 @@ class Orchestrator:
         self.slots = cfg.cluster.slots()
         self.list_node = list_via_node or self.slots[0].node
         self.state = Path(cfg.cluster.state_dir)
-        self.ledger = Ledger(self.state / f"ledger_{cfg.pipeline.date}.sqlite")
+        self.ledger = Ledger(self.state / f"ledger_{_run_key(cfg.pipeline)}.sqlite")
         self._lock = threading.Lock()
         runtime = cfg.pipeline.env
         self.worker_env = {
@@ -49,7 +53,7 @@ class Orchestrator:
         log.info("planning worklist for date %s via %s", self.cfg.pipeline.date,
                  self.list_node)
         batches = worklist.build(self.cfg.pipeline, self.list_node,
-                                 self.state / "manifests" / self.cfg.pipeline.date)
+                                 self.state / "manifests" / _run_key(self.cfg.pipeline))
         jobs = worklist.to_jobs(batches)
         log.info("built %d batches (%d jobs) for planning", len(batches), len(jobs))
         self.ledger.seed(jobs)
@@ -76,7 +80,7 @@ class Orchestrator:
     # -- execution -----------------------------------------------------------
 
     def _manifest(self, j: Job) -> str:
-        return str(self.state / "manifests" / self.cfg.pipeline.date /
+        return str(self.state / "manifests" / _run_key(self.cfg.pipeline) /
                    f"{j.band}_{j.batch}.txt")
 
     def _run_one(self, slot: Slot, j: Job) -> bool:
@@ -140,7 +144,10 @@ class Orchestrator:
                         log.error("dispatch thread on %s crashed: %r", slot, exc)
                 if not done:
                     time.sleep(poll)
-            self._stitch_movies()
+            if getattr(self.cfg.pipeline, "layout", "utc") == "lst":
+                self._hour_step()          # QA, 1-h / 10-min images, movies, provenance
+            else:
+                self._stitch_movies()
             self._cleanup_calcache()
             self._cleanup_manifests()
         except BaseException as exc:
@@ -172,7 +179,7 @@ class Orchestrator:
 
     def _cleanup_manifests(self) -> None:
         """Remove this date's manifests after all workers finish."""
-        manifest_dir = self.state / "manifests" / self.cfg.pipeline.date
+        manifest_dir = self.state / "manifests" / _run_key(self.cfg.pipeline)
         try:
             shutil.rmtree(manifest_dir, ignore_errors=True)
             log.info("deleted manifest directory %s", manifest_dir)
@@ -187,6 +194,15 @@ class Orchestrator:
             if fc is None or fc >= budget:
                 return slot
         return None
+
+    def _hour_step(self) -> None:
+        """layout=lst: one job per band and LST hour (hour_lst.run_band) on the GPU slots."""
+        from . import hour_image
+        t0 = time.perf_counter()
+        res = hour_image.run_all(self.cfg, self.config_dir, self.worker_sh, self.worker_env)
+        failed = sorted(k for k, ok in res.items() if not ok)
+        log.info("hour step: %d ok, %d failed %s in %.1f s", len(res) - len(failed),
+                 len(failed), failed, time.perf_counter() - t0)
 
     def _stitch_movies(self) -> None:
         """Build hourly movies for bands whose batches all finished."""

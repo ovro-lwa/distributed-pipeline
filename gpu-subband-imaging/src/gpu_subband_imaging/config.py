@@ -181,6 +181,9 @@ class PeelParams:
     reg_max_offset_deg: float = 0.0   # > 0: Tukey phase prior (Regularized Peeling)
     reg_taper_deg: float = 1.0
     reg_lambda: float = 1.0
+    flag_zero: bool = False           # flag XX == YY == 0 samples before peeling
+    residual_guard: bool = False      # TTCalX guarded_zest!: keep an update only if it lowers the residual
+    backstop: bool = False            # undo a whole sky/RFI pass that raises the residual
 
     def __post_init__(self) -> None:
         choices = {"solver": ("damped", "rk4"), "model": ("kernels", "exact"),
@@ -253,6 +256,7 @@ class HourImagingParams:
     extra_args: List[str] = field(default_factory=list)
     env: Dict[str, str] = field(default_factory=dict)
     timeout_seconds: Optional[int] = None
+    delete_kept_ms: bool = False        # remove a band-hour's kept MSes after it imaged successfully
 
 
 @dataclass(frozen=True)
@@ -321,10 +325,36 @@ class PipelineConfig:
     # TIME_CENTROID (exact phase centre); time: at TIME like chgcentre (5 s early,
     # matches the main pipeline); off: keep the stored UVW.
     fix_uvw: str = "centroid"
+    # layout=utc: <output_root>/<band>MHz/<date>/<UTC hour>/{fits,images} (original).
+    # layout=lst: main-pipeline layout <output_root>/<LST>h/<date>/<run_label>/<band>MHz/
+    # (lst.py); only the LST hours in lst_hours, with the main pipeline's Sun cut.
+    layout: str = "utc"
+    lst_hours: List[int] = field(default_factory=list)
+    run_label: str = ""
+    sun_cut: bool = True
+    # zenith: image each snapshot at its own phase centre; lst: chgcentre a copy to the
+    # LST-hour centre <LST>h30m00s 37d12m57.057s first (as the main pipeline's snapshots)
+    snapshot_phase_centre: str = "zenith"
+    chgcentre: str = "/opt/bin/chgcentre"
 
     def __post_init__(self) -> None:
         if self.fix_uvw not in FIX_UVW_MODES:
             raise ConfigError(f"fix_uvw must be one of {FIX_UVW_MODES}, got {self.fix_uvw!r}")
+        if self.layout not in ("utc", "lst"):
+            raise ConfigError(f"layout must be 'utc' or 'lst', got {self.layout!r}")
+        if self.snapshot_phase_centre not in ("zenith", "lst"):
+            raise ConfigError("snapshot_phase_centre must be 'zenith' or 'lst'")
+        if self.layout == "lst" and not self.run_label:
+            raise ConfigError("layout=lst needs run_label (e.g. Run_20261026_031500)")
+        if self.snapshot_phase_centre == "lst" and self.layout != "lst":
+            raise ConfigError("snapshot_phase_centre=lst needs layout=lst")
+
+    @property
+    def run_key(self) -> str:
+        """Ledger/manifest key: the date, plus the LST hours for layout=lst (one run per set)."""
+        if self.layout != "lst":
+            return self.date
+        return f"{self.date}_lst" + "-".join(f"{h:02d}" for h in self.lst_hours)
 
     def peel_for_band(self, band: int) -> PeelParams:
         return self.peel_overrides.get(band, self.peel)
@@ -364,6 +394,12 @@ def load_pipeline(path: Union[str, Path]) -> PipelineConfig:
         keep_ms_root=d.get("keep_ms_root") or None,
         hour_imaging=HourImagingParams(**d.get("hour_imaging", {})),
         fix_uvw=_fix_uvw_mode(d.get("fix_uvw", "centroid")),
+        layout=str(d.get("layout", "utc")),
+        lst_hours=[int(h) for h in d.get("lst_hours", [])],
+        run_label=str(d.get("run_label", "")),
+        sun_cut=bool(d.get("sun_cut", True)),
+        snapshot_phase_centre=str(d.get("snapshot_phase_centre", "zenith")),
+        chgcentre=str(d.get("chgcentre", "/opt/bin/chgcentre")),
     )
 
 

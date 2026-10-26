@@ -12,6 +12,11 @@
 #   ZEST_RESUBTRACT    when a solve is rejected, subtract the source again with
 #                      its last accepted gains instead of leaving it in the data
 #   ZEST_GUARD         undo a source update that raises the residual power
+#   ZEST_RESIDUAL_GUARD  TTCalX.guarded_zest!: keep a source update only if subtracting
+#                      it lowers the residual (vs. source left in and vs. previous gains),
+#                      else keep the previous gains or leave the source in
+#   ZEST_FLAG_ZERO     flag samples with XX == YY == 0 before peeling (dropped data)
+#   ZEST_BACKSTOP      undo a whole sky/RFI pass that raises the residual power
 #   ZEST_RFI_SOURCES   RFI model (near-field emitters); zested after the sky
 #                      (ZEST_RFI_MODE=after, the main pipeline's order) or with it (joint)
 #   ZEST_FAST_IO       read_ms_fast / write_ms_fast! (same results, faster)
@@ -50,6 +55,11 @@ geometric = envs("ZEST_UVW", "ms", ("ms", "geometric")) == "geometric"
 flag_model = envb("ZEST_FLAG_MODEL", false)
 resubtract = envb("ZEST_RESUBTRACT", false)
 guard = envb("ZEST_GUARD", false)
+residual_guard = envb("ZEST_RESIDUAL_GUARD", false)
+flag_zero = envb("ZEST_FLAG_ZERO", false)
+backstop = envb("ZEST_BACKSTOP", false)
+(residual_guard || flag_zero || backstop) && !isdefined(TTCalX, :guarded_zest!) &&
+    error("ZEST_RESIDUAL_GUARD/FLAG_ZERO/BACKSTOP need TTCalX with guarded_zest! (branch fix/zest-divergence-guard)")
 rfi_path = get(ENV, "ZEST_RFI_SOURCES", "")
 rfi_joint = envs("ZEST_RFI_MODE", "after", ("after", "joint")) == "joint"
 fast_io = envb("ZEST_FAST_IO", false)
@@ -169,6 +179,18 @@ function safe_zest!(vis, meta, catalog_sources, mjd; pass="sky")
         push!(coherencies, coherency)
     end
 
+    if residual_guard
+        solvefn = (cal, v, coh) -> solve!(cal, v, coh, meta, reg)
+        report = (s, it; converged, niters, finite, max_gain, p_with, p_old, p_new, action) -> @printf(
+            "PEEL_SOLVE pass=%s name=\"%s\" elevation_deg=%.2f iteration=%d/%d converged=%s niters=%d finite=%s max_gain=%.6g accepted=%s action=%s p_ratio_new=%.4g p_ratio_old=%.4g\n",
+            pass, get_name(peel_sources[s]), elevations[s], it, piter, converged, niters, finite,
+            max_gain, action == :accept, action, p_new / p_with, p_old / p_with)
+        sub = guarded_zest!(vis, meta, coherencies, calibrations, solvefn; peeliter=piter,
+                            max_gain=max_gain, require_convergence=require_convergence, report=report)
+        @printf("PEEL_SUMMARY pass=%s selected=%d accepted=%d action=guarded_zest\n",
+                pass, length(peel_sources), count(sub))
+        return
+    end
     subtracted = trues(length(peel_sources))
     accepted_final = falses(length(peel_sources))
     for (coherency, calibration) in zip(coherencies, calibrations)
@@ -260,11 +282,21 @@ for line in eachline(stdin)
                 rms_w, offset = geometric_uvw!(meta, mjd)
                 @printf("UVW_GEOMETRIC rms_w_vs_ms=%.4f phase_centre_offset_deg=%.4f\n", rms_w, offset)
             end
+            flag_zero && @printf("FLAG_ZERO flagged=%d\n", flag_zero_visibilities!(vis))
+            function run_pass(catalog, name)
+                before = backstop ? deepcopy_gpu(vis) : nothing
+                p0 = backstop ? TTCalX.residual_power(vis) : 0.0
+                safe_zest!(vis, meta, catalog, mjd; pass=name)
+                if backstop && TTCalX.residual_power(vis) > p0
+                    @printf("PEEL_BACKSTOP pass=%s reverted=true ratio=%.4g\n", name, TTCalX.residual_power(vis) / p0)
+                    for f in (:xx, :xy, :yx, :yy); getfield(vis, f) .= getfield(before, f); end
+                end
+            end
             if rfi_joint && !isempty(rfi_sources)
-                safe_zest!(vis, meta, vcat(sources, rfi_sources), mjd)
+                run_pass(vcat(sources, rfi_sources), "sky")
             else
-                safe_zest!(vis, meta, sources, mjd)
-                isempty(rfi_sources) || safe_zest!(vis, meta, rfi_sources, mjd; pass="rfi")
+                run_pass(sources, "sky")
+                isempty(rfi_sources) || run_pass(rfi_sources, "rfi")
             end
         end
         t_write = @elapsed write_ms!(ms, vis, bl, nrows; column=col)
