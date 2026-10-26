@@ -53,7 +53,11 @@ import yaml
 config_dir, band = sys.argv[1], sys.argv[2]
 try:
     pipeline = yaml.safe_load((Path(config_dir) / "pipeline.yaml").read_text())
-    root = Path(pipeline["output_root"]) / f"{band}MHz" / str(pipeline["date"]) / "logs"
+    if pipeline.get("layout") == "lst":
+        root = (Path(pipeline["output_root"]) / "_logs" / str(pipeline["date"]) /
+                str(pipeline["run_label"]) / f"{band}MHz")
+    else:
+        root = Path(pipeline["output_root"]) / f"{band}MHz" / str(pipeline["date"]) / "logs"
 except Exception:
     root = Path(config_dir) / "logs"
 print(root)

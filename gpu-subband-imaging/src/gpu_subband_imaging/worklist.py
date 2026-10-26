@@ -25,7 +25,7 @@ def _list_inputs(node: str, band: int, band_dir: str,
         depth = "-mindepth 1 -maxdepth 1"
     cmd = (
         f"find {roots} {depth} "
-        "\\( -type f -name '*.ms.tar' -o -type d -name '*.ms' \\) "
+        "\\( \\( -type f -o -type l \\) -name '*.ms.tar' -o -type d -name '*.ms' \\) "
         "-print 2>/dev/null | sort"
     )
     log.info("listing %sMHz inputs via %s from %s", band, node, band_dir)
