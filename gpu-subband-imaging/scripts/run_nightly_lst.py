@@ -95,6 +95,8 @@ def main(argv=None) -> int:
     ap.add_argument("--bp", help="fixed bandpass table (default: newest at each launch)")
     ap.add_argument("--hours", help="comma list of LST hours (default: every night hour)")
     ap.add_argument("--margin-min", type=float, default=10.0)
+    ap.add_argument("--min-window-min", type=float, default=10.0,
+                    help="skip LST hours with less Sun-cut data than this (e.g. a few minutes at dusk)")
     ap.add_argument("--poll-seconds", type=int, default=300)
     ap.add_argument("--max-attempts", type=int, default=2)
     ap.add_argument("--lock-path", default=None)
@@ -110,6 +112,10 @@ def main(argv=None) -> int:
     lock_path = Path(a.lock_path) if a.lock_path else out_root / "_state" / "pipeline.lock"
 
     windows = night_windows(a.date)
+    short = {h: w for h, w in windows.items() if (w[1] - w[0]).total_seconds() < 60 * a.min_window_min}
+    for h, w in short.items():
+        print(f"  skipping {lst.label(h)}: only {w[0]:%H:%M}-{w[1]:%H:%M} UTC after the Sun cut", flush=True)
+        windows.pop(h)
     if a.hours:
         windows = {h: w for h, w in windows.items() if h in {int(x) for x in a.hours.split(",")}}
     print(f"night {a.date}: run label {a.run_label}; LST hours (UTC window after the Sun cut):", flush=True)
