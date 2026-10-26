@@ -39,13 +39,24 @@ def mad(x):
     return float(1.4826 * np.median(np.abs(x - np.median(x)))) if x.size else float("nan")
 
 
+def pairs(new, ref):
+    """[(new spw, ref spw)] matched by mean frequency (tables may hold different bands)."""
+    fn, fr = new[2].mean(axis=1), ref[2].mean(axis=1)
+    out = []
+    for s, f in enumerate(fn):
+        k = int(np.argmin(np.abs(fr - f)))
+        if abs(fr[k] - f) < 0.5:
+            out.append((s, k))
+    return out
+
+
 def compare(new, ref):
     Gn, Fn, fq = new
     Gr, Fr, _ = ref
     out = []
-    for s in range(min(Gn.shape[0], Gr.shape[0])):
-        both = ~Fn[s] & ~Fr[s]
-        r = np.where(both, Gn[s] / Gr[s], np.nan)
+    for s, k in pairs(new, ref):
+        both = ~Fn[s] & ~Fr[k]
+        r = np.where(both, Gn[s] / Gr[k], np.nan)
         amp = np.abs(r)
         ph = np.angle(r)
         ph_ant = np.angle(np.nanmean(np.exp(1j * ph), axis=(1, 2), keepdims=True))
@@ -53,7 +64,7 @@ def compare(new, ref):
         ant_ratio = np.nanmedian(amp, axis=(1, 2))
         out.append(dict(
             spw=s, freq_mhz=float(np.nanmean(fq[s])),
-            flag_new=float(Fn[s].mean()), flag_ref=float(Fr[s].mean()),
+            flag_new=float(Fn[s].mean()), flag_ref=float(Fr[k].mean()),
             n_both=int(both.sum()),
             amp_ratio_median=float(np.nanmedian(amp)) if both.any() else None,
             amp_ratio_scatter=mad(np.log(amp[both])) if both.any() else None,
@@ -85,13 +96,14 @@ def main(argv=None) -> int:
     for s in range(Gn.shape[0]):
         ax[0, 0].plot(fq[s], np.nanmedian(np.abs(Gn[s, :, :, 0]), axis=0), "-", color="C0", lw=0.8,
                       label="new" if s == 0 else None)
-    for k, (r, (Gr, Fr, _)) in enumerate(refs.items()):
+    for k, (r, ref) in enumerate(refs.items()):
+        Gr, Fr, fr = ref
         for s in range(Gr.shape[0]):
-            ax[0, 0].plot(fq[s], np.nanmedian(np.abs(Gr[s, :, :, 0]), axis=0), "-", color=f"C{k + 1}",
+            ax[0, 0].plot(fr[s], np.nanmedian(np.abs(Gr[s, :, :, 0]), axis=0), "-", color=f"C{k + 1}",
                           lw=0.6, alpha=0.7, label=os.path.basename(r) if s == 0 else None)
-        for s in range(min(Gn.shape[0], Gr.shape[0])):
-            both = ~Fn[s] & ~Fr[s]
-            rr = np.where(both, Gn[s] / Gr[s], np.nan)[:, :, 0]
+        for s, j in pairs(new, ref):
+            both = ~Fn[s] & ~Fr[j]
+            rr = np.where(both, Gn[s] / Gr[j], np.nan)[:, :, 0]
             ax[0, 1].plot(fq[s], np.nanmedian(np.abs(rr), axis=0), "-", color=f"C{k + 1}", lw=0.8,
                           label=os.path.basename(r) if s == 0 else None)
             ph = np.angle(rr)
@@ -116,10 +128,13 @@ def main(argv=None) -> int:
     fig.savefig(os.path.join(a.out, "bandpass_check.png"), dpi=90)
 
     print(f"{'MHz':>6} {'flag_new':>8} " + " ".join(f"{'ref' + str(i) + ' flag amp scat ph_deg nbad':>34}" for i in range(len(refs))))
-    for s, c in enumerate(cmp0):
+    for c in cmp0:
         cols = []
         for cmp in res["comparisons"].values():
-            x = cmp[s]
+            x = next((y for y in cmp if y["spw"] == c["spw"]), None)
+            if x is None:
+                cols.append(f"{'-':>34}")
+                continue
             cols.append(f"{x['flag_ref']:.2f} {x['amp_ratio_median'] or float('nan'):.3f} "
                         f"{x['amp_ratio_scatter'] or float('nan'):.3f} {x['phase_diff_scatter_deg'] or float('nan'):6.1f} "
                         f"{x['n_ant_amp_off_20pct']:3d}/{x['n_ant_compared']}")
