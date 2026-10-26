@@ -166,3 +166,22 @@ def test_tonight_bandpass_deadline_falls_back_to_earlier_days(tmp_path):
     (d / "calibration_2026-10-26_22h.B.flagged").mkdir()
     bp, why = m.tonight_bandpass(str(cal), "2026-10-27", str(tmp_path), datetime(2000, 1, 1))
     assert bp.endswith("calibration_2026-10-26_22h.B.flagged") and "deadline" in why
+
+
+def test_tonight_bandpass_rejected_main_uses_backup(tmp_path):
+    from datetime import datetime
+    m = _nightly()
+    cal, date = tmp_path / "results", "2026-10-27"
+    paths = {}
+    for lst_label in ("21h", "22h"):
+        d = cal / date / lst_label / "successful" / "s" / "tables"
+        d.mkdir(parents=True)
+        (d / f"c_{lst_label}.B.flagged").mkdir()
+        paths[lst_label] = str(d / f"c_{lst_label}.B.flagged")
+    later = datetime(2100, 1, 1)
+    assert m.tonight_bandpass(str(cal), date, str(tmp_path), later)[0] == paths["22h"]
+    rej = frozenset({paths["22h"]})
+    assert m.tonight_bandpass(str(cal), date, str(tmp_path), later, rejected=rej)[0] == paths["21h"]
+    rej = frozenset(paths.values())          # both rejected: previous days (none here)
+    bp, why = m.tonight_bandpass(str(cal), date, str(tmp_path), later, rejected=rej)
+    assert bp is None and "no usable" in why

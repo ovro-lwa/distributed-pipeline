@@ -66,29 +66,61 @@ def latest_bandpass(cal_root: str, date: str, days_back: int = 3) -> Optional[st
 
 
 def tonight_bandpass(cal_root: str, date: str, state_dir: str, deadline: datetime,
-                     main: str = "22h", backup: str = "21h") -> Tuple[Optional[str], str]:
+                     main: str = "22h", backup: str = "21h",
+                     rejected: frozenset = frozenset()) -> Tuple[Optional[str], str]:
     """Bandpass from the date's own LST calibration (run_daily_cal_lst.py): the main one when it
-    succeeded, the backup when the main one is finished but failed; after `deadline` whatever
-    is newest (latest_bandpass).  (None, reason) means wait."""
+    succeeded, the backup when the main one is finished but failed or was rejected (`rejected`:
+    tables that failed check_table); after `deadline`, or when neither is usable, the newest
+    table of the previous days.  (None, reason) means wait."""
     def ok(lst_label: str) -> Optional[str]:
         found = sorted(Path(cal_root, date, lst_label, "successful").glob("*/tables/*.B.flagged"))
-        return str(found[-1]) if found else None
+        return str(found[-1]) if found and str(found[-1]) not in rejected else None
 
-    def finished(role: str) -> bool:
+    def finished(role: str, lst_label: str) -> bool:
+        if any(f"/{date}/{lst_label}/" in r for r in rejected):
+            return True
         p = Path(state_dir) / f"{date}_{role}.json"
         return p.exists() and json.loads(p.read_text()).get("status") is not None
 
+    prev = (datetime.strptime(date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
     if ok(main):
         return ok(main), f"{date} {main} calibration"
-    if finished("main") and ok(backup):
-        return ok(backup), f"{date} {backup} backup calibration (main failed)"
-    if finished("main") and finished("backup"):
-        bp = latest_bandpass(cal_root, date)
-        return bp, f"both {date} calibrations failed; newest earlier table"
+    if finished("main", main) and ok(backup):
+        return ok(backup), f"{date} {backup} backup calibration (main failed or rejected)"
+    if finished("main", main) and finished("backup", backup):
+        return latest_bandpass(cal_root, prev), f"no usable {date} calibration; newest earlier table"
     if utcnow() >= deadline:
-        bp = ok(backup) or latest_bandpass(cal_root, date)
-        return bp, f"calibration deadline {deadline:%H:%M} UTC passed; using {'backup' if ok(backup) else 'newest'}"
+        bp = ok(backup) or latest_bandpass(cal_root, prev)
+        return bp, f"calibration deadline {deadline:%H:%M} UTC passed; using {'backup' if ok(backup) else 'newest earlier'}"
     return None, f"waiting for the {date} {main} calibration"
+
+
+def check_table(bp: str, ref: Optional[str], out_dir: Path, amp=(0.8, 1.25), max_phase_deg=15.0,
+                max_flag=0.5) -> Tuple[bool, str]:
+    """scripts/check_bandpass.py of bp against ref (an earlier night's table): every band both
+    tables have must have a median gain ratio within `amp`, a phase-difference scatter below
+    max_phase_deg and a flagged fraction below max(max_flag, ref + 0.2).  No ref -> accepted."""
+    if not ref:
+        return True, "no reference table; not checked"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    rc = subprocess.run([sys.executable, str(REPO_ROOT / "scripts" / "check_bandpass.py"), bp, ref,
+                         "--out", str(out_dir)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        text=True)
+    (out_dir / "check_bandpass.log").write_text(rc.stdout)
+    if rc.returncode != 0:
+        return False, f"check_bandpass failed rc={rc.returncode} (see {out_dir})"
+    rows = next(iter(json.loads((out_dir / "bandpass_check.json").read_text())["comparisons"].values()))
+    bad = []
+    for c in rows:
+        a, ph = c["amp_ratio_median"], c["phase_diff_scatter_deg"]
+        if a is None or not (amp[0] <= a <= amp[1]) or ph is None or ph > max_phase_deg \
+                or c["flag_new"] > max(max_flag, c["flag_ref"] + 0.2):
+            bad.append(f"{c['freq_mhz']:.0f} MHz (amp {a}, phase {ph}, flag {c['flag_new']:.2f})")
+    if len(rows) < 6:
+        return False, f"only {len(rows)} bands in common with {ref}"
+    if bad:
+        return False, f"{len(bad)}/{len(rows)} bands off vs {Path(ref).name}: " + "; ".join(bad)
+    return True, f"{len(rows)} bands consistent with {Path(ref).name}"
 
 
 def write_config(template: Path, out_dir: Path, date: str, hours: List[int],
@@ -136,6 +168,8 @@ def main(argv=None) -> int:
     ap.add_argument("--cal-state-dir", default="/fast/pipeline/calibration/watch_state_lst")
     ap.add_argument("--cal-deadline-utc", type=float, default=10.0,
                     help="--wait-cal: hour (UTC, on the date) after which to stop waiting")
+    ap.add_argument("--no-check-bp", action="store_true",
+                    help="--wait-cal: use tonight's table without comparing it with the previous night's")
     ap.add_argument("--hours", help="comma list of LST hours (default: every night hour)")
     ap.add_argument("--margin-min", type=float, default=10.0)
     ap.add_argument("--min-window-min", type=float, default=10.0,
@@ -200,14 +234,29 @@ def main(argv=None) -> int:
             bp = a.bp
         elif a.wait_cal:
             bp = state.get("bp")                 # one table for the whole night
-            if not bp:
-                deadline = datetime.strptime(a.date, "%Y-%m-%d") + timedelta(hours=a.cal_deadline_utc)
-                bp, why = tonight_bandpass(a.cal_root, a.date, a.cal_state_dir, deadline)
+            deadline = datetime.strptime(a.date, "%Y-%m-%d") + timedelta(hours=a.cal_deadline_utc)
+            prev = (datetime.strptime(a.date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+            while not bp:
+                rejected = frozenset(state.setdefault("bp_rejected", {}))
+                bp, why = tonight_bandpass(a.cal_root, a.date, a.cal_state_dir, deadline, rejected=rejected)
                 print(f"{now:%H:%M:%S} bandpass: {why}: {bp}", flush=True)
-                if bp:
-                    state.update(bp=bp, bp_reason=why)
-                    state_path.parent.mkdir(parents=True, exist_ok=True)
-                    state_path.write_text(json.dumps(state, indent=1))
+                if not bp:
+                    break
+                if f"/{a.date}/" in bp and not a.no_check_bp:
+                    # tonight's table: compare with the previous nights' before using it
+                    good, msg = check_table(bp, latest_bandpass(a.cal_root, prev),
+                                            log_dir / f"bpcheck_{a.date}" / Path(bp).parts[-5])
+                    print(f"{now:%H:%M:%S} bandpass check: {'OK' if good else 'REJECTED'}: {msg}", flush=True)
+                    if not good:
+                        state["bp_rejected"][bp] = msg
+                        state_path.parent.mkdir(parents=True, exist_ok=True)
+                        state_path.write_text(json.dumps(state, indent=1))
+                        bp = None
+                        continue
+                    why += f"; check: {msg}"
+                state.update(bp=bp, bp_reason=why)
+                state_path.parent.mkdir(parents=True, exist_ok=True)
+                state_path.write_text(json.dumps(state, indent=1))
         else:
             bp = latest_bandpass(a.cal_root, a.date)
         if not bp:
