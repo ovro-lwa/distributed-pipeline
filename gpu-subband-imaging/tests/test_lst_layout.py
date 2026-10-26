@@ -119,3 +119,50 @@ def test_config_lst_validation():
     p = PipelineConfig(**base, layout="lst", run_label="Run_X", lst_hours=[4, 5])
     assert p.run_key == "2026-10-24_Run_X_lst04-05"
     assert PipelineConfig(**base).run_key == "2026-10-24"
+
+
+def _nightly():
+    import importlib.util
+    from pathlib import Path
+    p = Path(__file__).resolve().parents[1] / "scripts" / "run_nightly_lst.py"
+    spec = importlib.util.spec_from_file_location("run_nightly_lst", p)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def test_tonight_bandpass_prefers_main_then_backup(tmp_path):
+    import json
+    from datetime import datetime, timedelta
+    m = _nightly()
+    cal, state = tmp_path / "results", tmp_path / "state"
+    state.mkdir()
+    date = "2026-10-27"
+    later = datetime(2100, 1, 1)
+
+    def table(lst_label, stamp):
+        d = cal / date / lst_label / "successful" / stamp / "tables"
+        d.mkdir(parents=True)
+        (d / f"calibration_{date}_{lst_label}.B.flagged").mkdir()
+        return str(d / f"calibration_{date}_{lst_label}.B.flagged")
+
+    bp, why = m.tonight_bandpass(str(cal), date, str(state), later)
+    assert bp is None and "waiting" in why
+    backup = table("21h", "20261027_041000")
+    bp, _ = m.tonight_bandpass(str(cal), date, str(state), later)
+    assert bp is None                       # main still running: wait for it
+    (state / f"{date}_main.json").write_text(json.dumps({"status": "unsuccessful"}))
+    assert m.tonight_bandpass(str(cal), date, str(state), later)[0] == backup
+    main = table("22h", "20261027_050000")
+    assert m.tonight_bandpass(str(cal), date, str(state), later)[0] == main
+
+
+def test_tonight_bandpass_deadline_falls_back_to_earlier_days(tmp_path):
+    from datetime import datetime
+    m = _nightly()
+    cal = tmp_path / "results"
+    d = cal / "2026-10-26" / "22h" / "successful" / "x" / "tables"
+    d.mkdir(parents=True)
+    (d / "calibration_2026-10-26_22h.B.flagged").mkdir()
+    bp, why = m.tonight_bandpass(str(cal), "2026-10-27", str(tmp_path), datetime(2000, 1, 1))
+    assert bp.endswith("calibration_2026-10-26_22h.B.flagged") and "deadline" in why

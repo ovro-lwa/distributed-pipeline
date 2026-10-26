@@ -8,7 +8,8 @@ newest successful bandpass under --cal-root at that moment).  The run label is
 fixed for the night, so every run writes under
 <output_root>/<LST>h/<date>/<run_label>/<band>MHz/.  Done hours are recorded in
 <output_root>/_state/nightly_<date>.json; the script exits when every night hour
-of the date is done (or failed --max-attempts times).
+of the date is done (or failed --max-attempts times).  With --wait-cal the bandpass is the
+date's own LST calibration (main 22h, else backup 21h; see tonight_bandpass), fixed for the night.
 """
 from __future__ import annotations
 
@@ -64,6 +65,32 @@ def latest_bandpass(cal_root: str, date: str, days_back: int = 3) -> Optional[st
     return None
 
 
+def tonight_bandpass(cal_root: str, date: str, state_dir: str, deadline: datetime,
+                     main: str = "22h", backup: str = "21h") -> Tuple[Optional[str], str]:
+    """Bandpass from the date's own LST calibration (run_daily_cal_lst.py): the main one when it
+    succeeded, the backup when the main one is finished but failed; after `deadline` whatever
+    is newest (latest_bandpass).  (None, reason) means wait."""
+    def ok(lst_label: str) -> Optional[str]:
+        found = sorted(Path(cal_root, date, lst_label, "successful").glob("*/tables/*.B.flagged"))
+        return str(found[-1]) if found else None
+
+    def finished(role: str) -> bool:
+        p = Path(state_dir) / f"{date}_{role}.json"
+        return p.exists() and json.loads(p.read_text()).get("status") is not None
+
+    if ok(main):
+        return ok(main), f"{date} {main} calibration"
+    if finished("main") and ok(backup):
+        return ok(backup), f"{date} {backup} backup calibration (main failed)"
+    if finished("main") and finished("backup"):
+        bp = latest_bandpass(cal_root, date)
+        return bp, f"both {date} calibrations failed; newest earlier table"
+    if utcnow() >= deadline:
+        bp = ok(backup) or latest_bandpass(cal_root, date)
+        return bp, f"calibration deadline {deadline:%H:%M} UTC passed; using {'backup' if ok(backup) else 'newest'}"
+    return None, f"waiting for the {date} {main} calibration"
+
+
 def write_config(template: Path, out_dir: Path, date: str, hours: List[int],
                  run_label: str, bp: str) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -104,6 +131,11 @@ def main(argv=None) -> int:
     ap.add_argument("--run-label", default="Run_" + utcnow().strftime("%Y%m%d_%H%M%S"))
     ap.add_argument("--cal-root", default=DEFAULT_CAL_ROOT)
     ap.add_argument("--bp", help="fixed bandpass table (default: newest at each launch)")
+    ap.add_argument("--wait-cal", action="store_true",
+                    help="use the date's own LST calibration (main, else backup), fixed for the night")
+    ap.add_argument("--cal-state-dir", default="/fast/pipeline/calibration/watch_state_lst")
+    ap.add_argument("--cal-deadline-utc", type=float, default=10.0,
+                    help="--wait-cal: hour (UTC, on the date) after which to stop waiting")
     ap.add_argument("--hours", help="comma list of LST hours (default: every night hour)")
     ap.add_argument("--margin-min", type=float, default=10.0)
     ap.add_argument("--min-window-min", type=float, default=10.0,
@@ -149,6 +181,12 @@ def main(argv=None) -> int:
                      and state["attempts"].get(str(h), 0) < a.max_attempts]
         if not remaining:
             print(f"{now:%H:%M:%S} all night hours done: {sorted(state['done'])}", flush=True)
+            report = log_dir / f"night_report_{a.date}.txt"
+            with open(report, "w") as fh:
+                subprocess.run([sys.executable, str(REPO_ROOT / "scripts" / "night_report.py"), str(out_root),
+                                a.date, run_label, "--json", str(report.with_suffix(".json"))],
+                               stdout=fh, stderr=subprocess.STDOUT)
+            print(f"night report: {report}", flush=True)
             return 0
         if not ready:
             nxt = min(windows[h][1] for h in remaining) + timedelta(minutes=a.margin_min + 1)
@@ -158,7 +196,20 @@ def main(argv=None) -> int:
             time.sleep(a.poll_seconds)
             continue
         ready.sort(key=lambda h: windows[h][0])
-        bp = a.bp or latest_bandpass(a.cal_root, a.date)
+        if a.bp:
+            bp = a.bp
+        elif a.wait_cal:
+            bp = state.get("bp")                 # one table for the whole night
+            if not bp:
+                deadline = datetime.strptime(a.date, "%Y-%m-%d") + timedelta(hours=a.cal_deadline_utc)
+                bp, why = tonight_bandpass(a.cal_root, a.date, a.cal_state_dir, deadline)
+                print(f"{now:%H:%M:%S} bandpass: {why}: {bp}", flush=True)
+                if bp:
+                    state.update(bp=bp, bp_reason=why)
+                    state_path.parent.mkdir(parents=True, exist_ok=True)
+                    state_path.write_text(json.dumps(state, indent=1))
+        else:
+            bp = latest_bandpass(a.cal_root, a.date)
         if not bp:
             print("no bandpass table found; waiting", flush=True)
             time.sleep(a.poll_seconds)
