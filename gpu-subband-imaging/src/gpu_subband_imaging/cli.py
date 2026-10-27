@@ -58,7 +58,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         force=True)
     ap = argparse.ArgumentParser(prog="gsi")
     ap.add_argument("cmd", choices=["run", "resume", "status", "dry-run", "stitch",
-                                    "hour-image"])
+                                    "hour-image", "cleanup-nodes"])
     ap.add_argument("--config", required=True, help="config dir or a yaml in it")
     ap.add_argument("--list-node", default=None,
                     help="node used to list lustre (default: first slot's node)")
@@ -97,6 +97,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         failed = sorted(k for k, ok in res.items() if not ok)
         log.info("hour-image: %d ok, %d failed %s", len(res) - len(failed), len(failed), failed)
         return 1 if failed else 0
+    elif a.cmd == "cleanup-nodes":
+        orch = _orch(cdir, a.list_node)
+        orch.cleanup_nodes()
+        orch.ledger.close()
     elif a.cmd == "stitch":
         if a.band is None:
             ap.error("--band required for stitch")

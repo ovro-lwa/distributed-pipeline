@@ -272,7 +272,8 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
     if rc != 0:
         raise RuntimeError(f"ttcalx-image hour failed for {band}MHz {group} (rc={rc})")
     if ms and h.delete_kept_ms:
-        kd = hour_image.kept_dir(cfg, band, group)
-        shutil.rmtree(kd, ignore_errors=True)
-        log.info("deleted kept MSes %s", kd)
+        for kd in hour_image.kept_dirs(cfg, band, group):
+            if kd.is_dir():
+                shutil.rmtree(kd, ignore_errors=True)
+                log.info("deleted kept MSes %s", kd)
     return rec

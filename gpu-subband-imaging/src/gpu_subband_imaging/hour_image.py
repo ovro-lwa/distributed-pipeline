@@ -28,8 +28,14 @@ log = logging.getLogger("gsi.hour_image")
 MANIFEST_PREFIX = "HOUR_IMAGE:"
 
 
-def kept_dir(cfg: Config, band: int, hour: str) -> Path:
-    return (Path(cfg.pipeline.keep_ms_root) / f"{band}MHz" / cfg.pipeline.date / hour)
+def kept_dir(cfg: Config, band: int, hour: str, root: Optional[str] = None) -> Path:
+    return (Path(root or cfg.pipeline.keep_ms_root) / f"{band}MHz" / cfg.pipeline.date / hour)
+
+
+def kept_dirs(cfg: Config, band: int, hour: str) -> List[Path]:
+    """Node-local keep dir (keep_ms_local) first, then the shared one (keep_ms_root)."""
+    roots = [getattr(cfg.pipeline, "keep_ms_local", None), cfg.pipeline.keep_ms_root]
+    return [kept_dir(cfg, band, hour, r) for r in roots if r]
 
 
 def out_dir(cfg: Config, band: int, hour: str) -> Path:
@@ -38,11 +44,10 @@ def out_dir(cfg: Config, band: int, hour: str) -> Path:
 
 
 def list_kept(cfg: Config, band: int, hour: str) -> List[str]:
-    d = kept_dir(cfg, band, hour)
-    if not d.is_dir():
-        return []
-    return sorted(str(p) for p in d.iterdir()
-                  if p.is_dir() and p.name.endswith(".ms") and not p.name.startswith("."))
+    """Kept MSes of a band-hour from every keep dir, in time (file name) order."""
+    found = [p for d in kept_dirs(cfg, band, hour) if d.is_dir() for p in d.iterdir()
+             if p.is_dir() and p.name.endswith(".ms") and not p.name.startswith(".")]
+    return [str(p) for p in sorted(found, key=lambda p: p.name)]
 
 
 def build_cmd(cfg: Config, band: int, list_file: Path, out_prefix: Path) -> List[str]:

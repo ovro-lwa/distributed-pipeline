@@ -135,10 +135,10 @@ def write_config(template: Path, out_dir: Path, date: str, hours: List[int],
     return out_dir
 
 
-def run_gsi(config_dir: Path, log_path: Path) -> int:
+def run_gsi(config_dir: Path, log_path: Path, cmd: str = "run") -> int:
     env = dict(os.environ, PYTHONUNBUFFERED="1")
     env["PYTHONPATH"] = str(REPO_ROOT / "src") + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-    cmd = [sys.executable, "-m", "gpu_subband_imaging.cli", "run", "--config", str(config_dir)]
+    cmd = [sys.executable, "-m", "gpu_subband_imaging.cli", cmd, "--config", str(config_dir)]
     print("Launching:", " ".join(cmd), "->", log_path, flush=True)
     with open(log_path, "a") as log:
         return subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, env=env).returncode
@@ -183,7 +183,12 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
 
     template = Path(a.template).resolve()
-    out_root = Path(yaml.safe_load((template / "pipeline.yaml").read_text())["output_root"])
+    tpl = yaml.safe_load((template / "pipeline.yaml").read_text())
+    out_root = Path(tpl["output_root"])
+    # the orchestrator makes each LST hour's wideband summary itself (wideband_per_hour);
+    # node caches kept across runs (calcache_cleanup: none / keep_ms_local) go after the night
+    own_wideband = not tpl.get("wideband_per_hour", False)
+    node_cleanup = tpl.get("calcache_cleanup", "run") == "none" or bool(tpl.get("keep_ms_local"))
     state_path = out_root / "_state" / f"nightly_{a.date}.json"
     log_dir = Path(a.log_dir) if a.log_dir else out_root / "run_logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -215,6 +220,11 @@ def main(argv=None) -> int:
                      and state["attempts"].get(str(h), 0) < a.max_attempts]
         if not remaining:
             print(f"{now:%H:%M:%S} all night hours done: {sorted(state['done'])}", flush=True)
+            if node_cleanup and (Path(a.output_config) / "pipeline.yaml").exists():
+                rc = run_gsi(Path(a.output_config), log_dir / f"run_lst_{a.date}.log",
+                             cmd="cleanup-nodes")
+                print(f"{utcnow():%H:%M:%S} node cleanup (calibration caches, local kept MSes) "
+                      f"rc={rc}", flush=True)
             report = log_dir / f"night_report_{a.date}.txt"
             with open(report, "w") as fh:
                 subprocess.run([sys.executable, str(REPO_ROOT / "scripts" / "night_report.py"), str(out_root),
@@ -277,7 +287,7 @@ def main(argv=None) -> int:
             fcntl.flock(lock, fcntl.LOCK_UN)
         print(f"{utcnow():%H:%M:%S} gsi run for {[lst.label(h) for h in ready]} rc={rc} "
               f"in {time.time() - t0:.0f} s", flush=True)
-        if rc == 0 and not a.no_wideband:
+        if rc == 0 and not a.no_wideband and own_wideband:
             for h in ready:
                 wideband(out_root / lst.label(h) / a.date / run_label, log_dir / f"wideband_{a.date}.log")
         for h in ready:
