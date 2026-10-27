@@ -16,7 +16,8 @@ from typing import List, Optional, Tuple
 
 from . import lst
 from .config import Config
-from .stages import average, calibrate, compress, flag, image, movie, quality, stage_ms, uvw
+from .stages import (average, calibrate, compress, fastcal, flag, image, movie, quality,
+                     stage_ms, uvw)
 from .stages.peel import ZestDaemon
 
 log = logging.getLogger("gsi.worker")
@@ -159,6 +160,17 @@ class Worker:
                 avg = average.average(ms, d / f"{stamp}_avg.ms", self.cfg.pipeline.chanbin)
                 log.info("timing %sMHz batch%d stamp=%s phase=average elapsed=%.2f s",
                          self.band, self.batch, stamp, time.perf_counter() - t0)
+            elif getattr(self.cfg.pipeline, "prep", "casa") == "numpy":
+                t0 = time.perf_counter()
+                fastcal.flag_calibrate(ms, self._bp, self._xy, self._badants)
+                t1 = time.perf_counter()
+                avg = fastcal.average(ms, d / f"{stamp}_avg.ms", self.cfg.pipeline.chanbin)
+                log.info("timing %sMHz batch%d stamp=%s phase=flag_cal elapsed=%.2f s",
+                         self.band, self.batch, stamp, t1 - t0)
+                log.info("timing %sMHz batch%d stamp=%s phase=average elapsed=%.2f s",
+                         self.band, self.batch, stamp, time.perf_counter() - t1)
+                log.info("timing %sMHz batch%d stamp=%s phase=flag_cal_avg elapsed=%.2f s",
+                         self.band, self.batch, stamp, time.perf_counter() - t0)
             else:
                 t0 = time.perf_counter()
                 avg = calibrate.flag_cal_average(
@@ -277,23 +289,39 @@ class Worker:
                      self.band, self.batch, stamp, f.name, time.perf_counter() - t0)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(fz), str(target.parent / fz.name))
-        if self.cfg.pipeline.keep_ms_root:
+        if self.cfg.pipeline.keep_ms_root or getattr(self.cfg.pipeline, "keep_ms_local", None):
             t0 = time.perf_counter()
             kept = self.keep_ms(stamp, avg)
             log.info("timing %sMHz batch%d stamp=%s phase=keep_ms elapsed=%.2f s dst=%s",
                      self.band, self.batch, stamp, time.perf_counter() - t0, kept)
         shutil.rmtree(self.work / stamp, ignore_errors=True)
 
-    def kept_ms_path(self, stamp: str) -> Path:
-        """<keep_ms_root>/<band>MHz/<date>/<hour>/<stamp>.ms (stamp ends in _<band>MHz)."""
+    def keep_root(self) -> str:
+        """keep_ms_local while it has keep_ms_local_min_free_gb free, else keep_ms_root."""
+        pl = self.cfg.pipeline
+        local = getattr(pl, "keep_ms_local", None)
+        if not local:
+            return pl.keep_ms_root
+        Path(local).mkdir(parents=True, exist_ok=True)
+        free_gb = shutil.disk_usage(local).free / 1e9
+        if free_gb >= pl.keep_ms_local_min_free_gb or not pl.keep_ms_root:
+            return local
+        log.warning("keep_ms_local %s has %.0f GB free (< %.0f GB); keeping on %s",
+                    local, free_gb, pl.keep_ms_local_min_free_gb, pl.keep_ms_root)
+        return pl.keep_ms_root
+
+    def kept_ms_path(self, stamp: str, root: Optional[str] = None) -> Path:
+        """<keep root>/<band>MHz/<date>/<hour>/<stamp>.ms (stamp ends in _<band>MHz)."""
         name = stamp if stamp.endswith(f"_{self.band}MHz") else f"{stamp}_{self.band}MHz"
-        return (Path(self.cfg.pipeline.keep_ms_root) / f"{self.band}MHz" /
+        return (Path(root or self.cfg.pipeline.keep_ms_root) / f"{self.band}MHz" /
                 self.cfg.pipeline.date / self.group(stamp) / f"{name}.ms")
 
     def keep_ms(self, stamp: str, avg: Path) -> Path:
         """Move the peeled MS to the keep root (atomic rename into place)."""
         import os
-        dst = self.kept_ms_path(stamp)
+        pl = self.cfg.pipeline
+        root = self.keep_root()
+        dst = self.kept_ms_path(stamp, root)
         dst.parent.mkdir(parents=True, exist_ok=True)
         tmp = dst.parent / f".{dst.name}.tmp{os.getpid()}"
         shutil.rmtree(tmp, ignore_errors=True)
@@ -301,6 +329,9 @@ class Worker:
         if dst.exists():
             shutil.rmtree(dst)
         os.rename(str(tmp), str(dst))
+        for other in (getattr(pl, "keep_ms_local", None), pl.keep_ms_root):
+            if other and other != root:     # a re-run must not leave a second copy
+                shutil.rmtree(self.kept_ms_path(stamp, other), ignore_errors=True)
         return dst
 
     def run_batch(self, tars: List[str]) -> None:

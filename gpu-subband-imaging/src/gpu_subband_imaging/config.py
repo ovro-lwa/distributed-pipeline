@@ -336,6 +336,23 @@ class PipelineConfig:
     # LST-hour centre <LST>h30m00s 37d12m57.057s first (as the main pipeline's snapshots)
     snapshot_phase_centre: str = "zenith"
     chgcentre: str = "/opt/bin/chgcentre"
+    # Node-local (NVMe) keep root: peeled MSes stay on the node that made them and the
+    # band-hour's hour job runs there (needs stream_hour_images).  Below
+    # keep_ms_local_min_free_gb free a snapshot falls back to keep_ms_root.
+    keep_ms_local: Optional[str] = None
+    keep_ms_local_min_free_gb: float = 100.0
+    # layout=lst: start each band-hour's hour job as soon as its batches are done instead
+    # of after every batch of the run; wideband_per_hour runs pipeline/wideband_summary.py
+    # for an LST hour once all its band-hours are imaged.
+    stream_hour_images: bool = False
+    wideband_per_hour: bool = False
+    # run: remove the node calibration caches at the end of each run; none: keep them
+    # (scripts/run_nightly_lst.py removes them with `gsi cleanup-nodes` after the night).
+    calcache_cleanup: str = "run"
+    # casa: flagdata + applycal + mstransform; numpy: the same in one casacore pass
+    # (stages/fastcal.py), without writing CORRECTED_DATA.
+    prep: str = "casa"
+    max_files_per_hour: Optional[int] = None    # testing: first N snapshots of each hour
 
     def __post_init__(self) -> None:
         if self.fix_uvw not in FIX_UVW_MODES:
@@ -348,6 +365,17 @@ class PipelineConfig:
             raise ConfigError("layout=lst needs run_label (e.g. Run_20261026_031500)")
         if self.snapshot_phase_centre == "lst" and self.layout != "lst":
             raise ConfigError("snapshot_phase_centre=lst needs layout=lst")
+        if self.stream_hour_images and self.layout != "lst":
+            raise ConfigError("stream_hour_images needs layout=lst")
+        if self.keep_ms_local:
+            if not self.stream_hour_images:
+                raise ConfigError("keep_ms_local needs stream_hour_images (hour jobs on the node)")
+            if Path(self.keep_ms_local).parts[:2] == ("/", "lustre"):
+                raise ConfigError("keep_ms_local must be node-local storage, not Lustre")
+        if self.calcache_cleanup not in ("run", "none"):
+            raise ConfigError("calcache_cleanup must be 'run' or 'none'")
+        if self.prep not in ("casa", "numpy"):
+            raise ConfigError("prep must be 'casa' or 'numpy'")
 
     @property
     def run_key(self) -> str:
@@ -400,6 +428,14 @@ def load_pipeline(path: Union[str, Path]) -> PipelineConfig:
         sun_cut=bool(d.get("sun_cut", True)),
         snapshot_phase_centre=str(d.get("snapshot_phase_centre", "zenith")),
         chgcentre=str(d.get("chgcentre", "/opt/bin/chgcentre")),
+        keep_ms_local=d.get("keep_ms_local") or None,
+        keep_ms_local_min_free_gb=float(d.get("keep_ms_local_min_free_gb", 100.0)),
+        stream_hour_images=bool(d.get("stream_hour_images", False)),
+        wideband_per_hour=bool(d.get("wideband_per_hour", False)),
+        calcache_cleanup=str(d.get("calcache_cleanup", "run")),
+        prep=str(d.get("prep", "casa")),
+        max_files_per_hour=(int(d["max_files_per_hour"])
+                            if d.get("max_files_per_hour") else None),
     )
 
 

@@ -44,6 +44,7 @@ class Batch:
     band: int
     index: int
     tars: List[str]
+    group: str = ""          # layout=lst: the batch's LST hour label ("05h")
 
 
 def build(pl: PipelineConfig, list_via_node: str, manifest_dir: Path
@@ -65,16 +66,20 @@ def build(pl: PipelineConfig, list_via_node: str, manifest_dir: Path
             log.info("band %sMHz: %d of %d files in LST hours %s after the Sun cut: %s",
                      band, sum(len(v) for v in groups.values()), len(tars), pl.lst_hours,
                      {lst.label(h): len(v) for h, v in sorted(groups.items())})
+            cap = getattr(pl, "max_files_per_hour", None)
+            if cap:
+                groups = {h: v[:cap] for h, v in groups.items()}
             # batches never span two LST hours
-            chunks = [c for h in sorted(groups) for c in _chunk(groups[h], pl.batch_size)]
+            chunks = [(lst.label(h), c) for h in sorted(groups)
+                      for c in _chunk(groups[h], pl.batch_size)]
         else:
-            chunks = _chunk(tars, pl.batch_size)
-        for i, chunk in enumerate(chunks):
+            chunks = [("", c) for c in _chunk(tars, pl.batch_size)]
+        for i, (group, chunk) in enumerate(chunks):
             mf = manifest_dir / f"{band}_{i}.txt"
             mf.write_text("\n".join(chunk) + "\n")
             log.info("band %sMHz batch %d -> %d files (manifest %s)",
                      band, i, len(chunk), mf)
-            batches.append(Batch(band, i, chunk))
+            batches.append(Batch(band, i, chunk, group))
     return batches
 
 
