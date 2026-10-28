@@ -23,6 +23,8 @@
 #   ZEST_DEVICE        gpu | cpu (TTCalX on Julia threads; needs ZEST_MODEL=exact)
 #   ZEST_REG_MAX_OFFSET_DEG, ZEST_REG_TAPER_DEG, ZEST_REG_LAMBDA
 #                      Tukey phase prior on the gains (off when the offset is 0)
+# Each pass prints PEEL_FINAL pass=<p> name="<source>" subtracted=<bool> per selected source
+# (the state the MS is written in, before a backstop revert, which prints PEEL_BACKSTOP).
 #   ZEST_SAVE_SOLUTIONS  comma list of passes (sky, rfi) whose final gains are written to
 #                      <ms>.peelsol/<pass>.bin (complex64 little endian, column-major
 #                      source x jones(xx,xy,yx,yy) x antenna x channel) + <pass>.tsv (one
@@ -240,6 +242,9 @@ function safe_zest!(vis, meta, catalog_sources, mjd; pass="sky", sol_dir="")
                             max_gain=max_gain, require_convergence=require_convergence, report=report)
         @printf("PEEL_SUMMARY pass=%s selected=%d accepted=%d action=guarded_zest\n",
                 pass, length(peel_sources), count(sub))
+        for k in eachindex(names)
+            @printf("PEEL_FINAL pass=%s name=\"%s\" subtracted=%s\n", pass, names[k], sub[k])
+        end
         # sub[s]: the source is subtracted with calibrations[s] (an update or the previous gains)
         save && write_solutions(sol_dir, pass, selected_indices, names, elevations, sub,
                                 last_converged, last_niters, calibrations)
@@ -305,6 +310,9 @@ function safe_zest!(vis, meta, catalog_sources, mjd; pass="sky", sol_dir="")
         "PEEL_SUMMARY pass=%s selected=%d accepted=%d action=safe_zest\n",
         pass, length(peel_sources), count(accepted_final)
     )
+    for k in eachindex(names)
+        @printf("PEEL_FINAL pass=%s name=\"%s\" subtracted=%s\n", pass, names[k], subtracted[k])
+    end
     save && write_solutions(sol_dir, pass, selected_indices, names, elevations, subtracted,
                             last_converged, last_niters, calibrations)
 end

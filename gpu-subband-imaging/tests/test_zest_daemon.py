@@ -19,6 +19,8 @@ for line in sys.stdin:
         print(f"FAILED {ms} boom", flush=True)
         continue
     print('PEEL_SOLVE pass=sky name="Cas A" accepted=true', flush=True)
+    print('PEEL_FINAL pass=sky name="Cas A" subtracted=true', flush=True)
+    print('PEEL_FINAL pass=sky name="Tau A" subtracted=false', flush=True)
     print("ZEST_TIMING read=0.10 peel=1.00 write=0.20", flush=True)
     print(f"ZESTED {ms} 1.30 {os.environ.get('ZEST_SOLVER')}", flush=True)
 print("DAEMON_EXIT", flush=True)
@@ -42,6 +44,7 @@ def test_protocol_and_environment(fake_julia, caplog):
                    zest_env={"ZEST_SOLVER": "rk4"})
     try:
         assert d.zest(Path("/x/good.ms")) == pytest.approx(1.30)
+        assert d.last_peel == {"sky:Cas A": True, "sky:Tau A": False}
         with pytest.raises(RuntimeError, match="zest failed"):
             d.zest(Path("/x/bad.ms"))
         assert d.zest(Path("/x/good2.ms")) == pytest.approx(1.30)

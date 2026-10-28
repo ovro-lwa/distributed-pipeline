@@ -332,6 +332,55 @@ class RuntimeEnv:
 
 FIX_UVW_MODES = ("off", "centroid", "time")
 
+# Scaife & Heald (2012) flux-scale calibrators: never peeled (a sky or RFI model with a
+# source within PROTECTED_RADIUS_DEG of one is refused)
+PROTECTED_SOURCES = {"3C 48": ("01h37m41.3s", "+33d09m35s"), "3C 147": ("05h42m36.1s", "+49d51m07s"),
+                     "3C 196": ("08h13m36.0s", "+48d13m03s"), "3C 286": ("13h31m08.3s", "+30d30m33s"),
+                     "3C 295": ("14h11m20.5s", "+52d12m10s"), "3C 380": ("18h29m31.8s", "+48d44m46s")}
+PROTECTED_RADIUS_DEG = 1.0
+
+
+def _model_entries(path: Optional[str]) -> List[dict]:
+    import json
+    if not path or not Path(path).is_file():
+        return []
+    d = json.loads(Path(path).read_text())
+    return d if isinstance(d, list) else d.get("sources", [])
+
+
+def model_source_names(path: Optional[str]) -> List[str]:
+    """Source names of a TTCal JSON model (empty if the file is missing)."""
+    return [str(s.get("name", "?")) for s in _model_entries(path)]
+
+
+def check_protected(path: Optional[str]) -> None:
+    """ConfigError if the model peels a Scaife & Heald calibrator (by name or position)."""
+    entries = _model_entries(path)
+    if not entries:
+        return
+    norm = lambda n: str(n).replace(" ", "").upper()
+    names = {norm(k): k for k in PROTECTED_SOURCES}
+    coords = []
+    for s in entries:
+        if norm(s.get("name", "")) in names:
+            raise ConfigError(f"{path}: peels {s['name']}, a Scaife & Heald calibrator")
+        for c in [s] + list(s.get("components", []) or []):
+            if c.get("ra") and c.get("dec"):
+                coords.append((s.get("name", "?"), c["ra"], c["dec"]))
+    if not coords:
+        return
+    from astropy.coordinates import SkyCoord
+    prot = SkyCoord([v[0] for v in PROTECTED_SOURCES.values()], [v[1] for v in PROTECTED_SOURCES.values()])
+    for name, ra, dec in coords:
+        try:
+            c = SkyCoord(ra, dec)
+        except Exception:
+            continue                       # TTCalX-only formats; the name check still applies
+        sep = c.separation(prot).deg
+        if sep.min() < PROTECTED_RADIUS_DEG:
+            raise ConfigError(f"{path}: {name} is {sep.min():.2f} deg from "
+                              f"{list(PROTECTED_SOURCES)[int(sep.argmin())]} (Scaife & Heald calibrator)")
+
 
 def _fix_uvw_mode(v) -> str:
     # YAML reads a bare `off` as False.
@@ -508,4 +557,6 @@ class Config:
         cluster = load_cluster(d / "cluster.yaml")
         pipeline = load_pipeline(d / "pipeline.yaml")
         _validate_lustre_write_roots(cluster, pipeline)
+        check_protected(pipeline.cal.sources)
+        check_protected(pipeline.cal.rfi_sources)
         return Config(cluster, load_subbands(d / "subbands.yaml"), pipeline)

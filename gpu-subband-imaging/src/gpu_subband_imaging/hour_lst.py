@@ -65,6 +65,17 @@ def read_stats(qa_dir: Path) -> List[Dict]:
     return [rows[k] for k in sorted(rows)]
 
 
+def peel_summary(rows: List[Dict]) -> Dict[str, Dict[str, int]]:
+    """{"<pass>:<source>": {"selected": n, "subtracted": n}} over the band-hour's snapshots."""
+    out: Dict[str, Dict[str, int]] = {}
+    for r in rows:
+        for key, sub in (r.get("peel") or {}).items():
+            d = out.setdefault(key, {"selected": 0, "subtracted": 0})
+            d["selected"] += 1
+            d["subtracted"] += int(bool(sub))
+    return out
+
+
 def write_qa(qa_dir: Path, band: int, rows: List[Dict]) -> Tuple[set, Dict]:
     """Write the main-pipeline QA files; return (rejected timestamps, summary)."""
     if not rows:
@@ -169,6 +180,7 @@ def _git_rev(path: str) -> str:
 
 def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> Dict:
     from . import hour_image
+    from .config import PROTECTED_SOURCES, model_source_names
     from .metadata import _code_revision, software_versions
     from .stages import movie
 
@@ -193,6 +205,7 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
     if not h.qa_exclude:            # QA table written, but every snapshot goes into the products
         exclude = []
     rec["qa"]["excluded_from_hour"] = len(exclude)
+    rec["peel_summary"] = peel_summary(rows)
     rec["timing_s"] = {"qa": time.perf_counter() - t0}
     log.info("hour %sMHz %s: %d kept MSes, QA %s", band, group, len(ms), rec["qa"])
 
@@ -287,6 +300,12 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
                          else "MNC anthealth at run time (worker log 'bad antennas')"),
         "peeling_solutions": sol_files,
         "software": software_versions(cfg),
+        "peeled_sources": {
+            "sky_model": model_source_names(pl.cal.sources),
+            "rfi_model": model_source_names(pl.cal.rfi_sources) if pl.peel_for_band(band).rfi else [],
+            "per_snapshot": rec.get("peel_summary", {}),   # selected / subtracted per snapshot
+            "protected_never_peeled": list(PROTECTED_SOURCES),
+        },
         "sun_cut": pl.sun_cut, "n_snapshots_clean": len(snaps), "hour": rec,
     }
     (bdir / "provenance.json").write_text(json.dumps(prov, indent=1, default=str))

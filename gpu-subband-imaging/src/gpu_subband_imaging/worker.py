@@ -62,6 +62,7 @@ class Worker:
         self._xy = pl.cal.xy
         self._lst: dict = {}
         self._qa: List[dict] = []      # pilot V statistics of this batch (layout=lst)
+        self._peel: dict = {}          # stamp -> {"<pass>:<source>": subtracted}
         self._gpu_imager = None        # stages.gpu_image.SnapshotDaemon with imaging.imager=ttcalx
 
     def _start_gpu_imager(self):
@@ -298,6 +299,7 @@ class Worker:
         if self.lst_layout:
             self._qa.append(dict(stamp=stamp, ts=lst.timestamp(stamp),
                                  file=self._archive_paths(stamp)[1].name,
+                                 peel=self._peel.get(stamp, {}),
                                  **image.v_stats(fits_files[1])))
         for f, target in zip(fits_files, self._archive_paths(stamp)):
             t0 = time.perf_counter()
@@ -433,6 +435,7 @@ class Worker:
                             log.warning("zest %s ran out of GPU memory; retrying once", stamp)
                             time.sleep(5.0)
                             daemon.zest(avg)
+                        self._peel[stamp] = dict(getattr(daemon, "last_peel", {}))
                         n_zested += 1
                         log.info("timing %sMHz batch%d stamp=%s phase=zest elapsed=%.2f s",
                                  self.band, self.batch, stamp, time.perf_counter() - t0)

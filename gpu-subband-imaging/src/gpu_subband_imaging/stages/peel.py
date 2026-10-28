@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 from pathlib import Path
 from typing import Dict
 
 log = logging.getLogger("gsi.peel")
+_FINAL = re.compile(r'PEEL_FINAL pass=(\S+) name="([^"]*)" subtracted=(true|false)')
+_BACKSTOP = re.compile(r"PEEL_BACKSTOP pass=(\S+) reverted=true")
 
 
 class ZestDaemon:
@@ -33,12 +36,22 @@ class ZestDaemon:
                            % (self._p.wait(), "\n".join(tail)))
 
     def zest(self, ms: Path) -> float:
-        """Peel one MS and return the daemon's elapsed time."""
+        """Peel one MS and return the daemon's elapsed time.  ``last_peel`` then holds
+        {"<pass>:<source>": subtracted} for the sources the daemon selected."""
+        self.last_peel: Dict[str, bool] = {}
         self._p.stdin.write(str(ms) + "\n")             # type: ignore[union-attr]
         self._p.stdin.flush()                           # type: ignore[union-attr]
         for line in self._p.stdout:                      # type: ignore[union-attr]
             if line.startswith(("PEEL_", "ZEST_TIMING", "UVW_GEOMETRIC")):
                 log.info(line.strip())
+                m = _FINAL.match(line)
+                if m:
+                    self.last_peel[f"{m.group(1)}:{m.group(2)}"] = m.group(3) == "true"
+                m = _BACKSTOP.match(line)
+                if m:                                     # the whole pass was undone
+                    for k in self.last_peel:
+                        if k.startswith(m.group(1) + ":"):
+                            self.last_peel[k] = False
                 continue
             if line.startswith("ZESTED "):
                 return float(line.split()[2])
