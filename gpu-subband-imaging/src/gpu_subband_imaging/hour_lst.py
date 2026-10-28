@@ -169,7 +169,7 @@ def _git_rev(path: str) -> str:
 
 def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> Dict:
     from . import hour_image
-    from .metadata import _code_revision
+    from .metadata import _code_revision, software_versions
     from .stages import movie
 
     pl, h = cfg.pipeline, cfg.pipeline.hour_imaging
@@ -286,6 +286,7 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
         "bad_antennas": (pl.cal.badants_for(band) if pl.cal.badants_for(band) is not None
                          else "MNC anthealth at run time (worker log 'bad antennas')"),
         "peeling_solutions": sol_files,
+        "software": software_versions(cfg),
         "sun_cut": pl.sun_cut, "n_snapshots_clean": len(snaps), "hour": rec,
     }
     (bdir / "provenance.json").write_text(json.dumps(prov, indent=1, default=str))
