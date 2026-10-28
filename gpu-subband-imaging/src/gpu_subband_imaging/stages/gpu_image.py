@@ -12,6 +12,7 @@ import logging
 import os
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional
 
@@ -42,7 +43,7 @@ class SnapshotDaemon:
         raise RuntimeError(f"GPU snapshot imager exited (rc={self._p.poll()})")
 
     def image(self, ms: Path, out_prefix: Path, geom: ImagingGeom, p: ImagingParams,
-              timings: Optional[Dict[str, float]] = None) -> List[Path]:
+              timings: Optional[Dict[str, float]] = None, retry: bool = True) -> List[Path]:
         """Image one MS; return [I image, V image] like stages.image.image."""
         req = dict(ms=str(ms), prefix=str(out_prefix), pixels=geom.pixels, scale=geom.scale,
                    niter=p.clean_niter)
@@ -57,6 +58,11 @@ class SnapshotDaemon:
             except (BrokenPipeError, RuntimeError):
                 self._p = None          # restart for the next snapshot
                 raise
+        if r.get("status") == "error" and "OutOfMemory" in r.get("error", "") and retry:
+            # the GPU is shared with the zest daemon, whose pool may peak at the same moment
+            log.warning("GPU snapshot imaging of %s ran out of memory; retrying once", ms)
+            time.sleep(2.0)
+            return self.image(ms, out_prefix, geom, p, timings, retry=False)
         if r.get("status") != "ok":
             raise RuntimeError(f"GPU snapshot imaging of {ms} failed: {r.get('error', r.get('status'))}")
         if timings is not None:

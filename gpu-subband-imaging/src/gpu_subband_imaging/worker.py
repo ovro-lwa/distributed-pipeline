@@ -435,6 +435,14 @@ class Worker:
         log.info("batch %sMHz/%d: wrote %d pilot QA rows to %s", self.band, self.batch,
                  len(self._qa), path)
 
+    def _zest_env(self) -> dict:
+        import os
+        env = dict(os.environ)
+        if getattr(self.cfg.pipeline.imaging, "imager", "wsclean") == "ttcalx":
+            # the GPU snapshot imager shares this GPU: make CUDA.jl hand cached memory back
+            env.setdefault("JULIA_CUDA_SOFT_MEMORY_LIMIT", "4GiB")
+        return env
+
     def _start_daemon(self) -> ZestDaemon:
         import os
         workers_dir = os.environ["GSI_WORKERS"]
@@ -442,7 +450,7 @@ class Worker:
             julia=f"{self.cfg.pipeline.env.julia_bin}/julia",
             project=self.cfg.pipeline.env.ttcalx,
             daemon_jl=str(Path(workers_dir) / "zest_daemon.jl"),
-            sources=self.cfg.pipeline.cal.sources, env=dict(os.environ),
+            sources=self.cfg.pipeline.cal.sources, env=self._zest_env(),
             zest_env={"ZEST_COLUMN": "DATA",
                       **self.cfg.pipeline.peel_for_band(self.band).daemon_env(
                           self.cfg.pipeline.cal.rfi_sources)})
