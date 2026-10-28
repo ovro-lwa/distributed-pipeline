@@ -7,15 +7,35 @@ answers with one stdout line "GSI_SNAP <json>".  One imager per process keeps th
 plans and w-term tables of the band's geometry.
 """
 import json
+import math
 import os
 import sys
 import traceback
 
 import cupy as cp
-from ttcalx_imager import bands, gridder
+from ttcalx_imager import bands, gridder, snapshot
 from ttcalx_imager.snapshot import SnapshotImager
 
 PREFIX = "GSI_SNAP "
+
+
+def reuse_svd(quantum, pool):
+    """snapshot.snapshot_svd with wmax rounded up to ``quantum`` lambda and one cached table.
+
+    The snapshot wmax drifts by ~0.25 lambda per 10 s at 82 MHz, so the stock 0.25-lambda key builds
+    a new table (1.5 s at 82 MHz) for nearly every snapshot.  A 2-lambda key reuses one for ~8
+    snapshots; the table still meets the SVD tolerance over the larger w range (images change by
+    ~0.01 sigma rms).  The previous table is dropped before a new one is built, so the GPU never
+    holds two."""
+    def svd(N, sc, wf, tol):
+        wq = math.ceil((float(wf) * 1.0001 + 1e-6) / quantum) * quantum
+        key = (N, round(sc, 12), round(wq, 3), tol, 600)
+        if key not in gridder._SVD_CACHE:
+            gridder._SVD_CACHE.clear()
+            pool.free_all_blocks()
+            gridder._SVD_CACHE[key] = gridder.SvdWTerm(N, sc, wq, tol, nw=600)
+        return gridder._SVD_CACHE[key]
+    return svd
 
 
 def main() -> int:
@@ -23,16 +43,20 @@ def main() -> int:
     # cached blocks back after every snapshot.
     pool = cp.get_default_memory_pool()
     pool.set_limit(size=int(float(os.environ.get("GSI_GPU_IMAGER_MEM_GB", "10")) * 1e9))
+    quantum = float(os.environ.get("GSI_SVD_QUANTUM", "0"))
+    if quantum > 0:
+        snapshot.snapshot_svd = reuse_svd(quantum, pool)
     im = SnapshotImager()
     print(PREFIX + json.dumps({"status": "ready"}), flush=True)
     for line in sys.stdin:
         if not line.strip():
             continue
         req = json.loads(line)
-        # gridder caches one w-term SVD table per snapshot w-range (0.25 lambda steps; several
-        # GB at 82 MHz) and snapshots rarely share one: drop it, or old + new tables overflow
-        gridder._SVD_CACHE.clear()
-        pool.free_all_blocks()
+        if quantum <= 0:
+            # gridder caches one w-term SVD table per snapshot w-range (0.25 lambda steps; several
+            # GB at 82 MHz) and snapshots rarely share one: drop it, or old + new tables overflow
+            gridder._SVD_CACHE.clear()
+            pool.free_all_blocks()
         try:
             params = bands.SNAPSHOT_CLEAN_I.with_(niter=int(req.get("niter", 50000)))
             info = im.image(req["ms"], N=bands.wsclean_size(int(req["pixels"])),
