@@ -24,10 +24,13 @@ class ZestDaemon:
         self._await("DAEMON_READY")
 
     def _await(self, token: str) -> None:
+        tail: list = []
         for line in self._p.stdout:                     # type: ignore[union-attr]
             if line.startswith(token):
                 return
-        raise RuntimeError("zest daemon exited before ready")
+            tail = (tail + [line.rstrip()])[-15:]
+        raise RuntimeError("zest daemon exited before ready (rc=%s):\n%s"
+                           % (self._p.wait(), "\n".join(tail)))
 
     def zest(self, ms: Path) -> float:
         """Peel one MS and return the daemon's elapsed time."""
