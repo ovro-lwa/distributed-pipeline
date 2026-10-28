@@ -12,7 +12,7 @@ import sys
 import traceback
 
 import cupy as cp
-from ttcalx_imager import bands
+from ttcalx_imager import bands, gridder
 from ttcalx_imager.snapshot import SnapshotImager
 
 PREFIX = "GSI_SNAP "
@@ -29,6 +29,10 @@ def main() -> int:
         if not line.strip():
             continue
         req = json.loads(line)
+        # gridder caches one w-term SVD table per snapshot w-range (0.25 lambda steps):
+        # keep the newest few, or a long-lived process fills the GPU
+        while len(gridder._SVD_CACHE) > 4:
+            gridder._SVD_CACHE.pop(next(iter(gridder._SVD_CACHE)))
         try:
             params = bands.SNAPSHOT_CLEAN_I.with_(niter=int(req.get("niter", 50000)))
             info = im.image(req["ms"], N=bands.wsclean_size(int(req["pixels"])),
