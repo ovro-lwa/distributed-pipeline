@@ -213,6 +213,23 @@ main pipeline's layout:
   with `hour_imaging.delete_kept_ms`.
 - Worker logs: `<output_root>/_logs/<date>/<run_label>/<band>MHz/`.
 
+Streaming and node-local data (`pipeline.yaml`, all off by default):
+
+```yaml
+stream_hour_images: true     # a band-hour's hour job starts as soon as its batches are done
+wideband_per_hour: true      # wideband_summary.py per LST hour once its band-hours are imaged
+keep_ms_local: /fast/pipeline/gsi_v2/_kept_ms   # peeled MSes stay on the node (NVMe) ...
+keep_ms_local_min_free_gb: 100                  # ... falling back to keep_ms_root below this
+calcache_cleanup: none       # keep node calibration caches for the night (cleanup-nodes after)
+prep: numpy                  # flag + applycal in one casacore pass (stages/fastcal.py), ~2x faster
+```
+
+With `keep_ms_local` a band-hour's batches and its hour job run on one node, which
+holds its MSes until the hour job deletes them. `gsi cleanup-nodes --config ...` (run by
+`run_nightly_lst.py` after the night) removes the calibration caches and moves MSes left by
+failed hour jobs to `keep_ms_root`, where `gsi hour-image` can rerun them. In the ledger an
+hour job is the row `(band, -1000 - <LST hour>)`.
+
 Nightly, as the data arrive (newest bandpass at each launch, one run label per night):
 
 ```bash
