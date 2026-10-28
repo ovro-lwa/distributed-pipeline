@@ -422,7 +422,16 @@ class Worker:
                         daemon = self._start_daemon()
                     try:
                         t0 = time.perf_counter()
-                        daemon.zest(avg)
+                        try:
+                            daemon.zest(avg)
+                        except RuntimeError as e:
+                            # the GPU is shared with the snapshot imager, whose peak may coincide;
+                            # a failed zest leaves the MS unchanged (it is written at the end)
+                            if "out of gpu memory" not in str(e).lower():
+                                raise
+                            log.warning("zest %s ran out of GPU memory; retrying once", stamp)
+                            time.sleep(5.0)
+                            daemon.zest(avg)
                         n_zested += 1
                         log.info("timing %sMHz batch%d stamp=%s phase=zest elapsed=%.2f s",
                                  self.band, self.batch, stamp, time.perf_counter() - t0)
