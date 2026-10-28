@@ -29,10 +29,10 @@ def main() -> int:
         if not line.strip():
             continue
         req = json.loads(line)
-        # gridder caches one w-term SVD table per snapshot w-range (0.25 lambda steps; up to
-        # ~1 GB each): keep only the last, or a long-lived process fills the GPU
-        while len(gridder._SVD_CACHE) > 1:
-            gridder._SVD_CACHE.pop(next(iter(gridder._SVD_CACHE)))
+        # gridder caches one w-term SVD table per snapshot w-range (0.25 lambda steps; several
+        # GB at 82 MHz) and snapshots rarely share one: drop it, or old + new tables overflow
+        gridder._SVD_CACHE.clear()
+        pool.free_all_blocks()
         try:
             params = bands.SNAPSHOT_CLEAN_I.with_(niter=int(req.get("niter", 50000)))
             info = im.image(req["ms"], N=bands.wsclean_size(int(req["pixels"])),
