@@ -169,7 +169,7 @@ def _git_rev(path: str) -> str:
 
 def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> Dict:
     from . import hour_image
-    from .metadata import _code_revision
+    from .metadata import _code_revision, software_versions
     from .stages import movie
 
     pl, h = cfg.pipeline, cfg.pipeline.hour_imaging
@@ -263,6 +263,7 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
         "rfi_model": pl.cal.rfi_sources if pl.peel_for_band(band).rfi else None,
         "peel": vars(pl.peel_for_band(band)), "imaging": vars(pl.imaging),
         "hour_imaging": {"products": list(h.products), "imager": h.ttcalx_image},
+        "software": software_versions(cfg),
         "sun_cut": pl.sun_cut, "n_snapshots_clean": len(snaps), "hour": rec,
     }
     (bdir / "provenance.json").write_text(json.dumps(prov, indent=1, default=str))
