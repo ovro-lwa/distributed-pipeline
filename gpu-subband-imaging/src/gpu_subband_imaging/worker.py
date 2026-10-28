@@ -386,7 +386,8 @@ class Worker:
         if getattr(self.cfg.pipeline, 'do_badants', True):
             t0 = time.perf_counter()
             cal = self.cfg.pipeline.cal
-            fixed = cal.badants_for(self.band) if hasattr(cal, "badants_for") else None
+            fixed = (cal.badants_for(self.band, self.group(_stamp(todo[0])))   # batches stay in one hour
+                     if hasattr(cal, "badants_for") else None)
             if fixed is not None:          # e.g. the list a previous run used (re-runs)
                 self._badants = fixed
             else:

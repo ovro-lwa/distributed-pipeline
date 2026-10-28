@@ -189,6 +189,9 @@ class PeelParams:
     # comma list of passes ("sky", "sky,rfi") whose gains the daemon writes beside each MS
     # (stages/peel_solutions.py; merged per band-hour into <band dir>/peeling_solutions/)
     save_solutions: str = ""
+    # sky sources solved with one gain per antenna for the whole band instead of per channel
+    # (comma list of names or "*"; fewer free parameters, so less flux taken from other sources)
+    wideband_sources: str = ""
 
     def __post_init__(self) -> None:
         if any(p not in ("sky", "rfi") for p in self.solution_passes):
@@ -304,12 +307,15 @@ class CalTables:
     sources: str
     aoflagger_strategy: str
     rfi_sources: Optional[str] = None     # RFI model for peel.rfi (TTCal JSON)
-    # fixed bad correlator numbers (CSV, or {band: CSV}) instead of the live MNC anthealth
-    # lookup, which answers with the current list (re-runs use the list the original run flagged)
-    badants: Optional[Union[str, Dict[int, str]]] = None
+    # fixed bad correlator numbers (CSV, or {band: CSV} / {"<LST>h/<band>": CSV}) instead of the
+    # live MNC anthealth lookup, which answers with the current list (re-runs use the list the
+    # original run flagged)
+    badants: Optional[Union[str, Dict[Union[int, str], str]]] = None
 
-    def badants_for(self, band: int) -> Optional[str]:
+    def badants_for(self, band: int, group: Optional[str] = None) -> Optional[str]:
         if isinstance(self.badants, dict):
+            if group is not None and f"{group}/{band}" in self.badants:
+                return self.badants[f"{group}/{band}"]
             return self.badants.get(band)
         return self.badants
 
@@ -432,7 +438,7 @@ def _badants(v):
     if v is None:
         return None
     if isinstance(v, dict):
-        return {int(b): str(csv) for b, csv in v.items()}
+        return {(int(k) if str(k).isdigit() else str(k)): str(csv) for k, csv in v.items()}
     return str(v)
 
 

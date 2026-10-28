@@ -72,6 +72,11 @@ reg_offset = envf("ZEST_REG_MAX_OFFSET_DEG", 0.0)
 reg_taper = envf("ZEST_REG_TAPER_DEG", 1.0)
 reg_lambda = envf("ZEST_REG_LAMBDA", 1.0)
 save_passes = Set(filter(!isempty, strip.(split(lowercase(get(ENV, "ZEST_SAVE_SOLUTIONS", "")), ","))))
+# sky sources solved with band-wide gains: comma list of names, or * for all (RFI sources never)
+wideband_names = Set(filter(!isempty, strip.(split(get(ENV, "ZEST_WIDEBAND_SOURCES", ""), ","))))
+is_wideband_dir(name) = !isempty(wideband_names) && ("*" in wideband_names || name in wideband_names)
+!isempty(wideband_names) && reg_offset > 0 &&
+    error("ZEST_WIDEBAND_SOURCES with ZEST_REG_MAX_OFFSET_DEG > 0 is not supported (one prior per channel)")
 
 # The original code path (gpu_stefcal!, kernel model, MS UVW, GPU) needs no new
 # TTCalX API, so the defaults also run with older TTCalX versions.
@@ -152,7 +157,9 @@ end
 """Write one pass's final gains and per-source status to <sol_dir>/<pass>.{bin,tsv}."""
 function write_solutions(sol_dir, pass, indices, names, elevations, accepted, converged,
                          niters, calibrations)
-    nant, nfreq = size(calibrations[1].xx)
+    # a wideband calibration (nant x 1) is written repeated over the channels
+    nant = size(calibrations[1].xx, 1)
+    nfreq = maximum(size(c.xx, 2) for c in calibrations)
     gains = Array{ComplexF32}(undef, length(calibrations), 4, nant, nfreq)
     for (s, cal) in enumerate(calibrations), (j, f) in enumerate((:xx, :xy, :yx, :yy))
         gains[s, j, :, :] .= Array(getfield(cal, f))
@@ -195,8 +202,12 @@ function safe_zest!(vis, meta, catalog_sources, mjd; pass="sky", sol_dir="")
     reg = reg_offset > 0 ?
         phase_regularization(meta, reg_offset, reg_taper; lambda=reg_lambda, gpu=use_gpu) : nothing
     peel_sources = [GPUZestingSource(source) for source in selected_sources]
+    # wideband directions: one full-Jones gain per antenna for the whole band (TTCalX's
+    # pruning calibration) instead of one per channel -- far fewer free parameters
     calibrations = [
-        calibration_type(source, meta.Nant, meta.Nfreq; gpu=use_gpu)
+        is_wideband_dir(get_name(source)) ?
+            calibration_type(GPUPruningSource(unwrap(source)), meta.Nant, meta.Nfreq; gpu=use_gpu) :
+            calibration_type(source, meta.Nant, meta.Nfreq; gpu=use_gpu)
         for source in peel_sources
     ]
     coherencies = GPUVisibilities[]

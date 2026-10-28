@@ -283,7 +283,7 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
         "hour_imaging": {"products": list(h.products), "imager": h.ttcalx_image,
                          "v_qa_excludes_snapshots": h.qa_exclude},
         "data_root": pl.data_root, "chanbin": pl.chanbin, "description": pl.description,
-        "bad_antennas": (pl.cal.badants_for(band) if pl.cal.badants_for(band) is not None
+        "bad_antennas": (pl.cal.badants_for(band, group) if pl.cal.badants_for(band, group) is not None
                          else "MNC anthealth at run time (worker log 'bad antennas')"),
         "peeling_solutions": sol_files,
         "software": software_versions(cfg),

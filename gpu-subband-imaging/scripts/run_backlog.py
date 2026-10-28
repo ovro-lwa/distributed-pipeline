@@ -62,10 +62,11 @@ def load_badants(json_dir: str) -> Dict[str, Counter]:
     return out
 
 
-def write_backlog_config(template: Path, out_dir: Path, date: str, hour: int, run_label: str,
-                         bp: str, bands: List[int], badants: Optional[Dict[int, str]],
-                         note: str) -> Path:
-    cfg = write_config(template, out_dir, date, [hour], run_label, bp)
+def write_backlog_config(template: Path, out_dir: Path, date: str, hours, run_label: str,
+                         bp: str, bands: List[int], badants: Optional[Dict], note: str) -> Path:
+    """hours: one LST hour or a list; badants keyed by band or "<LST>h/<band>"."""
+    hours = [hours] if isinstance(hours, int) else list(hours)
+    cfg = write_config(template, out_dir, date, hours, run_label, bp)
     d = yaml.safe_load((cfg / "pipeline.yaml").read_text())
     d["bands"] = bands
     if badants is not None:
@@ -101,6 +102,8 @@ def main(argv=None) -> int:
     ap.add_argument("--stop-utc", default="05:30", help="no run may end after this (nightly needs the cluster)")
     ap.add_argument("--resume-utc", default="15:00", help="earliest start after the nightly run")
     ap.add_argument("--run-minutes", type=float, default=60.0, help="expected wall time of one LST hour")
+    ap.add_argument("--hours-per-run", type=int, default=1,
+                    help="LST hours of one date per gsi run (more jobs than GPU slots pack better)")
     ap.add_argument("--ignore-window", action="store_true")
     ap.add_argument("--no-run", action="store_true", help="print the plan and the first config only")
     ap.add_argument("--lock-path")
@@ -162,38 +165,61 @@ def main(argv=None) -> int:
                   + (f"; several logged lists (most common used) for {multi}" if multi else ""),
                   flush=True)
             plan.append((date, h, bp, bands, ba if a.badants_dir else None, note))
+    groups = group_plan(plan, a.hours_per_run)
     if a.no_run:
-        if plan:
-            date, h, bp, bands, ba, note = plan[0]
-            cfg = write_backlog_config(template, Path(a.output_config), date, h, a.run_label, bp,
-                                       bands, ba, note)
+        if groups:
+            cfg = write_group_config(template, Path(a.output_config), a.run_label, groups[0])
             print((cfg / "pipeline.yaml").read_text(), flush=True)
         return 0
 
-    for date, h, bp, bands, ba, note in plan:
+    for k, grp in enumerate(groups):
+        date, hours = grp[0][0], [g[1] for g in grp]
+        label = "+".join(f"{h:02d}h" for h in hours)
         now = datetime.now(timezone.utc)
-        if not a.ignore_window and not may_start(now, a.stop_utc, a.resume_utc, a.run_minutes):
+        if not a.ignore_window and not may_start(now, a.stop_utc, a.resume_utc,
+                                                 a.run_minutes * len(hours)):
             print(f"{now:%H:%M} UTC: not enough time before {a.stop_utc} UTC (or inside "
-                  f"{a.stop_utc}-{a.resume_utc}); stopping, {len(plan)} hour(s) left in the plan",
+                  f"{a.stop_utc}-{a.resume_utc}); stopping, {len(groups) - k} run(s) left in the plan",
                   flush=True)
             return 0
-        cfg = write_backlog_config(template, Path(a.output_config), date, h, a.run_label, bp,
-                                   bands, ba, note)
+        cfg = write_group_config(template, Path(a.output_config), a.run_label, grp)
         with open(lock_path, "a+") as lock:
-            print(f"{now:%H:%M:%S} {date} LST {h:02d}h: waiting for cluster lock {lock_path}", flush=True)
+            print(f"{now:%H:%M:%S} {date} LST {label}: waiting for cluster lock {lock_path}", flush=True)
             fcntl.flock(lock, fcntl.LOCK_EX)
             t0 = time.time()
             rc = run_gsi(cfg, log_dir / f"backlog_{a.run_label}_{date}.log")
             fcntl.flock(lock, fcntl.LOCK_UN)
-        print(f"{datetime.now(timezone.utc):%H:%M:%S} {date} LST {h:02d}h rc={rc} in {time.time() - t0:.0f} s",
+        print(f"{datetime.now(timezone.utc):%H:%M:%S} {date} LST {label} rc={rc} in {time.time() - t0:.0f} s",
               flush=True)
         if rc == 0:
-            state["done"].setdefault(date, []).append(h)
-        state["runs"].append(dict(date=date, lst=h, rc=rc, bp=bp, start=now.isoformat(),
+            state["done"].setdefault(date, []).extend(hours)
+        state["runs"].append(dict(date=date, lst=hours, rc=rc, bp=grp[0][2], start=now.isoformat(),
                                   wall_s=time.time() - t0))
         state_path.parent.mkdir(parents=True, exist_ok=True)
         state_path.write_text(json.dumps(state, indent=1))
     return 0
+
+
+def group_plan(plan, n: int):
+    """Consecutive hours of one date with the same bands, at most n per run."""
+    groups = []
+    for item in plan:
+        last = groups[-1] if groups else None
+        if (last and len(last) < n and last[0][0] == item[0] and last[0][3] == item[3]):
+            last.append(item)
+        else:
+            groups.append([item])
+    return groups
+
+
+def write_group_config(template: Path, out_dir: Path, run_label: str, grp) -> Path:
+    date, bp, bands = grp[0][0], grp[0][2], grp[0][3]
+    hours = [g[1] for g in grp]
+    ba = None
+    if grp[0][4] is not None:
+        ba = {f"{g[1]:02d}h/{band}": csv for g in grp for band, csv in g[4].items()}
+    note = " ".join(g[5] for g in grp)
+    return write_backlog_config(template, out_dir, date, hours, run_label, bp, bands, ba, note)
 
 
 if __name__ == "__main__":

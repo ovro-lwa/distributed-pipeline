@@ -89,3 +89,18 @@ def test_badants_per_band():
     assert per.badants_for(55) == "1,2" and per.badants_for(82) == "3" and per.badants_for(18) is None
     assert CalTables("bp", "xy", "s", "ao", badants=_badants("4,5")).badants_for(18) == "4,5"
     assert CalTables("bp", "xy", "s", "ao").badants_for(18) is None
+
+
+def test_badants_per_hour_and_band_and_grouping():
+    import importlib.util
+    from gpu_subband_imaging.config import CalTables, _badants
+    c = CalTables("bp", "xy", "s", "ao", badants=_badants({"05h/55": "1", "06h/55": "2", 82: "3"}))
+    assert c.badants_for(55, "05h") == "1" and c.badants_for(55, "06h") == "2"
+    assert c.badants_for(82, "05h") == "3" and c.badants_for(55) is None
+    spec = importlib.util.spec_from_file_location(
+        "run_backlog", Path(__file__).resolve().parents[1] / "scripts" / "run_backlog.py")
+    rb = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rb)
+    plan = [("d1", 1, "bp", [18, 55], {}, ""), ("d1", 2, "bp", [18, 55], {}, ""),
+            ("d1", 3, "bp", [18, 55], {}, ""), ("d1", 4, "bp", [55], {}, ""), ("d2", 1, "bp", [55], {}, "")]
+    assert [[g[1] for g in grp] for grp in rb.group_plan(plan, 2)] == [[1, 2], [3], [4], [1]]
