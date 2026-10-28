@@ -189,6 +189,9 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
     rows = read_stats(qa_dir)
     bad_ts, rec["qa"] = write_qa(qa_dir, band, rows)
     exclude = [i for i, s in enumerate(stamps) if lst.timestamp(s) in bad_ts]
+    rec["qa"]["rejected_by_v_qa"] = len(exclude)
+    if not h.qa_exclude:            # QA table written, but every snapshot goes into the products
+        exclude = []
     rec["qa"]["excluded_from_hour"] = len(exclude)
     rec["timing_s"] = {"qa": time.perf_counter() - t0}
     log.info("hour %sMHz %s: %d kept MSes, QA %s", band, group, len(ms), rec["qa"])
@@ -249,7 +252,22 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
             log.error("movie %sMHz %s failed: %s", band, group, e)
         rec["timing_s"]["movie"] = time.perf_counter() - t0
 
-    # 5. provenance, kept MSes
+    # 5. peeling solutions of the band-hour (stay beside the kept MSes if merging fails)
+    sol_files: List[str] = []
+    solutions_merged = True
+    if pl.peel_for_band(band).solution_passes and ms:
+        from .stages import peel_solutions
+        t0 = time.perf_counter()
+        try:
+            sol_files = [str(p) for p in peel_solutions.merge_band_hour(
+                ms, bdir / "peeling_solutions", f"{band}MHz_{pl.date}_{group}")]
+        except Exception as e:
+            solutions_merged = False
+            log.error("peeling solutions %sMHz %s not merged: %s", band, group, e)
+        rec["timing_s"]["peel_solutions"] = time.perf_counter() - t0
+        rec["peel_solutions"] = sol_files
+
+    # 6. provenance, kept MSes
     rec["timing_s"]["total"] = time.perf_counter() - t_all
     snaps = sorted((bdir / "snapshots_clean").glob("*.fits.fz")) if (bdir / "snapshots_clean").is_dir() else []
     prov = {
@@ -262,7 +280,10 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
         "bp_table": pl.cal.bp, "xy_table": pl.cal.xy, "sky_model": pl.cal.sources,
         "rfi_model": pl.cal.rfi_sources if pl.peel_for_band(band).rfi else None,
         "peel": vars(pl.peel_for_band(band)), "imaging": vars(pl.imaging),
-        "hour_imaging": {"products": list(h.products), "imager": h.ttcalx_image},
+        "hour_imaging": {"products": list(h.products), "imager": h.ttcalx_image,
+                         "v_qa_excludes_snapshots": h.qa_exclude},
+        "data_root": pl.data_root, "chanbin": pl.chanbin, "description": pl.description,
+        "peeling_solutions": sol_files,
         "sun_cut": pl.sun_cut, "n_snapshots_clean": len(snaps), "hour": rec,
     }
     (bdir / "provenance.json").write_text(json.dumps(prov, indent=1, default=str))
@@ -271,7 +292,7 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
              band, group, rec["timing_s"]["total"], rc, len(ms))
     if rc != 0:
         raise RuntimeError(f"ttcalx-image hour failed for {band}MHz {group} (rc={rc})")
-    if ms and h.delete_kept_ms:
+    if ms and h.delete_kept_ms and solutions_merged:
         for kd in hour_image.kept_dirs(cfg, band, group):
             if kd.is_dir():
                 shutil.rmtree(kd, ignore_errors=True)

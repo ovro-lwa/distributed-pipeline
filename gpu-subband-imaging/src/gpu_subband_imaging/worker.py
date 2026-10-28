@@ -16,8 +16,8 @@ from typing import List, Optional, Tuple
 
 from . import lst
 from .config import Config
-from .stages import (average, calibrate, compress, fastcal, flag, image, movie, quality,
-                     stage_ms, uvw)
+from .stages import (average, calibrate, compress, fastcal, flag, image, movie, peel_solutions,
+                     quality, stage_ms, uvw)
 from .stages.peel import ZestDaemon
 
 log = logging.getLogger("gsi.worker")
@@ -31,8 +31,9 @@ def _mjd(stamp: str) -> float:
 
 
 def _stamp(input_path: str) -> str:
+    """<date>_<time>_<band>MHz of a raw (.ms.tar / .ms) or night-time averaged (_averaged.ms) input."""
     name = Path(input_path).name
-    for suffix in (".ms.tar", ".ms"):
+    for suffix in ("_averaged.ms", ".ms.tar", ".ms"):
         if name.endswith(suffix):
             return name[:-len(suffix)]
     raise ValueError(f"unsupported measurement-set input: {input_path}")
@@ -173,7 +174,11 @@ class Worker:
                 t0 = time.perf_counter()
                 fastcal.flag_calibrate(ms, self._bp, self._xy, self._badants)
                 t1 = time.perf_counter()
-                avg = fastcal.average(ms, d / f"{stamp}_avg.ms", self.cfg.pipeline.chanbin)
+                if self.cfg.pipeline.chanbin == 1:      # input already averaged (night-time backlog)
+                    avg = d / f"{stamp}_avg.ms"
+                    ms.rename(avg)
+                else:
+                    avg = fastcal.average(ms, d / f"{stamp}_avg.ms", self.cfg.pipeline.chanbin)
                 log.info("timing %sMHz batch%d stamp=%s phase=flag_cal elapsed=%.2f s",
                          self.band, self.batch, stamp, t1 - t0)
                 log.info("timing %sMHz batch%d stamp=%s phase=average elapsed=%.2f s",
@@ -302,12 +307,30 @@ class Worker:
                      self.band, self.batch, stamp, f.name, time.perf_counter() - t0)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(fz), str(target.parent / fz.name))
+        sols = None
+        if self.cfg.pipeline.peel_for_band(self.band).solution_passes:
+            t0 = time.perf_counter()
+            sols = self.work / stamp / f"{stamp}.peelsol"
+            files = peel_solutions.convert(Path(f"{avg}.peelsol"), avg, sols, self._solution_meta())
+            log.info("timing %sMHz batch%d stamp=%s phase=peel_solutions elapsed=%.2f s files=%d",
+                     self.band, self.batch, stamp, time.perf_counter() - t0, len(files))
         if self.cfg.pipeline.keep_ms_root or getattr(self.cfg.pipeline, "keep_ms_local", None):
             t0 = time.perf_counter()
             kept = self.keep_ms(stamp, avg)
+            if sols is not None and sols.is_dir():
+                dst = peel_solutions.sol_name(kept)
+                shutil.rmtree(dst, ignore_errors=True)
+                shutil.move(str(sols), str(dst))
             log.info("timing %sMHz batch%d stamp=%s phase=keep_ms elapsed=%.2f s dst=%s",
                      self.band, self.batch, stamp, time.perf_counter() - t0, kept)
         shutil.rmtree(self.work / stamp, ignore_errors=True)
+
+    def _solution_meta(self) -> dict:
+        pl = self.cfg.pipeline
+        return dict(band=f"{self.band}MHz", date=pl.date, run_label=pl.run_label,
+                    sky_model=pl.cal.sources, rfi_model=pl.cal.rfi_sources,
+                    bp_table=pl.cal.bp, xy_table=pl.cal.xy,
+                    peel=vars(pl.peel_for_band(self.band)))
 
     def keep_root(self) -> str:
         """keep_ms_local while it has keep_ms_local_min_free_gb free, else keep_ms_root."""

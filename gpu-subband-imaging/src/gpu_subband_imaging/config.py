@@ -186,8 +186,13 @@ class PeelParams:
     flag_zero: bool = False           # flag XX == YY == 0 samples before peeling
     residual_guard: bool = False      # TTCalX guarded_zest!: keep an update only if it lowers the residual
     backstop: bool = False            # undo a whole sky/RFI pass that raises the residual
+    # comma list of passes ("sky", "sky,rfi") whose gains the daemon writes beside each MS
+    # (stages/peel_solutions.py; merged per band-hour into <band dir>/peeling_solutions/)
+    save_solutions: str = ""
 
     def __post_init__(self) -> None:
+        if any(p not in ("sky", "rfi") for p in self.solution_passes):
+            raise ConfigError(f"peel.save_solutions must list sky and/or rfi, got {self.save_solutions!r}")
         choices = {"solver": ("damped", "rk4"), "model": ("kernels", "exact"),
                    "uvw": ("ms", "geometric"), "rfi_mode": ("after", "joint"),
                    "device": ("gpu", "cpu")}
@@ -208,6 +213,10 @@ class PeelParams:
                 raise ConfigError("peel.rfi is true but cal.rfi_sources is not set")
             opts["rfi_sources"] = rfi_sources
         return {f"ZEST_{k.upper()}": str(v) for k, v in opts.items()}
+
+    @property
+    def solution_passes(self) -> List[str]:
+        return [p.strip() for p in self.save_solutions.split(",") if p.strip()]
 
 
 @dataclass(frozen=True)
@@ -269,6 +278,9 @@ class HourImagingParams:
     env: Dict[str, str] = field(default_factory=dict)
     timeout_seconds: Optional[int] = None
     delete_kept_ms: bool = False        # remove a band-hour's kept MSes after it imaged successfully
+    # leave the snapshots the pilot Stokes V QA rejects out of the hour products; false keeps
+    # them (the QA table is still written)
+    qa_exclude: bool = True
 
 
 @dataclass(frozen=True)
@@ -365,8 +377,16 @@ class PipelineConfig:
     # (stages/fastcal.py), without writing CORRECTED_DATA.
     prep: str = "casa"
     max_files_per_hour: Optional[int] = None    # testing: first N snapshots of each hour
+    description: str = ""               # free text copied into provenance.json (what this run is)
 
     def __post_init__(self) -> None:
+        if self.chanbin < 1:
+            raise ConfigError("chanbin must be >= 1 (1 = inputs already averaged)")
+        if self.chanbin == 1 and self.do_aoflag:
+            raise ConfigError("chanbin 1 (no averaging) needs do_aoflag false")
+        peels = [self.peel, *(self.peel_overrides or {}).values()]
+        if any(getattr(p, "solution_passes", None) for p in peels) and not self.keep_ms_root:
+            raise ConfigError("peel.save_solutions needs keep_ms_root (solutions travel with the kept MS)")
         if self.fix_uvw not in FIX_UVW_MODES:
             raise ConfigError(f"fix_uvw must be one of {FIX_UVW_MODES}, got {self.fix_uvw!r}")
         if self.layout not in ("utc", "lst"):
@@ -448,6 +468,7 @@ def load_pipeline(path: Union[str, Path]) -> PipelineConfig:
         prep=str(d.get("prep", "casa")),
         max_files_per_hour=(int(d["max_files_per_hour"])
                             if d.get("max_files_per_hour") else None),
+        description=str(d.get("description", "")),
     )
 
 
