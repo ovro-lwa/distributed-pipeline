@@ -61,6 +61,15 @@ class Worker:
         self._xy = pl.cal.xy
         self._lst: dict = {}
         self._qa: List[dict] = []      # pilot V statistics of this batch (layout=lst)
+        self._gpu_imager = None        # stages.gpu_image.SnapshotDaemon with imaging.imager=ttcalx
+
+    def _start_gpu_imager(self):
+        from .stages import gpu_image
+        p, h = self.cfg.pipeline.imaging, self.cfg.pipeline.hour_imaging
+        python = p.gpu_python or str(Path(h.ttcalx_image).parent / "python")
+        extra = {k: v for k, v in h.env.items() if k == "CUPY_CACHE_DIR"}
+        extra.update(p.gpu_env)
+        return gpu_image.start(python, extra_env=extra)
 
     # -- layout ------------------------------------------------------------------
     # layout=utc keys everything by the UTC hour of the stamp, layout=lst by its
@@ -242,8 +251,12 @@ class Worker:
             shutil.copytree(str(avg), str(src))
             image.chgcentre(src, lst.phase_centre(self.lst_hour(stamp)), self.cfg.pipeline.chgcentre)
             steps["chgcentre"] = time.perf_counter() - t1
-        fits_files = image.image(src, prefix, self.geom, self.cfg.pipeline.imaging,
-                                 self.cfg.cluster.wsclean_threads, timings=steps)
+        if self._gpu_imager is not None:
+            fits_files = self._gpu_imager.image(src, prefix, self.geom, self.cfg.pipeline.imaging,
+                                                timings=steps)
+        else:
+            fits_files = image.image(src, prefix, self.geom, self.cfg.pipeline.imaging,
+                                     self.cfg.cluster.wsclean_threads, timings=steps)
         if src != avg:
             shutil.rmtree(src, ignore_errors=True)
         for name, dt in steps.items():
@@ -356,6 +369,8 @@ class Worker:
                      len(self._badants.split(",")) if self._badants else 0,
                      time.perf_counter() - t0)
         daemon = self._start_daemon()  # Julia JIT overlaps preprocessing.
+        if getattr(self.cfg.pipeline.imaging, "imager", "wsclean") == "ttcalx":
+            self._gpu_imager = self._start_gpu_imager()   # started at the first snapshot
         n_ok, n_fail = 0, 0
         try:
             with ThreadPoolExecutor(max_workers=self.cfg.cluster.max_feeders) as pool, \
@@ -368,7 +383,8 @@ class Worker:
                     if not r:
                         continue
                     stamp, avg = r
-                    if n_zested and n_zested % 25 == 0:
+                    recycle = getattr(self.cfg.cluster, "zest_recycle_files", 25)
+                    if recycle and n_zested and n_zested % recycle == 0:
                         # Recycling avoids a repeatable CUDA stall near file 31.
                         log.info("batch %sMHz/%d: recycling zest daemon after %d files",
                                  self.band, self.batch, n_zested)
@@ -395,6 +411,8 @@ class Worker:
                         n_fail += 1
         finally:
             daemon.close()
+            if self._gpu_imager is not None:
+                self._gpu_imager.close()
             shutil.rmtree(self.work, ignore_errors=True)
             self._write_qa_stats()
         log.info("batch %sMHz/%d: total elapsed %.2f s for %d files (%d failed)",

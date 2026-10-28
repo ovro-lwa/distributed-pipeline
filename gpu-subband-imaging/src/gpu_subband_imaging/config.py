@@ -79,6 +79,7 @@ class ClusterConfig:
     work_root: str
     nodes: List[NodeSpec]
     archive_workers: int = 1          # parallel image+archive threads per GPU slot
+    zest_recycle_files: int = 25      # restart the zest daemon after this many files (0 = never)
 
     def slots(self) -> List["Slot"]:
         return [Slot(n.alias, g) for n in self.nodes if not n.skip
@@ -111,6 +112,7 @@ def load_cluster(path: Union[str, Path]) -> ClusterConfig:
         work_root=dfl.get("work_root", "/fast/pipeline/gpu_peel"),
         nodes=nodes,
         archive_workers=int(dfl.get("archive_workers", 1)),
+        zest_recycle_files=int(dfl.get("zest_recycle_files", 25)),
     )
 
 
@@ -232,10 +234,20 @@ class ImagingParams:
     dirty_mem: int = 20
     abs_mem: Optional[float] = None     # WSClean -abs-mem [GB] (caps -mem on busy nodes)
     retries: int = 0                    # re-run a failed WSClean call this many times
+    # wsclean: CPU WSClean runs; ttcalx: the same CLEAN I + dirty V on the worker's GPU
+    # (stages/gpu_image.py, needs mode=clean) with the ttcalx_imager venv's python
+    # (default: beside hour_imaging.ttcalx_image)
+    imager: str = "wsclean"
+    gpu_python: Optional[str] = None
+    gpu_env: Dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.mode not in ("dirty", "clean"):
             raise ConfigError(f"imaging.mode must be 'dirty' or 'clean', got {self.mode!r}")
+        if self.imager not in ("wsclean", "ttcalx"):
+            raise ConfigError(f"imaging.imager must be 'wsclean' or 'ttcalx', got {self.imager!r}")
+        if self.imager == "ttcalx" and self.mode != "clean":
+            raise ConfigError("imaging.imager=ttcalx needs imaging.mode=clean")
 
 
 @dataclass(frozen=True)
