@@ -81,3 +81,11 @@ def test_backlog_window():
     assert rb.may_start(t(4, 0), "05:30", "15:00", 60)
     assert not rb.may_start(t(4, 45), "05:30", "15:00", 60)     # would run into the nightly
     assert not rb.may_start(t(9, 0), "05:30", "15:00", 60)      # nightly hours
+
+
+def test_badants_per_band():
+    from gpu_subband_imaging.config import CalTables, _badants
+    per = CalTables("bp", "xy", "s", "ao", badants=_badants({"55": "1,2", 82: "3"}))
+    assert per.badants_for(55) == "1,2" and per.badants_for(82) == "3" and per.badants_for(18) is None
+    assert CalTables("bp", "xy", "s", "ao", badants=_badants("4,5")).badants_for(18) == "4,5"
+    assert CalTables("bp", "xy", "s", "ao").badants_for(18) is None

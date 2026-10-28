@@ -385,7 +385,8 @@ class Worker:
                  self.band, self.batch, time.perf_counter() - t0)
         if getattr(self.cfg.pipeline, 'do_badants', True):
             t0 = time.perf_counter()
-            fixed = getattr(self.cfg.pipeline.cal, "badants", None)
+            cal = self.cfg.pipeline.cal
+            fixed = cal.badants_for(self.band) if hasattr(cal, "badants_for") else None
             if fixed is not None:          # e.g. the list a previous run used (re-runs)
                 self._badants = fixed
             else:

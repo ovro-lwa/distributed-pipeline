@@ -304,9 +304,14 @@ class CalTables:
     sources: str
     aoflagger_strategy: str
     rfi_sources: Optional[str] = None     # RFI model for peel.rfi (TTCal JSON)
-    # fixed bad correlator numbers (CSV) instead of the live MNC anthealth lookup, which
-    # answers with the current list (re-runs use the list the original run flagged)
-    badants: Optional[str] = None
+    # fixed bad correlator numbers (CSV, or {band: CSV}) instead of the live MNC anthealth
+    # lookup, which answers with the current list (re-runs use the list the original run flagged)
+    badants: Optional[Union[str, Dict[int, str]]] = None
+
+    def badants_for(self, band: int) -> Optional[str]:
+        if isinstance(self.badants, dict):
+            return self.badants.get(band)
+        return self.badants
 
 
 @dataclass(frozen=True)
@@ -423,6 +428,14 @@ class PipelineConfig:
         return self.peel_overrides.get(band, self.peel)
 
 
+def _badants(v):
+    if v is None:
+        return None
+    if isinstance(v, dict):
+        return {int(b): str(csv) for b, csv in v.items()}
+    return str(v)
+
+
 def load_pipeline(path: Union[str, Path]) -> PipelineConfig:
     d = yaml.safe_load(Path(path).read_text())
     cal = _require(d, "cal", "pipeline.yaml")
@@ -447,7 +460,7 @@ def load_pipeline(path: Union[str, Path]) -> PipelineConfig:
                       sources=_require(cal, "sources", "cal"),
                       aoflagger_strategy=_require(cal, "aoflagger_strategy", "cal"),
                       rfi_sources=cal.get("rfi_sources"),
-                      badants=(str(cal["badants"]) if cal.get("badants") is not None else None)),
+                      badants=_badants(cal.get("badants"))),
         peel=peel,
         peel_overrides=peel_overrides,
         imaging=ImagingParams(**d.get("imaging", {})),

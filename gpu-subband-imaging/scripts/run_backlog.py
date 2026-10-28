@@ -44,15 +44,17 @@ def exopipe_hours(root: str, date: str) -> List[int]:
     return sorted(int(p.parent.name[:-1]) for p in Path(root).glob(f"*h/{date}") if p.is_dir())
 
 
-def exopipe_run(root: str, date: str, hour: int) -> Optional[str]:
-    """Newest exopipe phase1 run label of an LST hour (the products a re-run is compared with)."""
-    runs = sorted(p.name for p in Path(root, f"{hour:02d}h", date).glob("Run_*") if p.is_dir())
+def exopipe_run(root: str, date: str, hour: int, band: int) -> Optional[str]:
+    """Newest exopipe phase1 run with this band-hour (the products a re-run is compared with;
+    exopipe re-ran single bands under new run labels)."""
+    runs = sorted(p.parent.name for p in Path(root, f"{hour:02d}h", date).glob(f"Run_*/{band}MHz")
+                  if p.is_dir())
     return runs[-1] if runs else None
 
 
 def load_badants(json_dir: str) -> Dict[str, Counter]:
-    """{"<LST>h/<date>/<run>": Counter(csv -> n MSes)} merged over the per-log JSON files
-    (lists exopipe's workers logged as "Flagging bad antennas")."""
+    """{"<LST>h/<date>/<run>/<band>MHz": Counter(csv -> n MSes)} merged over the per-log JSON
+    files (lists exopipe's workers logged as "Flagging bad antennas")."""
     out: Dict[str, Counter] = {}
     for f in sorted(Path(json_dir).glob("*.json")):
         for key, lists in json.loads(f.read_text()).items():
@@ -61,9 +63,11 @@ def load_badants(json_dir: str) -> Dict[str, Counter]:
 
 
 def write_backlog_config(template: Path, out_dir: Path, date: str, hour: int, run_label: str,
-                         bp: str, badants: Optional[str], note: str) -> Path:
+                         bp: str, bands: List[int], badants: Optional[Dict[int, str]],
+                         note: str) -> Path:
     cfg = write_config(template, out_dir, date, [hour], run_label, bp)
     d = yaml.safe_load((cfg / "pipeline.yaml").read_text())
+    d["bands"] = bands
     if badants is not None:
         d["cal"]["badants"] = badants
     d["description"] = (d.get("description", "") + " " + note).strip()
@@ -130,34 +134,51 @@ def main(argv=None) -> int:
         for h in hours:
             if h in done:
                 continue
-            run = exopipe_run(a.exopipe_root, date, h)
-            note = f"Compare with exopipe phase1 {h:02d}h/{date}/{run}."
-            ba = None
-            if a.badants_dir:
-                lists = badants.get(f"{h:02d}h/{date}/{run}")
-                if not lists:
-                    print(f"  {h:02d}h: no bad-antenna list logged for exopipe {run}; skipped", flush=True)
+            bands, ba, runs, missing, multi = [], {}, {}, [], []
+            for band in tpl["bands"]:
+                run = exopipe_run(a.exopipe_root, date, h, band)
+                if run is None:
+                    missing.append(f"{band}(no exopipe run)")
                     continue
-                ba, n = lists.most_common(1)[0]
-                note += f" Bad antennas: exopipe {run}'s list ({n} of {sum(lists.values())} MSes)."
-                print(f"  {h:02d}h: exopipe {run}, {len(ba.split(','))} bad antennas "
-                      f"({len(lists)} distinct list(s) in its log)", flush=True)
-            plan.append((date, h, bp, ba, note))
+                if a.badants_dir:
+                    lists = badants.get(f"{h:02d}h/{date}/{run}/{band}MHz")
+                    if not lists:
+                        missing.append(f"{band}(no list for {run})")
+                        continue
+                    ba[band] = lists.most_common(1)[0][0]
+                    if len(lists) > 1:
+                        multi.append(band)
+                bands.append(band)
+                runs.setdefault(run, []).append(band)
+            if not bands:
+                print(f"  {h:02d}h: no band to run ({', '.join(missing)}); skipped", flush=True)
+                continue
+            note = ("Compare with exopipe phase1 " + "; ".join(
+                f"{h:02d}h/{date}/{r} ({','.join(map(str, b))} MHz)" for r, b in runs.items()) + ".")
+            if a.badants_dir:
+                note += " Bad antennas per band: the list exopipe logged for that band-hour's run."
+            print(f"  {h:02d}h: {len(bands)} bands, exopipe runs {sorted(runs)}"
+                  + (f"; left out {missing}" if missing else "")
+                  + (f"; several logged lists (most common used) for {multi}" if multi else ""),
+                  flush=True)
+            plan.append((date, h, bp, bands, ba if a.badants_dir else None, note))
     if a.no_run:
         if plan:
-            date, h, bp, ba, note = plan[0]
-            cfg = write_backlog_config(template, Path(a.output_config), date, h, a.run_label, bp, ba, note)
+            date, h, bp, bands, ba, note = plan[0]
+            cfg = write_backlog_config(template, Path(a.output_config), date, h, a.run_label, bp,
+                                       bands, ba, note)
             print((cfg / "pipeline.yaml").read_text(), flush=True)
         return 0
 
-    for date, h, bp, ba, note in plan:
+    for date, h, bp, bands, ba, note in plan:
         now = datetime.now(timezone.utc)
         if not a.ignore_window and not may_start(now, a.stop_utc, a.resume_utc, a.run_minutes):
             print(f"{now:%H:%M} UTC: not enough time before {a.stop_utc} UTC (or inside "
                   f"{a.stop_utc}-{a.resume_utc}); stopping, {len(plan)} hour(s) left in the plan",
                   flush=True)
             return 0
-        cfg = write_backlog_config(template, Path(a.output_config), date, h, a.run_label, bp, ba, note)
+        cfg = write_backlog_config(template, Path(a.output_config), date, h, a.run_label, bp,
+                                   bands, ba, note)
         with open(lock_path, "a+") as lock:
             print(f"{now:%H:%M:%S} {date} LST {h:02d}h: waiting for cluster lock {lock_path}", flush=True)
             fcntl.flock(lock, fcntl.LOCK_EX)
