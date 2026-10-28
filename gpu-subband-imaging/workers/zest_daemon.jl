@@ -72,8 +72,10 @@ reg_offset = envf("ZEST_REG_MAX_OFFSET_DEG", 0.0)
 reg_taper = envf("ZEST_REG_TAPER_DEG", 1.0)
 reg_lambda = envf("ZEST_REG_LAMBDA", 1.0)
 save_passes = Set(filter(!isempty, strip.(split(lowercase(get(ENV, "ZEST_SAVE_SOLUTIONS", "")), ","))))
-# sky sources solved with band-wide gains: comma list of names, or * for all (RFI sources never)
+# sky sources solved with band-wide gains: comma list of names, or * for all (RFI sources never);
+# ZEST_WIDEBAND_MAXITER: solver iterations for those directions
 wideband_names = Set(filter(!isempty, strip.(split(get(ENV, "ZEST_WIDEBAND_SOURCES", ""), ","))))
+wideband_maxiter = envi("ZEST_WIDEBAND_MAXITER", 0)   # 0: ZEST_MAXITER
 is_wideband_dir(name) = !isempty(wideband_names) && ("*" in wideband_names || name in wideband_names)
 !isempty(wideband_names) && reg_offset > 0 &&
     error("ZEST_WIDEBAND_SOURCES with ZEST_REG_MAX_OFFSET_DEG > 0 is not supported (one prior per channel)")
@@ -128,8 +130,10 @@ function solve!(calibration, vis, coherency, meta, reg)
         return gpu_stefcal!(calibration, vis, coherency, meta;
                             maxiter=mi, tolerance=tol, minuvw=muvw)
     end
+    # band-wide directions start far from their solution (unit gains vs the catalogue flux)
+    iters = size(calibration.xx, 2) == 1 && wideband_maxiter > 0 ? wideband_maxiter : mi
     converged, niters, _ = solve_gains!(calibration, vis, coherency, meta; solver=solver,
-                                        maxiter=mi, tolerance=tol, minuvw=muvw, reg=reg)
+                                        maxiter=iters, tolerance=tol, minuvw=muvw, reg=reg)
     converged, niters
 end
 

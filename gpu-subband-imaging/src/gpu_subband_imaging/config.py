@@ -192,6 +192,7 @@ class PeelParams:
     # sky sources solved with one gain per antenna for the whole band instead of per channel
     # (comma list of names or "*"; fewer free parameters, so less flux taken from other sources)
     wideband_sources: str = ""
+    wideband_maxiter: int = 0         # solver iterations of the band-wide directions (0: maxiter)
 
     def __post_init__(self) -> None:
         if any(p not in ("sky", "rfi") for p in self.solution_passes):
