@@ -304,6 +304,9 @@ class CalTables:
     sources: str
     aoflagger_strategy: str
     rfi_sources: Optional[str] = None     # RFI model for peel.rfi (TTCal JSON)
+    # fixed bad correlator numbers (CSV) instead of the live MNC anthealth lookup, which
+    # answers with the current list (re-runs use the list the original run flagged)
+    badants: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -443,7 +446,8 @@ def load_pipeline(path: Union[str, Path]) -> PipelineConfig:
         cal=CalTables(bp=_require(cal, "bp", "cal"), xy=_require(cal, "xy", "cal"),
                       sources=_require(cal, "sources", "cal"),
                       aoflagger_strategy=_require(cal, "aoflagger_strategy", "cal"),
-                      rfi_sources=cal.get("rfi_sources")),
+                      rfi_sources=cal.get("rfi_sources"),
+                      badants=(str(cal["badants"]) if cal.get("badants") is not None else None)),
         peel=peel,
         peel_overrides=peel_overrides,
         imaging=ImagingParams(**d.get("imaging", {})),

@@ -385,12 +385,18 @@ class Worker:
                  self.band, self.batch, time.perf_counter() - t0)
         if getattr(self.cfg.pipeline, 'do_badants', True):
             t0 = time.perf_counter()
-            dev_python = f"{self.cfg.pipeline.env.dev_env}/bin/python"
-            self._badants = flag.badants(_mjd(_stamp(todo[0])), dev_python)
+            fixed = getattr(self.cfg.pipeline.cal, "badants", None)
+            if fixed is not None:          # e.g. the list a previous run used (re-runs)
+                self._badants = fixed
+            else:
+                dev_python = f"{self.cfg.pipeline.env.dev_env}/bin/python"
+                self._badants = flag.badants(_mjd(_stamp(todo[0])), dev_python)
             log.info("timing %sMHz batch%d phase=badants(batch) n=%s elapsed=%.2f s",
                      self.band, self.batch,
                      len(self._badants.split(",")) if self._badants else 0,
                      time.perf_counter() - t0)
+            log.info("bad antennas %sMHz batch%d (%s): %s", self.band, self.batch,
+                     "config" if fixed is not None else "anthealth", self._badants)
         daemon = self._start_daemon()  # Julia JIT overlaps preprocessing.
         if getattr(self.cfg.pipeline.imaging, "imager", "wsclean") == "ttcalx":
             self._gpu_imager = self._start_gpu_imager()   # started at the first snapshot

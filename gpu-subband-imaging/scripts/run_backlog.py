@@ -17,9 +17,10 @@ import fcntl
 import json
 import sys
 import time
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import yaml
 
@@ -41,6 +42,33 @@ def exopipe_bandpass(cal_root: str, date: str) -> Optional[str]:
 
 def exopipe_hours(root: str, date: str) -> List[int]:
     return sorted(int(p.parent.name[:-1]) for p in Path(root).glob(f"*h/{date}") if p.is_dir())
+
+
+def exopipe_run(root: str, date: str, hour: int) -> Optional[str]:
+    """Newest exopipe phase1 run label of an LST hour (the products a re-run is compared with)."""
+    runs = sorted(p.name for p in Path(root, f"{hour:02d}h", date).glob("Run_*") if p.is_dir())
+    return runs[-1] if runs else None
+
+
+def load_badants(json_dir: str) -> Dict[str, Counter]:
+    """{"<LST>h/<date>/<run>": Counter(csv -> n MSes)} merged over the per-log JSON files
+    (lists exopipe's workers logged as "Flagging bad antennas")."""
+    out: Dict[str, Counter] = {}
+    for f in sorted(Path(json_dir).glob("*.json")):
+        for key, lists in json.loads(f.read_text()).items():
+            out.setdefault(key, Counter()).update(lists)
+    return out
+
+
+def write_backlog_config(template: Path, out_dir: Path, date: str, hour: int, run_label: str,
+                         bp: str, badants: Optional[str], note: str) -> Path:
+    cfg = write_config(template, out_dir, date, [hour], run_label, bp)
+    d = yaml.safe_load((cfg / "pipeline.yaml").read_text())
+    if badants is not None:
+        d["cal"]["badants"] = badants
+    d["description"] = (d.get("description", "") + " " + note).strip()
+    (cfg / "pipeline.yaml").write_text(yaml.safe_dump(d, sort_keys=False))
+    return cfg
 
 
 def may_start(now: datetime, stop_utc: str, resume_utc: str, need_min: float) -> bool:
@@ -72,7 +100,14 @@ def main(argv=None) -> int:
     ap.add_argument("--ignore-window", action="store_true")
     ap.add_argument("--no-run", action="store_true", help="print the plan and the first config only")
     ap.add_argument("--lock-path")
+    ap.add_argument("--badants-dir", help="JSON lists of exopipe's bad antennas per LST/date/run; "
+                                          "hours without one are skipped")
+    ap.add_argument("--allow-anthealth", action="store_true",
+                    help="without --badants-dir: use the live anthealth lookup (the current list)")
     a = ap.parse_args(argv)
+    if not a.badants_dir and not a.allow_anthealth:
+        ap.error("give --badants-dir (exopipe's lists) or --allow-anthealth")
+    badants = load_badants(a.badants_dir) if a.badants_dir else {}
 
     template = Path(a.template)
     tpl = yaml.safe_load((template / "pipeline.yaml").read_text())
@@ -91,23 +126,38 @@ def main(argv=None) -> int:
             print(f"{date}: skipped (bandpass {bp}, LST hours {hours})", flush=True)
             continue
         done = set(state["done"].get(date, []))
-        plan += [(date, h, bp) for h in hours if h not in done]
         print(f"{date}: bandpass {bp}; LST hours {hours}; {len(done)} done", flush=True)
+        for h in hours:
+            if h in done:
+                continue
+            run = exopipe_run(a.exopipe_root, date, h)
+            note = f"Compare with exopipe phase1 {h:02d}h/{date}/{run}."
+            ba = None
+            if a.badants_dir:
+                lists = badants.get(f"{h:02d}h/{date}/{run}")
+                if not lists:
+                    print(f"  {h:02d}h: no bad-antenna list logged for exopipe {run}; skipped", flush=True)
+                    continue
+                ba, n = lists.most_common(1)[0]
+                note += f" Bad antennas: exopipe {run}'s list ({n} of {sum(lists.values())} MSes)."
+                print(f"  {h:02d}h: exopipe {run}, {len(ba.split(','))} bad antennas "
+                      f"({len(lists)} distinct list(s) in its log)", flush=True)
+            plan.append((date, h, bp, ba, note))
     if a.no_run:
         if plan:
-            date, h, bp = plan[0]
-            cfg = write_config(template, Path(a.output_config), date, [h], a.run_label, bp)
+            date, h, bp, ba, note = plan[0]
+            cfg = write_backlog_config(template, Path(a.output_config), date, h, a.run_label, bp, ba, note)
             print((cfg / "pipeline.yaml").read_text(), flush=True)
         return 0
 
-    for date, h, bp in plan:
+    for date, h, bp, ba, note in plan:
         now = datetime.now(timezone.utc)
         if not a.ignore_window and not may_start(now, a.stop_utc, a.resume_utc, a.run_minutes):
             print(f"{now:%H:%M} UTC: not enough time before {a.stop_utc} UTC (or inside "
                   f"{a.stop_utc}-{a.resume_utc}); stopping, {len(plan)} hour(s) left in the plan",
                   flush=True)
             return 0
-        cfg = write_config(template, Path(a.output_config), date, [h], a.run_label, bp)
+        cfg = write_backlog_config(template, Path(a.output_config), date, h, a.run_label, bp, ba, note)
         with open(lock_path, "a+") as lock:
             print(f"{now:%H:%M:%S} {date} LST {h:02d}h: waiting for cluster lock {lock_path}", flush=True)
             fcntl.flock(lock, fcntl.LOCK_EX)
