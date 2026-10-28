@@ -22,7 +22,7 @@ def main() -> int:
     # The GPU is shared with the zest daemon (and its restarts): cap CuPy's pool and hand
     # cached blocks back after every snapshot.
     pool = cp.get_default_memory_pool()
-    pool.set_limit(size=int(float(os.environ.get("GSI_GPU_IMAGER_MEM_GB", "6")) * 1e9))
+    pool.set_limit(size=int(float(os.environ.get("GSI_GPU_IMAGER_MEM_GB", "10")) * 1e9))
     im = SnapshotImager()
     print(PREFIX + json.dumps({"status": "ready"}), flush=True)
     for line in sys.stdin:
