@@ -4,7 +4,7 @@
 # A worker with a full /fast fails every task in seconds and would swallow the whole queue.
 set -uo pipefail
 CONSUMERS=${1:?usage: $0 calim00@lwacalim00,...}
-MIN_FREE_GB=${MIN_FREE_GB:-100}
+MIN_FREE_GB=${MIN_FREE_GB:-50}
 REPO=/opt/devel/nkosogor/nkosogor/distributed-pipeline
 PY=/opt/devel/pipeline/envs/py38_orca_nkosogor/bin/python
 
