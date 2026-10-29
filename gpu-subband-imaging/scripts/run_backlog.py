@@ -27,7 +27,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 sys.path.insert(0, str(REPO_ROOT / "src"))
-from run_nightly_lst import run_gsi, write_config  # noqa: E402
+from run_nightly_lst import night_windows, run_gsi, write_config  # noqa: E402
 
 DEFAULT_CAL_ROOT = "/lustre/pipeline/calibration/results"
 DEFAULT_EXOPIPE = "/lustre/pipeline/exopipe/phase1"
@@ -100,6 +100,23 @@ def nightly_busy(state_dir: Path) -> Optional[str]:
     return None
 
 
+def nightly_start(margin_min: float = 10.0) -> Optional[datetime]:
+    """When the waiting nightly (run_nightly_lst.py with nightly_wait_all) will start: the end of
+    its date's last Sun-cut LST window plus its margin (UTC, aware); None without a nightly."""
+    import re
+    import subprocess
+    ps = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True).stdout
+    dates = re.findall(r"run_nightly_lst\.py .*--date (\d{4}-\d\d-\d\d)", ps)
+    if not dates:
+        return None
+    # as run_nightly_lst.py: LST hours with < 10 min of Sun-cut data are skipped
+    w = {h: v for h, v in night_windows(min(dates)).items() if (v[1] - v[0]).total_seconds() >= 600}
+    if not w:
+        return None
+    last = max(end for _, end in w.values()) + timedelta(minutes=margin_min + 1)
+    return last.replace(tzinfo=timezone.utc)
+
+
 def may_start(now: datetime, stop_utc: str, resume_utc: str, need_min: float) -> bool:
     """A run of need_min minutes may start now: outside the nightly's hours
     [stop_utc, resume_utc) and ending before the next stop_utc."""
@@ -129,6 +146,9 @@ def main(argv=None) -> int:
     ap.add_argument("--hours-per-run", type=int, default=1,
                     help="LST hours of one date per gsi run (more jobs than GPU slots pack better)")
     ap.add_argument("--ignore-window", action="store_true")
+    ap.add_argument("--stop-before-nightly", action="store_true",
+                    help="instead of --stop-utc/--resume-utc: start a run only if it ends before the "
+                         "waiting nightly starts (all its data in; template nightly_wait_all)")
     ap.add_argument("--loop", action="store_true",
                     help="wait (instead of exiting) while outside the window or the nightly is "
                          "mid-night, until every planned hour is done")
@@ -205,10 +225,17 @@ def main(argv=None) -> int:
         while True:
             now = datetime.now(timezone.utc)
             busy = nightly_busy(out_root / "_state")
-            ok = a.ignore_window or may_start(now, a.stop_utc, a.resume_utc, a.run_minutes * len(hours))
+            need = timedelta(minutes=a.run_minutes * len(hours))
+            if a.stop_before_nightly:
+                ns = nightly_start()
+                ok = ns is None or now + need <= ns
+            else:
+                ok = a.ignore_window or may_start(now, a.stop_utc, a.resume_utc, a.run_minutes * len(hours))
             if ok and not busy:
                 break
             why = f"nightly {busy} in progress" if busy else (
+                f"would not end before the nightly starts ({nightly_start():%H:%M} UTC)"
+                if a.stop_before_nightly else
                 f"not enough time before {a.stop_utc} UTC (or inside {a.stop_utc}-{a.resume_utc})")
             if not a.loop:
                 print(f"{now:%H:%M} UTC: {why}; stopping, {len(groups) - k} run(s) left in the plan",
