@@ -76,6 +76,30 @@ def write_backlog_config(template: Path, out_dir: Path, date: str, hours, run_la
     return cfg
 
 
+def nightly_busy(state_dir: Path) -> Optional[str]:
+    """The date the nightly run is processing now, else None: a run_nightly_lst.py process that is
+    running a round (its gsi run, config-lst-auto) or whose date already has rounds in
+    <state_dir>/nightly_<date>.json (it releases the cluster lock between rounds, so the lock
+    alone does not keep a backlog run out of its night)."""
+    import re
+    import subprocess
+    ps = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True).stdout
+    round_running = any("gpu_subband_imaging.cli run" in ln and "config-lst-auto" in ln
+                        for ln in ps.splitlines())
+    for line in ps.splitlines():
+        m = re.search(r"run_nightly_lst\.py .*--date (\d{4}-\d\d-\d\d)", line)
+        if m:
+            if round_running:
+                return m.group(1)
+            f = state_dir / f"nightly_{m.group(1)}.json"
+            try:
+                if json.loads(f.read_text()).get("runs"):
+                    return m.group(1)
+            except (OSError, ValueError):
+                pass
+    return None
+
+
 def may_start(now: datetime, stop_utc: str, resume_utc: str, need_min: float) -> bool:
     """A run of need_min minutes may start now: outside the nightly's hours
     [stop_utc, resume_utc) and ending before the next stop_utc."""
@@ -105,6 +129,9 @@ def main(argv=None) -> int:
     ap.add_argument("--hours-per-run", type=int, default=1,
                     help="LST hours of one date per gsi run (more jobs than GPU slots pack better)")
     ap.add_argument("--ignore-window", action="store_true")
+    ap.add_argument("--loop", action="store_true",
+                    help="wait (instead of exiting) while outside the window or the nightly is "
+                         "mid-night, until every planned hour is done")
     ap.add_argument("--no-run", action="store_true", help="print the plan and the first config only")
     ap.add_argument("--lock-path")
     ap.add_argument("--badants-dir", help="JSON lists of exopipe's bad antennas per LST/date/run; "
@@ -175,13 +202,20 @@ def main(argv=None) -> int:
     for k, grp in enumerate(groups):
         date, hours = grp[0][0], [g[1] for g in grp]
         label = "+".join(f"{h:02d}h" for h in hours)
-        now = datetime.now(timezone.utc)
-        if not a.ignore_window and not may_start(now, a.stop_utc, a.resume_utc,
-                                                 a.run_minutes * len(hours)):
-            print(f"{now:%H:%M} UTC: not enough time before {a.stop_utc} UTC (or inside "
-                  f"{a.stop_utc}-{a.resume_utc}); stopping, {len(groups) - k} run(s) left in the plan",
-                  flush=True)
-            return 0
+        while True:
+            now = datetime.now(timezone.utc)
+            busy = nightly_busy(out_root / "_state")
+            ok = a.ignore_window or may_start(now, a.stop_utc, a.resume_utc, a.run_minutes * len(hours))
+            if ok and not busy:
+                break
+            why = f"nightly {busy} in progress" if busy else (
+                f"not enough time before {a.stop_utc} UTC (or inside {a.stop_utc}-{a.resume_utc})")
+            if not a.loop:
+                print(f"{now:%H:%M} UTC: {why}; stopping, {len(groups) - k} run(s) left in the plan",
+                      flush=True)
+                return 0
+            print(f"{now:%H:%M} UTC: {why}; next: {date} LST {label}; checking again in 10 min", flush=True)
+            time.sleep(600)
         cfg = write_group_config(template, Path(a.output_config), a.run_label, grp)
         with open(lock_path, "a+") as lock:
             print(f"{now:%H:%M:%S} {date} LST {label}: waiting for cluster lock {lock_path}", flush=True)
