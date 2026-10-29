@@ -35,7 +35,7 @@ CONCURRENCY_MAP[calim09]=20
 # nightavg: night-time averaging of slow data (pipeline/average_nighttime_slow.py); a shared queue
 # lets fast nodes take more of the work.
 declare -A EXTRA_QUEUES_MAP
-for n in calim00 calim06 calim07 calim09; do EXTRA_QUEUES_MAP[$n]=nightavg; done
+for n in calim06 calim07 calim09; do EXTRA_QUEUES_MAP[$n]=nightavg; done
 
 # PID and log file locations (no sudo needed — user-writable dirs)
 PID_DIR="${REPO_DIR}/deploy/pids"

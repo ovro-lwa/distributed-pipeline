@@ -5,18 +5,18 @@
 #   NDAYS=30 screen -dmS dynspec-daily pipeline/run_dynspec_daily.sh 2026-10-21
 #
 # Optional env: NDAYS=30, plus everything run_dynspec_slow_when_ready.sh takes.  By default the
-# map tasks go to the shared nightavg queue (calim00 06 07 09 balance it among themselves;
-# the night-time averaging only uses it from 14:30 UTC) and the reducer to calim00.
+# map tasks go to the shared nightavg queue (calim06 07 09 balance it among themselves;
+# the night-time averaging only uses it from 14:30 UTC) and the reducer to calim06.
 # Logs: deploy/logs/dynspec_slow_<DATE>.log
 set -uo pipefail
 
 START_DATE=${1:?usage: $0 YYYY-MM-DD}
 NDAYS=${NDAYS:-30}
 export QUEUES=${QUEUES:-"nightavg"}
-export REDUCE_QUEUE=${REDUCE_QUEUE:-"calim00"}
+export REDUCE_QUEUE=${REDUCE_QUEUE:-"calim06"}
 REPO=/opt/devel/nkosogor/nkosogor/distributed-pipeline
 PY=/opt/devel/pipeline/envs/py38_orca_nkosogor/bin/python
-CONSUMERS=${CONSUMERS:-"calim00@lwacalim00,calim06@lwacalim06,calim07@lwacalim07,calim09@lwacalim09"}
+CONSUMERS=${CONSUMERS:-"calim06@lwacalim06,calim07@lwacalim07,calim09@lwacalim09"}
 cd "$REPO" || exit 1
 
 for (( n = 0; n < NDAYS; n++ )); do

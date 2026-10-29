@@ -12,7 +12,7 @@
 #
 # Optional env: QUEUES="nightavg" (or per-node "calim09:20 ...")  READY_UTC="14:30"  NDAYS=0 (0 = forever)  MAX_MISSING=100
 #               ALT_ROOTS="/lustre/pipeline/cosmology"  other roots to look in when files are missing
-#               CONSUMERS="calim00@lwacalim00,..."  workers that must consume the nightavg queue
+#               CONSUMERS="calim06@lwacalim06,..."  workers that must consume the nightavg queue
 #
 # Before each date the previous date's log must report at most MAX_MISSING (default 100) missing
 # outputs, or nightavg_<prev>.ok must exist (accepted by hand); otherwise the loop stops so a
@@ -21,12 +21,12 @@
 set -uo pipefail
 
 START_DATE=${1:?usage: $0 YYYY-MM-DD}
-QUEUES=${QUEUES:-"nightavg"}   # shared queue on calim00 06 07 09 (see deploy/manage-workers.sh)
+QUEUES=${QUEUES:-"nightavg"}   # shared queue on calim06 07 09 (see deploy/manage-workers.sh)
 READY_UTC=${READY_UTC:-"14:30"}
 NDAYS=${NDAYS:-0}
 MAX_MISSING=${MAX_MISSING:-100}
 ALT_ROOTS=${ALT_ROOTS:-"/lustre/pipeline/cosmology"}   # where slow hours have been moved to   # previous night may miss up to this many outputs
-CONSUMERS=${CONSUMERS:-"calim00@lwacalim00,calim06@lwacalim06,calim07@lwacalim07,calim09@lwacalim09"}
+CONSUMERS=${CONSUMERS:-"calim06@lwacalim06,calim07@lwacalim07,calim09@lwacalim09"}
 REPO=/opt/devel/nkosogor/nkosogor/distributed-pipeline
 PY=/opt/devel/pipeline/envs/py38_orca_nkosogor/bin/python
 

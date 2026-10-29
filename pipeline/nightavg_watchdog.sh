@@ -5,11 +5,11 @@
 #
 # Usage (as pipeline, inside screen):
 #   screen -dmS nightavg-watchdog pipeline/nightavg_watchdog.sh
-# Optional env: CONSUMERS (default calim00 06 07 09)  MIN_FREE_GB=50  INTERVAL=300
+# Optional env: CONSUMERS (default calim06 07 09)  MIN_FREE_GB=50  INTERVAL=300
 # Log: deploy/logs/nightavg_watchdog.log (only changes are logged)
 set -uo pipefail
 REPO=/opt/devel/nkosogor/nkosogor/distributed-pipeline
-CONSUMERS=${CONSUMERS:-"calim00@lwacalim00,calim06@lwacalim06,calim07@lwacalim07,calim09@lwacalim09"}
+CONSUMERS=${CONSUMERS:-"calim06@lwacalim06,calim07@lwacalim07,calim09@lwacalim09"}
 export MIN_FREE_GB=${MIN_FREE_GB:-50}
 INTERVAL=${INTERVAL:-300}
 LOG=${REPO}/deploy/logs/nightavg_watchdog.log
