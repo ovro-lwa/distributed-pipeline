@@ -179,6 +179,9 @@ def main(argv=None) -> int:
     ap.add_argument("--lock-path", default=None)
     ap.add_argument("--log-dir", default=None)
     ap.add_argument("--no-wideband", action="store_true", help="skip pipeline/wideband_summary.py per LST hour")
+    ap.add_argument("--wait-all", action="store_true",
+                    help="start only when every night hour is ready and run them in one gsi run "
+                         "(no rounds; also on with nightly_wait_all: true in the template)")
     ap.add_argument("--no-run", action="store_true", help="print the plan and the first config, then exit")
     a = ap.parse_args(argv)
 
@@ -188,6 +191,7 @@ def main(argv=None) -> int:
     # the orchestrator makes each LST hour's wideband summary itself (wideband_per_hour);
     # node caches kept across runs (calcache_cleanup: none / keep_ms_local) go after the night
     own_wideband = not tpl.get("wideband_per_hour", False)
+    wait_all = a.wait_all or bool(tpl.get("nightly_wait_all", False))
     node_cleanup = tpl.get("calcache_cleanup", "run") == "none" or bool(tpl.get("keep_ms_local"))
     state_path = out_root / "_state" / f"nightly_{a.date}.json"
     log_dir = Path(a.log_dir) if a.log_dir else out_root / "run_logs"
@@ -232,6 +236,14 @@ def main(argv=None) -> int:
                                stdout=fh, stderr=subprocess.STDOUT)
             print(f"night report: {report}", flush=True)
             return 0
+        if wait_all and len(ready) < len(remaining):
+            last = max(windows[h][1] for h in remaining) + timedelta(minutes=a.margin_min + 1)
+            print(f"{now:%H:%M:%S} waiting for all night hours (wait-all); last ready at {last:%H:%M} UTC",
+                  flush=True)
+            if a.no_run:
+                return 0
+            time.sleep(a.poll_seconds)
+            continue
         if not ready:
             nxt = min(windows[h][1] for h in remaining) + timedelta(minutes=a.margin_min + 1)
             print(f"{now:%H:%M:%S} waiting; next hour ready at {nxt:%H:%M} UTC", flush=True)
