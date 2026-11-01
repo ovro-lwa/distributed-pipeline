@@ -309,7 +309,9 @@ class V3Params:
     peel_io: str = "ms"               # ms | shm
     snapshot_io: str = "ms"           # ms | shm
     hour_source: str = "kept_ms"      # kept_ms | archive | memory
-    write_kept_ms: bool = True        # keep writing kept MSes (v2 hour job / comparisons)
+    # keep writing kept MSes (the v2 hour job, comparisons); None = True except with hour_source=memory
+    # (the batch makes the hour from its records: kept MSes would be ~39 GB written and deleted per band-hour)
+    write_kept_ms: Optional[bool] = None
     archive: str = "none"             # none | iv | full
     archive_root: str = ""            # Lustre directory for the per-band-hour archive files
     archive_python: str = ""          # imager-venv python of the archive writer (default: imaging.gpu_python,
@@ -328,9 +330,13 @@ class V3Params:
     # snapshot_io=shm: workers/gsi_v3_engine.py (imaging.gpu_python), v3/engine_client.py
     engine_timeout_s: float = 900.0   # per snapshot (image + record): kill + restart the engine after this
     engine_start_timeout_s: float = 600.0
-    mem_check_every: int = 10         # store auto/ram: MemAvailable checked every N snapshots (spill below the reserve)
+    engine_max_restarts: int = 5      # engine restarts per batch; then the batch is aborted
+    mem_check_every: int = 2          # MemAvailable checked every N snapshots (spill, then less lookahead / no tmpfs)
+    budget_margin_s: float = 300.0    # hour_source=memory: the worker stops itself this long before batch_timeout_seconds
 
     def __post_init__(self) -> None:
+        if self.write_kept_ms is None:
+            object.__setattr__(self, "write_kept_ms", self.hour_source != "memory")
         for name, allowed in (("prep_inmem", ("off", "shadow", "on")), ("peel_io", ("ms", "shm")),
                               ("snapshot_io", ("ms", "shm")),
                               ("hour_source", ("kept_ms", "archive", "memory")),
@@ -365,6 +371,11 @@ class V3Params:
             raise ConfigError("v3.peel_timeout_s and v3.peel_start_timeout_s must be > 0")
         if self.engine_timeout_s <= 0 or self.engine_start_timeout_s <= 0:
             raise ConfigError("v3.engine_timeout_s and v3.engine_start_timeout_s must be > 0")
+        if self.hour_source == "memory" and self.checkpoint == "none":
+            raise ConfigError("v3.hour_source=memory needs v3.checkpoint (local | archive): without a record file "
+                              "an engine restart loses the band-hour's records")
+        if self.engine_max_restarts < 0 or self.mem_check_every < 1 or self.budget_margin_s < 0:
+            raise ConfigError("v3.engine_max_restarts >= 0, v3.mem_check_every >= 1, v3.budget_margin_s >= 0")
         if self.checkpoint == "archive" and self.archive == "none":
             raise ConfigError("v3.checkpoint=archive needs v3.archive (iv)")
         for d in self.spill_dirs:
@@ -492,6 +503,13 @@ class PipelineConfig:
             raise ConfigError("v3.hour_source=memory needs layout=lst and stream_hour_images")
         if self.v3.hour_source == "archive" and self.layout != "lst":
             raise ConfigError("v3.hour_source=archive needs layout=lst (hour_lst.run_band)")
+        if self.v3.hour_source == "memory" and self.batch_timeout_seconds and \
+                self.hour_imaging.timeout_seconds and \
+                self.batch_timeout_seconds < self.hour_imaging.timeout_seconds + 1800 + self.v3.budget_margin_s:
+            raise ConfigError(
+                f"v3.hour_source=memory: the batch makes the hour products, so batch_timeout_seconds "
+                f"({self.batch_timeout_seconds}) must cover the snapshots (>= 1800 s), the hour "
+                f"(hour_imaging.timeout_seconds {self.hour_imaging.timeout_seconds}) and v3.budget_margin_s")
         if self.v3.snapshot_io == "shm" and self.v3.archive != "none" and self.layout != "lst":
             raise ConfigError("v3.snapshot_io=shm with v3.archive needs layout=lst (one record file per batch)")
 
@@ -500,7 +518,10 @@ class PipelineConfig:
         """Ledger/manifest key: the date, plus the LST hours for layout=lst (one run per set)."""
         if self.layout != "lst":
             return self.date
-        return f"{self.date}_{self.run_label}_lst" + "-".join(f"{h:02d}" for h in self.lst_hours)
+        key = f"{self.date}_{self.run_label}_lst" + "-".join(f"{h:02d}" for h in self.lst_hours)
+        # hour_source=memory has another batch layout (one batch per band-hour, no hour-job rows): its own
+        # ledger, so a v2 ledger of the same run is never reused (INSERT OR IGNORE on (band, batch))
+        return key + "_v3mem" if self.v3.hour_source == "memory" else key
 
     def peel_for_band(self, band: int) -> PeelParams:
         return self.peel_overrides.get(band, self.peel)
