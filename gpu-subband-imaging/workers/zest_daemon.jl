@@ -81,6 +81,7 @@ rfi_path = get(ENV, "ZEST_RFI_SOURCES", "")
 rfi_joint = envs("ZEST_RFI_MODE", "after", ("after", "joint")) == "joint"
 fast_io = envb("ZEST_FAST_IO", false)
 use_gpu = envs("ZEST_DEVICE", "gpu", ("gpu", "cpu")) == "gpu"
+gc_between = envs("ZEST_GC_BETWEEN", "", ("", "young", "full"))
 reg_offset = envf("ZEST_REG_MAX_OFFSET_DEG", 0.0)
 reg_taper = envf("ZEST_REG_TAPER_DEG", 1.0)
 reg_lambda = envf("ZEST_REG_LAMBDA", 1.0)
@@ -588,6 +589,10 @@ for line in eachline(stdin)
         println("FAILED $ms$rid $msg")
     end
     flush(stdout)
+    # ZEST_GC_BETWEEN=young|full (gsi v3): collect the snapshot's GPU arrays now, after the reply,
+    # so the next peel does not start near JULIA_CUDA_SOFT_MEMORY_LIMIT and collect inside its solve
+    gc_between == "young" && GC.gc(false)
+    gc_between == "full" && GC.gc(true)
     use_gpu && CUDA.reclaim()
 end
 println("DAEMON_EXIT"); flush(stdout)

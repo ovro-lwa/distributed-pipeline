@@ -53,6 +53,7 @@ class Item:
     replay: bool = False
     raw_ms: Optional[Path] = None        # kept for the kept-MS writer (v3.write_kept_ms)
     stats: dict = field(default_factory=dict)
+    imaged: threading.Event = field(default_factory=threading.Event)    # the engine is done with it
 
 
 class _EngineGate:
@@ -442,7 +443,9 @@ class V3Batch:
         path = str(self.w.kept_ms_path(it.stamp, self.w.keep_root())) if self.write_kept else f"{stem}.ms"
         return dict(slot=str(it.slot), prefix=str(prefix), pixels=geom.pixels, scale=geom.scale,
                     niter=ip.clean_niter, phase_centre=self.phase_centre(it.stamp),
-                    record_phase_centre=self.record_phase_centre(it.stamp), image=not it.replay,
+                    record_phase_centre=self.record_phase_centre(it.stamp),
+                    # v3.profile_no_image: profiling only (the peel without the engine's GPU imaging)
+                    image=not it.replay and not self.v3.profile_no_image,
                     record=self.records, stem=stem, path=path)
 
     def _post(self, it: Item) -> bool:
@@ -456,7 +459,10 @@ class V3Batch:
         released = False
         kept_box: list = []
         try:
-            r = self._engine_image(it, req, lambda: kept_box.append(self._write_kept(it)))
+            try:
+                r = self._engine_image(it, req, lambda: kept_box.append(self._write_kept(it)))
+            finally:
+                it.imaged.set()
             kept_tmp = kept_box[0] if kept_box else None
             self._release(it.slot)
             released = True
@@ -470,7 +476,7 @@ class V3Batch:
                 kept = w.keep_ms(it.stamp, kept_tmp)
                 log.info("timing %sMHz batch%d stamp=%s phase=keep_ms elapsed=%.2f s dst=%s", self.band, self.batch,
                          it.stamp, time.perf_counter() - t1, kept)
-            if not it.replay:
+            if not it.replay and req["image"]:
                 files = [Path(f"{prefix}-I-image.fits"), Path(f"{prefix}-V-image.fits")]
                 missing = [str(f) for f in files if not f.exists()]
                 if missing:
@@ -713,6 +719,7 @@ class V3Batch:
                     futs[j] = feeders.submit(self._feed, j, work[j][0], slot, work[j][1])
                     nxt[0] += 1
             n_zested = 0
+            prev: Optional[Item] = None
             for i in range(n):
                 if self.fatal:
                     for f in futs.values():
@@ -741,6 +748,11 @@ class V3Batch:
                     log.info("batch %sMHz/%d: recycling zest daemon after %d files", self.band, self.batch, n_zested)
                     self.daemon.close()
                     self.daemon = self.w._start_daemon()
+                if not self.v3.image_overlap and prev is not None:     # no GPU overlap with the engine
+                    t0 = time.perf_counter()
+                    prev.imaged.wait(self.v3.engine_timeout_s)
+                    log.info("timing %sMHz batch%d stamp=%s phase=image_gate_wait elapsed=%.3f s", self.band,
+                             self.batch, it.stamp, time.perf_counter() - t0)
                 try:
                     t0 = time.perf_counter()
                     self._peel(it)
@@ -754,6 +766,7 @@ class V3Batch:
                     self.n_fail += 1
                     continue
                 posts.append(post.submit(self._post, it))
+                prev = it
                 if guard.check():
                     self._memory_tight()
             for f in posts:

@@ -942,6 +942,15 @@ class Worker:
         if getattr(self.cfg.pipeline.imaging, "imager", "wsclean") == "ttcalx":
             # the GPU snapshot imager shares this GPU: make CUDA.jl hand cached memory back
             env.setdefault("JULIA_CUDA_SOFT_MEMORY_LIMIT", "4GiB")
+        lim = v3_params(self.cfg.pipeline).zest_soft_memory_limit
+        if lim == "none":
+            env.pop("JULIA_CUDA_SOFT_MEMORY_LIMIT", None)
+        elif lim:
+            env["JULIA_CUDA_SOFT_MEMORY_LIMIT"] = lim
+        if v3_params(self.cfg.pipeline).zest_hard_memory_limit:
+            env["JULIA_CUDA_HARD_MEMORY_LIMIT"] = v3_params(self.cfg.pipeline).zest_hard_memory_limit
+        if v3_params(self.cfg.pipeline).zest_gc_between:
+            env["ZEST_GC_BETWEEN"] = v3_params(self.cfg.pipeline).zest_gc_between
         return env
 
     def _start_daemon(self) -> ZestDaemon:

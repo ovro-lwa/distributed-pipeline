@@ -519,3 +519,35 @@ def test_rerun_plan_counts_existing_records(env, monkeypatch, caplog):
         vb._plan_store(0)
     assert vb.plan.backend == "memmap" and vb.store_path == ck and "V3_MEM_SPILL" in caplog.text
     memory.unreserve()
+
+
+def test_zest_env_memory_switches(tmp_path, monkeypatch):
+    """v3.zest_soft_memory_limit / zest_hard_memory_limit / zest_gc_between reach the daemon's env;
+    the defaults keep v2's 4GiB soft limit (GPU imager) and set nothing else."""
+    monkeypatch.delenv("JULIA_CUDA_SOFT_MEMORY_LIMIT", raising=False)
+    monkeypatch.delenv("JULIA_CUDA_HARD_MEMORY_LIMIT", raising=False)
+    monkeypatch.delenv("ZEST_GC_BETWEEN", raising=False)
+
+    def env(**v3):
+        pl = SimpleNamespace(imaging=SimpleNamespace(imager="ttcalx"), v3=V3Params(**v3))
+        w = Worker.__new__(Worker)
+        w.cfg = SimpleNamespace(pipeline=pl)
+        return w._zest_env()
+    e = env()
+    assert e["JULIA_CUDA_SOFT_MEMORY_LIMIT"] == "4GiB" and "JULIA_CUDA_HARD_MEMORY_LIMIT" not in e \
+        and "ZEST_GC_BETWEEN" not in e
+    assert "JULIA_CUDA_SOFT_MEMORY_LIMIT" not in env(zest_soft_memory_limit="none")
+    e = env(zest_soft_memory_limit="6GiB", zest_hard_memory_limit="7GiB", zest_gc_between="full")
+    assert (e["JULIA_CUDA_SOFT_MEMORY_LIMIT"], e["JULIA_CUDA_HARD_MEMORY_LIMIT"], e["ZEST_GC_BETWEEN"]) == \
+        ("6GiB", "7GiB", "full")
+    with pytest.raises(ConfigError):
+        V3Params(zest_gc_between="always")
+
+
+@needs_v3_imager
+def test_image_overlap_false_serialises_the_engine_behind_the_peel(env, caplog):
+    cfg = _config(env.tmp, image_overlap=False)
+    with caplog.at_level(logging.INFO, logger="gsi"):
+        _worker(cfg, FakeDaemon()).run_batch(env.tars)
+    assert caplog.text.count("phase=image_gate_wait") == len(STAMPS) - 1
+    assert json.loads((_bdir(env.tmp) / "provenance.json").read_text())["hour"]["status"] == "ok"

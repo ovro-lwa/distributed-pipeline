@@ -332,6 +332,16 @@ class V3Params:
     engine_start_timeout_s: float = 600.0
     engine_max_restarts: int = 5      # engine restarts per batch; then the batch is aborted
     mem_check_every: int = 2          # MemAvailable checked every N snapshots (spill, then less lookahead / no tmpfs)
+    # snapshot_io=shm: true = the engine images snapshot i while the daemon peels i+1 (both on the GPU,
+    # time-sliced); false = the next peel waits until the previous snapshot is imaged (no GPU overlap)
+    image_overlap: bool = True
+    # the zest daemon's JULIA_CUDA_SOFT_MEMORY_LIMIT: "" = as v2 (4GiB when the GPU imager shares the GPU),
+    # "none" = no limit, else the value (e.g. "8GiB").  With the shm hand-off there is no MS I/O between
+    # peels for Julia's GC to run in, and the 4 GiB limit forces a GC inside each peel (+0.3 s at 23 MHz)
+    zest_soft_memory_limit: str = ""
+    zest_hard_memory_limit: str = ""  # the daemon's JULIA_CUDA_HARD_MEMORY_LIMIT ("" = unset, as v2)
+    zest_gc_between: str = ""         # "" (v2) | young | full: Julia GC in the daemon after each snapshot's reply
+    profile_no_image: bool = False    # profiling only: peel + record without the engine's imaging (no FITS, no hour)
     budget_margin_s: float = 300.0    # hour_source=memory: the worker stops itself this long before batch_timeout_seconds
 
     def __post_init__(self) -> None:
@@ -374,6 +384,8 @@ class V3Params:
         if self.hour_source == "memory" and self.checkpoint == "none":
             raise ConfigError("v3.hour_source=memory needs v3.checkpoint (local | archive): without a record file "
                               "an engine restart loses the band-hour's records")
+        if self.zest_gc_between not in ("", "young", "full"):
+            raise ConfigError("v3.zest_gc_between must be '', 'young' or 'full'")
         if self.engine_max_restarts < 0 or self.mem_check_every < 1 or self.budget_margin_s < 0:
             raise ConfigError("v3.engine_max_restarts >= 0, v3.mem_check_every >= 1, v3.budget_margin_s >= 0")
         if self.checkpoint == "archive" and self.archive == "none":
