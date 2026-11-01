@@ -92,37 +92,48 @@ def average_like_mstransform(data: np.ndarray, flag: np.ndarray, sigma: np.ndarr
     m = c // chanbin
     d4 = data.reshape(n, m, chanbin, p)
     ok = ~flag.reshape(n, m, chanbin, p)
-    wch = np.float32(1) / np.square(sigma)                      # (n, p) channel weight
 
-    acc_ok = np.zeros((n, m, p), np.complex64)
-    acc_all = np.zeros((n, m, p), np.complex64)
-    cnt = np.zeros((n, m, p), np.int32)
-    ws_ok = np.zeros((n, m, p), np.float32)
-    ws_all = np.zeros((n, p), np.float32)
-    zero = np.complex64(0)
-    for k in range(chanbin):                                    # CASA's channel order
-        dk, okk = d4[:, :, k], ok[:, :, k]
-        acc_all += dk
-        acc_ok += np.where(okk, dk, zero)
-        cnt += okk
-        ws_ok += np.where(okk, wch[:, None, :], np.float32(0))
-        ws_all += wch
-    allf = cnt == 0                                             # (n, m, p) output flag
-    num = np.where(allf, acc_all, acc_ok)
-    den = np.where(allf, np.float32(chanbin), cnt.astype(np.float32))
-    out = _divide_parts(num, den)
-    del num, acc_ok, acc_all
+    # Sum of all inputs, in CASA's channel order.  A bin with every input unflagged has
+    # the same sum, and one with every input flagged uses it too (mean of all), so only
+    # partially flagged bins (rare: flags come per row or per channel range) need the
+    # sum over their unflagged channels.
+    acc = np.zeros((n, m, p), np.complex64)
+    cnt = np.zeros((n, m, p), np.int16)
+    for k in range(chanbin):
+        acc += d4[:, :, k]
+        cnt += ok[:, :, k]
+    part = np.nonzero((cnt > 0) & (cnt < chanbin))
+    if part[0].size:
+        i, j, q = part
+        sub = np.zeros(i.size, np.complex64)
+        zero = np.complex64(0)
+        for k in range(chanbin):
+            sub += np.where(ok[i, j, k, q], d4[i, j, k, q], zero)
+        acc[part] = sub
+    allf = cnt == 0                                             # output FLAG
+    neff = np.where(allf, np.int16(chanbin), cnt)               # channels in each mean
+    out = _divide_parts(acc, neff.astype(np.float32))
+    del acc
 
-    ws = np.where(allf, ws_all[:, None, :], ws_ok)              # bin weights
-    sig_ch = np.float32(1) / np.sqrt(ws)
+    # Bin weight: the float32 sum of neff channel weights 1/SIGMA^2; tabulate the partial
+    # sums S[k] = w + w + ... (k terms) per row and correlation, then look them up.
+    wch = np.float32(1) / np.square(sigma)                      # (n, p)
+    S = np.zeros((n, chanbin + 1, p), np.float32)
+    for k in range(1, chanbin + 1):
+        S[:, k] = S[:, k - 1] + wch
+    S[:, 0] = 1                                                 # never used (neff >= 1)
+    idx = neff.astype(np.intp)
+    ws = np.take_along_axis(S, idx, axis=1)                     # (n, m, p)
+    sig_ch = np.take_along_axis(np.float32(1) / np.sqrt(S), idx, axis=1)
     use = ~allf
     use |= allf.all(axis=1, keepdims=True)                      # every bin flagged: use all
     w_sum = np.zeros((n, p), np.float32)
     s_sum = np.zeros((n, p), np.float32)
-    for j in range(m):
+    zero32 = np.float32(0)
+    for j in range(m):                                          # output channel order
         uj = use[:, j]
-        w_sum += np.where(uj, ws[:, j], np.float32(0))
-        s_sum += np.where(uj, sig_ch[:, j], np.float32(0))
+        w_sum += np.where(uj, ws[:, j], zero32)
+        s_sum += np.where(uj, sig_ch[:, j], zero32)
     nuse = use.sum(axis=1).astype(np.float32)
     return out, allf, w_sum / nuse, s_sum / nuse
 

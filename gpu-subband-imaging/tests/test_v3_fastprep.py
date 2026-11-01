@@ -60,6 +60,9 @@ def _random_case(seed, n=7, c=12, p=4, flag_frac=0.4):
     flag = rng.random((n, c, p)) < flag_frac
     flag[0] = True                               # every bin of a row flagged
     flag[1, :3] = True                           # one bin flagged in every correlation
+    flag[2] = False                              # no flags in a row
+    flag[3, :, 1] = False                        # nor in one correlation of a row
+    flag[3, 6:, 2] = True                        # whole bins flagged, none partial
     sigma = rng.uniform(0.3, 2.5, size=(n, p)).astype(np.float32)
     return data, flag, sigma
 
