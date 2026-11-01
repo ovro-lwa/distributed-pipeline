@@ -72,43 +72,65 @@ def jones(ms: str, bp_table: str, xy_table: str, nant: int, freq: np.ndarray
     return out
 
 
-def flag_calibrate(ms: Path, bp_table: str, xy_table: str, badants_csv: str) -> None:
-    """Flag bad antennas (and 85-100 MHz) and calibrate DATA in place."""
+def band_info(ms: str) -> Tuple[np.ndarray, int]:
+    """CHAN_FREQ of the single SPW and the number of antennas."""
     from casacore.tables import table
-    ms = str(ms)
     with table(ms + "/SPECTRAL_WINDOW", ack=False) as s:
         if s.nrows() != 1:
             raise ValueError(f"{ms}: expected one SPW, found {s.nrows()}")
         freq = s.getcell("CHAN_FREQ", 0)
     with table(ms + "/ANTENNA", ack=False) as a:
         nant = a.nrows()
+    return freq, nant
+
+
+def calibrate_arrays(data: np.ndarray, flag: np.ndarray, flag_row: np.ndarray,
+                     a1: np.ndarray, a2: np.ndarray, freq: np.ndarray, J: np.ndarray,
+                     dead: np.ndarray, badants_csv: str) -> None:
+    """Bad-antenna/85-100 MHz flags and B*Xf calibration of DATA, all in place.
+
+    Shared by flag_calibrate (v2, MS in place) and v3.fastprep (arrays only).
+    """
+    if badants_csv:
+        bad = [int(x) for x in badants_csv.split(",") if x.strip()]
+        rows = (np.isin(a1, bad) | np.isin(a2, bad)) & (a1 != a2)
+        flag[rows] = True
+        flag_row |= rows
+    if freq.max() > 85e6:
+        flag[:, (freq >= 85e6) & (freq <= 100e6), :] = True
+    for k, (p, q) in enumerate(_CORR):
+        data[:, :, k] = (data[:, :, k] / (J[a1, :, p] * np.conj(J[a2, :, q]))
+                         ).astype(data.dtype)
+        flag[dead[a1, p] | dead[a2, q], :, k] = True
+
+
+def sigma_from_weight(w: np.ndarray) -> np.ndarray:
+    """SIGMA = 1/sqrt(WEIGHT) (0 where WEIGHT <= 0), in WEIGHT's dtype.
+
+    flagdata sets FLAG_ROW on the rows it flags (applycal does not); mstransform of DATA
+    derives the output weights from SIGMA (raw MSes carry SIGMA=9999, WEIGHT=1), of
+    CORRECTED_DATA from WEIGHT -- make SIGMA match WEIGHT so averaging DATA gives the
+    old WEIGHT/SIGMA.
+    """
+    return np.where(w > 0, 1.0 / np.sqrt(np.where(w > 0, w, 1.0)), 0.0).astype(w.dtype)
+
+
+def flag_calibrate(ms: Path, bp_table: str, xy_table: str, badants_csv: str) -> None:
+    """Flag bad antennas (and 85-100 MHz) and calibrate DATA in place."""
+    from casacore.tables import table
+    ms = str(ms)
+    freq, nant = band_info(ms)
     J, dead = jones(ms, bp_table, xy_table, nant, freq)
     with table(ms, readonly=False, ack=False) as t:
         data = t.getcol("DATA")
         flag = t.getcol("FLAG")
         a1, a2 = t.getcol("ANTENNA1"), t.getcol("ANTENNA2")
         flag_row = t.getcol("FLAG_ROW")
-        if badants_csv:
-            bad = [int(x) for x in badants_csv.split(",") if x.strip()]
-            rows = (np.isin(a1, bad) | np.isin(a2, bad)) & (a1 != a2)
-            flag[rows] = True
-            flag_row |= rows
-        if freq.max() > 85e6:
-            flag[:, (freq >= 85e6) & (freq <= 100e6), :] = True
-        for k, (p, q) in enumerate(_CORR):
-            data[:, :, k] = (data[:, :, k] / (J[a1, :, p] * np.conj(J[a2, :, q]))
-                             ).astype(data.dtype)
-            flag[dead[a1, p] | dead[a2, q], :, k] = True
+        calibrate_arrays(data, flag, flag_row, a1, a2, freq, J, dead, badants_csv)
         t.putcol("DATA", data)
         t.putcol("FLAG", flag)
-        # flagdata sets FLAG_ROW on the rows it flags (applycal does not); mstransform of DATA
-        # derives the output weights from SIGMA (raw MSes carry SIGMA=9999, WEIGHT=1), of
-        # CORRECTED_DATA from WEIGHT -- make SIGMA match WEIGHT so averaging DATA gives the
-        # old WEIGHT/SIGMA.
         t.putcol("FLAG_ROW", flag_row)
-        w = t.getcol("WEIGHT")
-        t.putcol("SIGMA", np.where(w > 0, 1.0 / np.sqrt(np.where(w > 0, w, 1.0)), 0.0
-                                   ).astype(w.dtype))
+        t.putcol("SIGMA", sigma_from_weight(t.getcol("WEIGHT")))
 
 
 def average(ms: Path, out_ms: Path, chanbin: int) -> Path:

@@ -323,6 +323,7 @@ Validation in `__post_init__`:
 - The worker deletes the raw MS from tmpfs right after averaging (it already does `shutil.rmtree(ms)`).
 - **Test:** the averaged MS is byte-identical to v2 (`v3_vis_compare` bitwise), and so are the images.
 - **Speedup:** stage 1.35 → about 0.7 s (c00) and 6.8 → about 2 s (calim07) of CPU per file. Wall time is unchanged while zest-bound (c00: zest 3.1 against 2.25 s/file prep). On calim07 this frees about 1.2 s/file of the 4-feeder budget.
+- **Done (exp/gsi-v3-prep):** `stage_ms.stream_untar`. Checks: members only under `<stamp>.ms/`, file sizes, the end-of-archive marker (tarfile stops silently at a cut), all bytes read. Use a 64 KiB stream buffer with 1 MiB copies; tarfile re-slices its buffer per read, so 4 MiB buffers cost 1.4 s CPU per tar. Measured on calim10 (2026-11-01, 72 tars): 0.22–0.29 s CPU against 0.35–0.46 s for copy + extract. The staged raw MSes are byte-identical.
 
 ### Step 2: in-memory numpy prep (`v3.prep_inmem: shadow` then `on`)
 
@@ -337,6 +338,10 @@ Validation in `__post_init__`:
   - `casacore tablestructure` of `write_ms_like` equal to mstransform's, plus subtable values;
   - then `on`: images numeric criteria.
 - **Speedup:** prep 9.0 → about 4 s CPU (c00, body.tex `s:prep`) and about 31 → about 10 s (calim07). Prep throughput per GPU 2.25 → 1.0 s/file (c00) and 7.7 → 2.5 s/file (calim07). This is the precondition for step 3, because prep is the next bottleneck once the GPU part is about 1.5× faster (body.tex).
+- **Done (exp/gsi-v3-prep), with corrections to the plan above:**
+  - mstransform weights DATA by nothing. Its output weights come from **SIGMA** (1/SIGMA² per channel); the input WEIGHT column is ignored. The exact rules are in the `v3/fastprep.py` docstring.
+  - mstransform rewrites every subtable *description* (column comments, PROCESSOR without SETTINGS, ...) but copies the *values*. So `write_ms_like` copies the template file by file and fills the values from the raw MS. It does not copy raw subtables.
+  - **Result on 72 real snapshots (23/55/82 MHz, 10-31):** bitwise identical to v2 in DATA, FLAG, FLAG_ROW, WEIGHT, SIGMA and UVW. Table structure and all subtable values are identical. Median CPU per file, v2 → v3 including `write_ms_like`, with 4 parallel processes on calim10: 23 MHz 5.06 → 2.43 s, 55 MHz 4.79 → 2.28 s, 82 MHz 7.15 → 4.55 s. Results: `/lustre/nkosogor/peel_exp/v3/prep/results`.
 
 ### Step 3: peel through shared memory (`v3.peel_io: shm`)
 

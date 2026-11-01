@@ -317,6 +317,7 @@ class V3Params:
     delete_checkpoint: bool = True
     lookahead: int = 8
     prep_procs: int = 4
+    prep_timeout_s: float = 900.0     # per in-memory prep task (as the v2 CASA subprocess)
     peel_backend: str = "daemon"      # daemon | juliacall
 
     def __post_init__(self) -> None:
@@ -340,6 +341,8 @@ class V3Params:
             raise ConfigError("v3.archive needs v3.archive_root")
         if self.lookahead < 1 or self.prep_procs < 1:
             raise ConfigError("v3.lookahead and v3.prep_procs must be >= 1")
+        if not self.prep_timeout_s > 0:
+            raise ConfigError("v3.prep_timeout_s must be > 0")
 
 
 @dataclass(frozen=True)
@@ -448,6 +451,8 @@ class PipelineConfig:
             raise ConfigError("prep must be 'casa' or 'numpy'")
         if self.v3.prep_inmem != "off" and self.prep != "numpy":
             raise ConfigError("v3.prep_inmem needs prep=numpy")
+        if self.v3.prep_inmem != "off" and self.do_aoflag:
+            raise ConfigError("v3.prep_inmem needs do_aoflag: false (the numpy prep path)")
         if self.v3.snapshot_io == "shm" and self.imaging.imager != "ttcalx":
             raise ConfigError("v3.snapshot_io=shm needs imaging.imager=ttcalx")
         if self.v3.hour_source == "memory" and not (self.layout == "lst" and self.stream_hour_images):
