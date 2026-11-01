@@ -128,6 +128,9 @@ class V3Batch:
         self.hour_rec: Optional[dict] = None
         self.n_ok = self.n_fail = 0
         self.n_prep_fail = 0                 # prep errors (not the no-data skips)
+        self.failures: Dict[str, dict] = {}  # this attempt: stamp -> {reason, permanent}
+        self.given_up: Dict[str, dict] = {}  # inputs failed in max_input_failures attempts (or vanished)
+        self._budget_fired = False
         self.gate = _EngineGate()
         self.fatal: Optional[str] = None     # set -> the batch is aborted at once
         self.deadline: Optional[float] = None
@@ -204,6 +207,47 @@ class V3Batch:
                 return p, 0, p.stat().st_size
         return None, 0, 0
 
+    def _old_ck_names(self) -> List[Path]:
+        """Checkpoints named with the run_key before it got its "_v3mem" suffix (review L6)."""
+        rk = self.pl.run_key
+        if not rk.endswith("_v3mem"):
+            return []
+        old = rk[:-len("_v3mem")]
+        return [Path(d) / old / self._ck_name(d).name for d in self.v3.spill_dirs if d]
+
+    def _migrate_old_checkpoints(self) -> None:
+        from . import hourstore
+        if self.v3.archive != "none":
+            return
+        for o in self._old_ck_names():
+            n = self._ck_name(o.parents[1])
+            if not o.exists() or n.exists():
+                continue
+            n.parent.mkdir(parents=True, exist_ok=True)
+            for a, b in ((o, n), (hourstore.idx_path(o), hourstore.idx_path(n))):
+                if a.exists():
+                    os.replace(a, b)
+            try:
+                Path(f"{o}.lock").unlink()
+            except OSError:
+                pass
+            log.warning("V3_CHECKPOINT %sMHz batch%d: moved the checkpoint of the old run_key %s -> %s", self.band,
+                        self.batch, o, n)
+
+    def _delete_done_checkpoints(self) -> None:
+        """The band-hour's hour products are done: its local checkpoints (old and new names) can go."""
+        from . import hourstore
+        if self.v3.archive != "none" or not self.v3.delete_checkpoint or not self.records:
+            return
+        for p in [self._ck_name(d) for d in self.v3.spill_dirs if d] + self._old_ck_names():
+            if p.exists():
+                for f in (p, hourstore.idx_path(p), Path(f"{p}.lock")):
+                    try:
+                        f.unlink()
+                    except OSError:
+                        pass
+                log.info("V3_CHECKPOINT %sMHz batch%d: deleted %s (hour products done)", self.band, self.batch, p)
+
     def _plan_store(self, n_inputs: int) -> None:
         """RAM or spill for the band-hour's records: every input that may give one (todo, replays and
         the records already in the checkpoint), at the checkpoint's own bytes per record when there is
@@ -213,6 +257,7 @@ class V3Batch:
             return
         group = self.group()
         want_file = self.v3.archive == "none" and self.v3.checkpoint == "local"
+        self._migrate_old_checkpoints()
         old, n_old, b_old = self._existing_store()
         rb = b_old / n_old if n_old else None
         self.plan = memory.plan_store(self.v3.store, max(n_inputs, n_old), self.band, self.v3.ram_reserve_gb,
@@ -233,7 +278,8 @@ class V3Batch:
                      f", checkpoint {self.store_path}" if self.store_path else "")
         for n in self.plan.notes:
             log.warning("V3_STORE_PLAN %sMHz batch%d: %s", self.band, self.batch, n)
-        memory.reserve(self.plan.need_bytes if self.plan.backend == "ram" else memory.FIXED_BYTES, band=self.band,
+        # only the records: the processes' own fixed part is in the other workers' MemAvailable already
+        memory.reserve(self.plan.record_bytes if self.plan.backend == "ram" else 0.0, band=self.band,
                        batch=self.batch)
 
     def _start_engine(self):
@@ -267,6 +313,54 @@ class V3Batch:
         except OSError as e:
             log.warning("cannot note skipped %s: %s", stamp, e)
 
+    # -- inputs that fail every attempt (review M1) ----------------------------------------------------
+    def _failed_path(self) -> Path:
+        return self.w.band_dir(_stamp(self.tars[0])) / "QA" / ".v3_failed.jsonl"
+
+    def _max_failures(self) -> int:
+        n = int(getattr(self.v3, "max_input_failures", 0) or 0)
+        return n if n > 0 else int(getattr(self.pl, "max_retries", 1)) + 1
+
+    def _fail(self, stamp: str, reason: str, permanent: bool = False) -> None:
+        with self._lock:
+            d = self.failures.setdefault(stamp, dict(reasons=[], permanent=False))
+            d["reasons"].append(reason[:500])
+            d["permanent"] = d["permanent"] or permanent
+
+    def _known_failed(self) -> Dict[str, dict]:
+        """stamp -> {n: attempts that failed it, permanent, reasons} from QA/.v3_failed.jsonl."""
+        out: Dict[str, dict] = {}
+        try:
+            lines = self._failed_path().read_text().splitlines()
+        except OSError:
+            return out
+        for ln in lines:
+            try:
+                r = json.loads(ln)
+            except ValueError:
+                continue
+            d = out.setdefault(r["stamp"], dict(n=0, permanent=False, reasons=[]))
+            d["n"] += 1
+            d["permanent"] = d["permanent"] or bool(r.get("permanent"))
+            d["reasons"].append(str(r.get("reason", "")))
+        return out
+
+    def _given_up(self) -> Dict[str, dict]:
+        m = self._max_failures()
+        return {k: v for k, v in self._known_failed().items() if v["permanent"] or v["n"] >= m}
+
+    def _record_failures(self) -> None:
+        """One line per stamp that failed in this attempt; then the given-up set is re-read."""
+        if not self.failures:
+            return
+        p = self._failed_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a") as fh:
+            for stamp, d in sorted(self.failures.items()):
+                fh.write(json.dumps(dict(stamp=stamp, reason="; ".join(d["reasons"]), permanent=d["permanent"],
+                                         batch=self.batch, host=os.uname().nodename, t=time.time())) + "\n")
+        self.given_up = self._given_up()
+
     _budget = None
 
     def _start_budget(self, t0: float) -> None:
@@ -285,6 +379,9 @@ class V3Batch:
     def _budget_expired(self) -> None:
         log.critical("V3_BUDGET %sMHz batch%d: batch_timeout_seconds - v3.budget_margin_s reached: stopping "
                      "(daemon, engine, prep processes killed)", self.band, self.batch)
+        self._budget_fired = True
+        if self.engine is not None:
+            self.engine.failed = "worker budget expired"       # no restart once the kill has started
         for kill in (lambda: self.daemon._p.kill() if self.daemon is not None else None,
                      lambda: self.engine._kill("worker budget") if self.engine is not None else None):
             try:
@@ -348,7 +445,7 @@ class V3Batch:
         w = self.w
         stamp = _stamp(tar)
         d = w.work / stamp
-        udir = w._untar_dir(stamp)
+        udir = w._untar_dir(stamp, configured=True)
         keep_raw = False
         try:
             t0 = time.perf_counter()
@@ -394,6 +491,7 @@ class V3Batch:
             log.error("preprocess %s failed: %s", stamp, e)
             with self._lock:
                 self.n_prep_fail += 1
+            self._fail(stamp, f"prep: {e}", permanent=not Path(tar).exists())     # a vanished tar never comes back
             keep_raw = False
             self._release(slot)
             return None
@@ -431,7 +529,7 @@ class V3Batch:
 
     def _cleanup_item(self, it: Item) -> None:
         shutil.rmtree(self.w.work / it.stamp, ignore_errors=True)
-        udir = self.w._untar_dir(it.stamp)
+        udir = self.w._untar_dir(it.stamp, configured=True)     # also after untar to tmpfs was turned off
         if udir is not None:
             shutil.rmtree(udir, ignore_errors=True)
 
@@ -583,12 +681,15 @@ class V3Batch:
         w = self.w
         if self.memory and self._hour_done():
             log.info("batch %sMHz/%d: nothing to do (hour products done)", self.band, self.batch)
+            self._delete_done_checkpoints()
             return
         skipped = self._known_skipped()
-        tars = [t for t in self.tars if _stamp(t) not in skipped]
+        self.given_up = self._given_up()
+        tars = [t for t in self.tars if _stamp(t) not in skipped and _stamp(t) not in self.given_up]
         if len(tars) < len(self.tars):
-            log.info("batch %sMHz/%d: %d input(s) skipped before (no data) are not prepped again", self.band,
-                     self.batch, len(self.tars) - len(tars))
+            log.info("batch %sMHz/%d: %d input(s) skipped before (no data) and %d given up after failing are not "
+                     "prepped again", self.band, self.batch, len([t for t in self.tars if _stamp(t) in skipped]),
+                     len([t for t in self.tars if _stamp(t) in self.given_up]))
         have_fits = {t for t in tars if w._fits_path_for_stamp(_stamp(t)).exists()}
         todo = [t for t in tars if t not in have_fits]
         if not todo and not self.memory:
@@ -597,6 +698,17 @@ class V3Batch:
         self.mem_start = memory.mem_available()
         batch_start = time.perf_counter()
         self._start_budget(batch_start)
+        try:
+            self._prepare(tars, todo)
+        except BaseException:
+            if self._budget is not None:
+                self._budget.cancel()
+            memory.unreserve()
+            raise
+        self._run_main(tars, todo, have_fits, batch_start)
+
+    def _prepare(self, tars, todo) -> None:
+        w = self.w
         w.work.mkdir(parents=True, exist_ok=True)
         self._plan_store(len(tars))
         self._plan_shm()
@@ -611,6 +723,10 @@ class V3Batch:
             w._badants = flag.badants(_mjd(_stamp((todo or self.tars)[0])), f"{self.pl.env.dev_env}/bin/python")
             log.info("timing %sMHz batch%d phase=badants(batch) n=%s elapsed=%.2f s", self.band, self.batch,
                      len(w._badants.split(",")) if w._badants else 0, time.perf_counter() - t0)
+
+    def _run_main(self, tars, todo, have_fits, batch_start) -> None:
+        from . import memory, slots
+        w = self.w
         hour_ok = False
         self._qa_written = False
         try:
@@ -641,12 +757,24 @@ class V3Batch:
             if self.ring is not None:
                 self.ring.close()
                 self.ring = None
+            if self.v3.profile_no_image:            # profiling only: never products, never "done"
+                raise RuntimeError("V3_PROFILE batch (v3.profile_no_image): no FITS, no hour products")
             if self.memory:
                 # never an hour without a snapshot that could have been imaged: a failed one (prep, peel,
-                # engine) fails the batch, and the orchestrator's retry redoes just the missing ones
-                if self.n_fail or self.n_prep_fail:
-                    raise RuntimeError(f"V3_INCOMPLETE batch {self.band}MHz/{self.batch}: {self.n_fail} snapshot(s) "
-                                       f"failed, {self.n_prep_fail} prep error(s): no hour products (retry)")
+                # engine) fails the batch, and the orchestrator's retry redoes just the missing ones; one
+                # that failed in v3.max_input_failures attempts (or whose tar vanished) is given up and
+                # the hour is made from the rest (V3_HOUR_REDUCED, listed in provenance)
+                self._record_failures()
+                pending = sorted(s for s in self.failures if s not in self.given_up)
+                if pending:
+                    raise RuntimeError(f"V3_INCOMPLETE batch {self.band}MHz/{self.batch}: {len(pending)} snapshot(s) "
+                                       f"failed ({self.n_fail} after prep, {self.n_prep_fail} prep error(s)): no hour "
+                                       f"products (retry; given up after {self._max_failures()} attempt(s)): "
+                                       f"{pending[:5]}")
+                if self.given_up:
+                    log.error("V3_HOUR_REDUCED %sMHz batch%d: the hour is made without %d input(s) that failed in "
+                              "every attempt: %s", self.band, self.batch, len(self.given_up),
+                              {k: v["reasons"][-1][:120] for k, v in list(self.given_up.items())[:5]})
                 # the batch's output is the band-hour: snapshots done in earlier runs count (a rerun
                 # whose only remaining inputs are skipped snapshots still makes the hour products)
                 from .. import hour_lst
@@ -674,7 +802,7 @@ class V3Batch:
                 self.ring.close()
             memory.unreserve()
             shutil.rmtree(w.work, ignore_errors=True)
-            root = w._untar_root()
+            root = w._untar_root(configured=True)
             if root is not None and not root.is_symlink():
                 shutil.rmtree(root, ignore_errors=True)
             if not self._qa_written:
@@ -705,7 +833,7 @@ class V3Batch:
         guard = memory.MemoryGuard(self.v3.ram_reserve_gb, every=self.v3.mem_check_every)
         recycle = getattr(self.cfg.cluster, "zest_recycle_files", 25)
         futs: Dict[int, Future] = {}
-        posts: List[Future] = []
+        posts: List[tuple] = []
         nxt = [0]
         with ThreadPoolExecutor(max_workers=max(1, self.cfg.cluster.max_feeders)) as feeders, \
                 ThreadPoolExecutor(max_workers=3) as post:
@@ -733,7 +861,7 @@ class V3Batch:
                                     self._cleanup_item(x)
                             except Exception:
                                 pass
-                    for f in posts:
+                    for _, f in posts:
                         try:
                             f.result()
                         except Exception:
@@ -764,18 +892,21 @@ class V3Batch:
                     self._release(it.slot)
                     self._cleanup_item(it)
                     self.n_fail += 1
+                    self._fail(it.stamp, f"peel: {e}")
                     continue
-                posts.append(post.submit(self._post, it))
+                posts.append((it.stamp, post.submit(self._post, it)))
                 prev = it
                 if guard.check():
                     self._memory_tight()
-            for f in posts:
+            for stamp, f in posts:
                 try:
                     f.result()
                     self.n_ok += 1
                 except Exception as e:
                     log.error("image/archive failed: %s", e)
                     self.n_fail += 1
+                    if not isinstance(e, BatchAborted) and not self.fatal:
+                        self._fail(stamp, f"engine/archive: {e}")
             if self.fatal:
                 raise BatchAborted(self.fatal)
 
@@ -810,7 +941,7 @@ class V3Batch:
         self.store_path = Path(r["path"])
         self.plan.backend = "memmap"
         self.lookahead = min(self.lookahead, 2)
-        memory.reserve(memory.FIXED_BYTES, band=self.band, batch=self.batch)
+        memory.reserve(0.0, band=self.band, batch=self.batch)
         log.warning("V3_MEM_SPILL %sMHz batch%d: %s -> %s (%d records), lookahead %d", self.band, self.batch, why,
                     r["path"], r.get("n", 0), self.lookahead)
 
@@ -836,6 +967,20 @@ class V3Batch:
         rows.update({r["ts"]: r for r in w._qa})
         bad_ts, rec["qa"] = hour_lst.qa_step(qa_dir, self.band, [rows[k] for k in sorted(rows)])
         expected = sorted(hour_lst._fits_stems(self.cfg, self.band, lst_hour))
+        # never silently: every input is imaged (CLEAN FITS), skipped for no data, or given up after failing
+        skipped = self._known_skipped()
+        inputs = {self.kept_stem(_stamp(t)) for t in self.tars
+                  if _stamp(t) not in skipped and _stamp(t) not in self.given_up}
+        unaccounted = sorted(inputs - set(expected))
+        if unaccounted:
+            raise RuntimeError(f"V3_UNACCOUNTED hour {self.band}MHz {group}: {len(unaccounted)} input(s) neither imaged "
+                               f"nor skipped nor given up: {unaccounted[:5]}")
+        if self.given_up:
+            rec["failed_inputs"] = {self.kept_stem(k): dict(attempts=v["n"], permanent=v["permanent"],
+                                                            reason=v["reasons"][-1][:300])
+                                    for k, v in sorted(self.given_up.items())}
+            rec["hour_reduced"] = True
+        rec["n_skipped_inputs"] = len([t for t in self.tars if _stamp(t) in skipped])
         xs = [s for s in expected if lst.timestamp(s) in bad_ts]
         rec["qa"]["excluded_from_hour"] = len(xs)
         rec["n_records"] = len(expected)
@@ -871,17 +1016,34 @@ class V3Batch:
             hq = dict(argv=argv, expected=expected, log=str(qa_dir / f"{self.band}MHz-ttcalx-image.log"))
             try:
                 r = self.engine.request("hour", timeout=hto, **hq)
-            except engine_client.EngineError as e:
-                # e.g. a GPU allocation failure in a long-lived engine: once more in a fresh one (the
-                # records are reloaded from the checkpoint), as v2's separate hour job would start
+            except engine_client.EngineFailed as e:
+                raise RuntimeError(f"hour stage: the engine cannot be restarted ({e}; restarts are exhausted or the "
+                                   f"worker budget expired): no hour retry") from e
+            except (engine_client.EngineError, engine_client.EngineDied) as e:
+                # e.g. a GPU allocation failure or a CUDA fatal error in a long-lived engine: once more in a fresh
+                # one (records reloaded from the checkpoint), as v2's separate hour job would start -- not the
+                # deterministic "no record" refusal, not without a checkpoint, not without budget
+                if isinstance(e, engine_client.EngineError) and (e.reply or {}).get("missing"):
+                    raise
                 if self.store_path is None:
                     raise
+                left = None if self.deadline is None else self.deadline - time.perf_counter() - 30.0
+                if left is not None and left < max(300.0, 0.5 * (time.perf_counter() - t0)):
+                    raise RuntimeError(f"hour stage failed ({e}) and only {left:.0f} s of the batch budget are left: "
+                                       f"no retry") from e
+                if self.engine.failed or self.engine.restarts >= self.engine.max_restarts:
+                    raise RuntimeError(f"hour stage failed ({e}) and the engine cannot be restarted (restarts "
+                                       f"exhausted earlier: {self.engine.restarts}/{self.engine.max_restarts}"
+                                       f"{'; ' + self.engine.failed if self.engine.failed else ''}): no retry") from e
                 log.error("V3_HOUR_RETRY %sMHz %s: %s; again in a fresh engine", self.band, group, e)
                 rec["first_hour_error"] = str(e)
                 self.engine.restart("fresh engine for the hour stage")
-                if self.deadline is not None:
-                    hto = min(hto, self.deadline - time.perf_counter() - 30.0)
-                r = self.engine.request("hour", timeout=hto, **hq)
+                if left is not None:
+                    hto = left if hto is None else min(hto, left)
+                try:
+                    r = self.engine.request("hour", timeout=hto, **hq)
+                except engine_client.EngineFailed as e2:
+                    raise RuntimeError(f"hour stage retry: the engine cannot be restarted ({e2})") from e2
             imaged = set(r.get("qa_stems") or [])
             rec["imager_timing_s"] = r.get("timing", {})
             rec["n_loaded"] = r.get("n_loaded")

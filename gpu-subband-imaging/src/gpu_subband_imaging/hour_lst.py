@@ -54,14 +54,21 @@ def qa_reject(rms: List[float]) -> Tuple[List[int], float, float]:
 
 
 def read_stats(qa_dir: Path) -> List[Dict]:
+    """The pilot QA rows of a band-hour; a snapshot imaged by several runs counts once, the newest
+    (row time "t" where the worker wrote one, else the file's modification time; ties by name)."""
     rows: Dict[str, Dict] = {}
+    when: Dict[str, tuple] = {}
     d = qa_dir / ".snapshot_stats"
     if d.is_dir():
-        for f in sorted(d.glob("*.jsonl")):
+        files = sorted(d.glob("*.jsonl"), key=lambda f: (f.stat().st_mtime, f.name))
+        for k, f in enumerate(files):
+            mt = f.stat().st_mtime
             for line in f.read_text().splitlines():
                 if line.strip():
                     r = json.loads(line)
-                    rows[r["ts"]] = r            # a re-run of a snapshot replaces it
+                    key = (float(r.get("t", mt)), k)
+                    if r["ts"] not in when or key >= when[r["ts"]]:
+                        rows[r["ts"]], when[r["ts"]] = r, key      # a re-run of a snapshot replaces it
     return [rows[k] for k in sorted(rows)]
 
 

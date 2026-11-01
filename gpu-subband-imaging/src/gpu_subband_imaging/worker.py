@@ -248,7 +248,7 @@ class Worker:
 
     UNTAR_SPACE_MARGIN = 1.5   # free space wanted in untar_to, in units of the tar size
 
-    def _untar_root(self) -> Optional[Path]:
+    def _untar_root(self, configured: bool = False) -> Optional[Path]:
         """This process's directory under v3.untar_to: <untar_to>/.gsi3w_<uid>_<host>_<pid>.
 
         Named so that a later batch can tell a crashed worker's leftovers (same user and
@@ -256,13 +256,16 @@ class Worker:
         """
         import os
         v3 = getattr(self.cfg.pipeline, "v3", None)
-        if v3 is None or not v3.untar_to or getattr(self, "_untar_disabled", False):
+        # configured=True: the directory v3.untar_to names whether or not untar to tmpfs is in use right
+        # now (the gsi v3 batch turns it off under memory pressure; sweeps and cleanups still need it)
+        if v3 is None or not v3.untar_to or (getattr(self, "_untar_disabled", False) and not configured):
             return None
         return Path(v3.untar_to) / f".gsi3w_{os.getuid()}_{os.uname().nodename}_{os.getpid()}"
 
-    def _untar_dir(self, stamp: str) -> Optional[Path]:
-        """<untar root>/<stamp> when the tar is to be streamed into tmpfs, else None."""
-        root = self._untar_root()
+    def _untar_dir(self, stamp: str, configured: bool = False) -> Optional[Path]:
+        """<untar root>/<stamp> when the tar is to be streamed into tmpfs, else None (configured: the
+        directory even while untar to tmpfs is turned off, for cleanups)."""
+        root = self._untar_root(configured)
         return None if root is None else root / stamp
 
     def _v3_sweep_untar(self) -> None:
@@ -270,7 +273,7 @@ class Worker:
         import os
         import re
         import stat
-        root = self._untar_root()
+        root = self._untar_root(configured=True)
         if root is None:
             return
         base, uid, host = root.parent, os.getuid(), os.uname().nodename
@@ -734,7 +737,7 @@ class Worker:
 
         if self.lst_layout:
             row = dict(stamp=stamp, ts=lst.timestamp(stamp), file=self._archive_paths(stamp)[1].name,
-                       **image.v_stats(fits_files[1]))
+                       t=time.time(), **image.v_stats(fits_files[1]))
             self._qa.append(row)
             self._append_qa_row(row)
         for f, target in zip(fits_files, self._archive_paths(stamp)):

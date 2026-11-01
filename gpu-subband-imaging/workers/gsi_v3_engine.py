@@ -286,6 +286,11 @@ def _fake_hour_module():
         mode = os.environ.get("GSI_V3_FAKE_HOUR")
         if mode == "fail":
             raise RuntimeError("fake hour failure")
+        if mode.startswith("die_once:"):                  # tests: the first engine dies in the hour
+            marker = Path(mode.split(":", 1)[1])
+            if not marker.exists():
+                marker.write_text(str(os.getpid()))
+                os._exit(9)
         if mode.startswith("fail_once:"):                 # tests: fails in the first engine only
             marker = Path(mode.split(":", 1)[1])
             if not marker.exists():

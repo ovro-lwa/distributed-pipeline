@@ -342,7 +342,11 @@ class V3Params:
     zest_hard_memory_limit: str = ""  # the daemon's JULIA_CUDA_HARD_MEMORY_LIMIT ("" = unset, as v2)
     zest_gc_between: str = ""         # "" (v2) | young | full: Julia GC in the daemon after each snapshot's reply
     profile_no_image: bool = False    # profiling only: peel + record without the engine's imaging (no FITS, no hour)
-    budget_margin_s: float = 300.0    # hour_source=memory: the worker stops itself this long before batch_timeout_seconds
+    budget_margin_s: float = 300.0
+    # hour_source=memory: an input that failed in this many batch attempts (0 = max_retries + 1) is given
+    # up, and the hour is made from the rest (V3_HOUR_REDUCED, provenance hour.failed_inputs); a tar that
+    # vanished is given up at once
+    max_input_failures: int = 0    # hour_source=memory: the worker stops itself this long before batch_timeout_seconds
 
     def __post_init__(self) -> None:
         if self.write_kept_ms is None:
@@ -386,6 +390,8 @@ class V3Params:
                               "an engine restart loses the band-hour's records")
         if self.zest_gc_between not in ("", "young", "full"):
             raise ConfigError("v3.zest_gc_between must be '', 'young' or 'full'")
+        if self.max_input_failures < 0:
+            raise ConfigError("v3.max_input_failures must be >= 0 (0 = max_retries + 1)")
         if self.engine_max_restarts < 0 or self.mem_check_every < 1 or self.budget_margin_s < 0:
             raise ConfigError("v3.engine_max_restarts >= 0, v3.mem_check_every >= 1, v3.budget_margin_s >= 0")
         if self.checkpoint == "archive" and self.archive == "none":
@@ -515,6 +521,12 @@ class PipelineConfig:
             raise ConfigError("v3.hour_source=memory needs layout=lst and stream_hour_images")
         if self.v3.hour_source == "archive" and self.layout != "lst":
             raise ConfigError("v3.hour_source=archive needs layout=lst (hour_lst.run_band)")
+        if self.v3.hour_source == "memory" and self.batch_timeout_seconds and \
+                self.v3.budget_margin_s >= self.batch_timeout_seconds:
+            raise ConfigError("v3.budget_margin_s must be smaller than batch_timeout_seconds")
+        if self.v3.profile_no_image and not os.environ.get("GSI_V3_ALLOW_PROFILE"):
+            # profiling only: the batch then always fails (no FITS, no hour), so it can never look done
+            raise ConfigError("v3.profile_no_image is a profiling switch: set GSI_V3_ALLOW_PROFILE=1 to use it")
         if self.v3.hour_source == "memory" and self.batch_timeout_seconds and \
                 self.hour_imaging.timeout_seconds and \
                 self.batch_timeout_seconds < self.hour_imaging.timeout_seconds + 1800 + self.v3.budget_margin_s:
