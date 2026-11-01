@@ -36,7 +36,8 @@ needs_v3_imager = pytest.mark.skipif(not _has_engine_imager(), reason="imager wi
 def _env(**kw):
     env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(REPO / "src"), IMAGER_SRC or ""]),
                GSI_V3_ENGINE_BACKEND="fake", CUDA_VISIBLE_DEVICES="")
-    for k in ("GSI_V3_FAKE_SLEEP", "GSI_V3_FAKE_FAIL", "GSI_V3_FAKE_DIE", "GSI_V3_FAKE_FATAL", "GSI_V3_FAKE_HOUR"):
+    for k in ("GSI_V3_FAKE_SLEEP", "GSI_V3_FAKE_FAIL", "GSI_V3_FAKE_DIE", "GSI_V3_FAKE_FATAL", "GSI_V3_FAKE_HOUR",
+              "GSI_V3_FAKE_DEGENERATE"):
         env.pop(k, None)
     env.update({k: str(v) for k, v in kw.items()})
     return env
@@ -173,6 +174,44 @@ def test_image_failure_is_reported_after_the_record(tmp_path):
         assert e.value.reply["record"]["n_kept"] > 0 and c.alive
     finally:
         c.close()
+
+
+@needs_v3_imager
+def test_degenerate_psf_reply_is_permanent_and_not_fatal(tmp_path):
+    """The imager's DegeneratePSFError (bad input data, e.g. 20261031_101739_32MHz) -> an error
+    reply marked permanent; the engine keeps running and the record is still made.  An ordinary
+    image error is not marked permanent."""
+    c = _client(GSI_V3_FAKE_DEGENERATE="20261031_101709_23MHz", GSI_V3_FAKE_FAIL="20261031_101701_23MHz")
+    try:
+        c.request("store_open", path=None, backend="ram")
+        _peeled_slot(tmp_path / "s0")
+        with pytest.raises(engine_client.EngineError, match="DegeneratePSFError.*degenerate PSF") as e:
+            c.request("image_slot", **_req(tmp_path / "s0", tmp_path / "i", "20261031_101709_23MHz"))
+        assert e.value.reply["permanent"] is True and not e.value.reply["fatal"] and c.alive
+        assert e.value.reply["record"]["n_kept"] > 0 and c.restarts == 0
+        _peeled_slot(tmp_path / "s1", seed=1, stem="20261031_101701_23MHz")
+        with pytest.raises(engine_client.EngineError, match="fake failure") as e:
+            c.request("image_slot", **_req(tmp_path / "s1", tmp_path / "i1", "20261031_101701_23MHz"))
+        assert "permanent" not in e.value.reply
+    finally:
+        c.close()
+
+
+def test_permanent_input_failure_contract():
+    """The imager's exception carries the attribute the engine keys on (and stays a ValueError,
+    the type of the old 'zero-size array' error, for v2 callers)."""
+    sys.path.insert(0, str(REPO / "workers"))
+    try:
+        import gsi_v3_engine as eng
+    finally:
+        sys.path.pop(0)
+    from ttcalx_imager import beam
+    if not hasattr(beam, "DegeneratePSFError"):
+        pytest.skip("imager without DegeneratePSFError")
+    err = beam.DegeneratePSFError("degenerate PSF")
+    assert eng.is_permanent_input_failure(err) and isinstance(err, ValueError)
+    assert not eng.is_permanent_input_failure(ValueError("zero-size array to reduction operation"))
+    assert not eng.is_permanent_input_failure(RuntimeError("cudaErrorIllegalAddress"))
 
 
 @needs_v3_imager

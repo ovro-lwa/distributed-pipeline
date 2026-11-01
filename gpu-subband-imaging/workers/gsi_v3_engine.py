@@ -214,10 +214,28 @@ def _reuse_svd(quantum, pool, gridder):
     return svd
 
 
+def is_permanent_input_failure(err) -> bool:
+    """The imager marks errors that are a property of the input data (ttcalx_imager.beam.
+    DegeneratePSFError: a snapshot whose uv coverage cannot give a usable PSF / restoring beam) with
+    permanent_input_failure = True: a retry gives the same result, the worker gives the input up at once."""
+    return bool(getattr(err, "permanent_input_failure", False))
+
+
+def _degenerate_psf_error():
+    try:
+        from ttcalx_imager.beam import DegeneratePSFError
+        return DegeneratePSFError
+    except ImportError:                       # an imager without it: the same contract
+        class DegeneratePSFError(ValueError):
+            permanent_input_failure = True
+        return DegeneratePSFError
+
+
 class FakeBackend:
     """Tests: no GPU.  'Images' the selected Stokes I / V sums into 8 x 8 FITS files.  Test hooks
     by environment: GSI_V3_FAKE_SLEEP (s per image), GSI_V3_FAKE_FAIL (stem: error reply),
-    GSI_V3_FAKE_DIE (stem: the process exits), GSI_V3_FAKE_FATAL (stem: a fatal CUDA-like error)."""
+    GSI_V3_FAKE_DIE (stem: the process exits), GSI_V3_FAKE_FATAL (stem: a fatal CUDA-like error),
+    GSI_V3_FAKE_DEGENERATE (stem: the imager's DegeneratePSFError, a permanent input failure)."""
     name = "fake"
     imager = "fake"
 
@@ -231,6 +249,8 @@ class FakeBackend:
             raise RuntimeError(f"fake failure for {stem}")
         if os.environ.get("GSI_V3_FAKE_FATAL") == stem:
             raise RuntimeError("CUDARuntimeError: cudaErrorIllegalAddress: an illegal memory access")
+        if os.environ.get("GSI_V3_FAKE_DEGENERATE") == stem:
+            raise _degenerate_psf_error()(f"degenerate PSF: max|uvw| = 21.7 lambda over 672 samples (fake, {stem})")
         small, d = prepare(snap, req, rot, xp=np)
         if os.environ.get("GSI_V3_FAKE_DUMP"):            # tests: what the GPU imager would get
             np.savez(f"{req['prefix']}-prep.npz", uvw=small["uvw"], data=d, phase_dir=np.array(small["phase_dir"]),
@@ -470,7 +490,10 @@ class Engine:
             if err is not None:
                 errors.append(f"image: {err!r}")
                 r["fatal"] = any(m in repr(err) for m in FATAL_MARKERS)
-                if not isinstance(err, MemoryError):
+                if is_permanent_input_failure(err):
+                    r["permanent"] = True             # bad input data: the worker does not retry it
+                    print(f"permanent input failure imaging {q.get('stem')}: {err!r}", file=sys.stderr, flush=True)
+                elif not isinstance(err, MemoryError):
                     traceback.print_exception(type(err), err, err.__traceback__, file=sys.stderr)
             for k in ("record", "image"):
                 v = out.get(k)
