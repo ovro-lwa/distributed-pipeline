@@ -256,7 +256,7 @@ class Worker:
         """
         import os
         v3 = getattr(self.cfg.pipeline, "v3", None)
-        if v3 is None or not v3.untar_to:
+        if v3 is None or not v3.untar_to or getattr(self, "_untar_disabled", False):
             return None
         return Path(v3.untar_to) / f".gsi3w_{os.getuid()}_{os.uname().nodename}_{os.getpid()}"
 
@@ -733,9 +733,10 @@ class Worker:
                 log.error("render_frame %s failed: %s", stamp, e)
 
         if self.lst_layout:
-            self._qa.append(dict(stamp=stamp, ts=lst.timestamp(stamp),
-                                 file=self._archive_paths(stamp)[1].name,
-                                 **image.v_stats(fits_files[1])))
+            row = dict(stamp=stamp, ts=lst.timestamp(stamp), file=self._archive_paths(stamp)[1].name,
+                       **image.v_stats(fits_files[1]))
+            self._qa.append(row)
+            self._append_qa_row(row)
         for f, target in zip(fits_files, self._archive_paths(stamp)):
             t0 = time.perf_counter()
             f = f.rename(f.parent / target.name)
@@ -904,6 +905,23 @@ class Worker:
         for name, dt in steps.items():
             log.info("timing %sMHz batch%d stamp=%s phase=%s elapsed=%.2f s",
                      self.band, self.batch, stamp, name, dt)
+
+    def _qa_stats_path(self, stamp: str) -> Path:
+        import os
+        return (self.band_dir(stamp) / "QA" / ".snapshot_stats" /
+                f"b{self.batch}_{os.uname().nodename}_{os.getpid()}.jsonl")
+
+    def _append_qa_row(self, row: dict) -> None:
+        """Persist one pilot QA row at once (a killed batch keeps the rows of its archived snapshots;
+        _write_qa_stats rewrites the same file with the same rows at the end)."""
+        import json
+        try:
+            p = self._qa_stats_path(row["stamp"])
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with self._archive_lock, open(p, "a") as fh:
+                fh.write(json.dumps(row) + "\n")
+        except OSError as e:
+            log.warning("pilot QA row %s not persisted: %s", row.get("stamp"), e)
 
     def _write_qa_stats(self) -> None:
         """Pilot V statistics of this batch -> QA/.snapshot_stats/<batch>.jsonl (hour step reads them)."""

@@ -33,6 +33,7 @@ import shutil
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -52,6 +53,48 @@ class Item:
     replay: bool = False
     raw_ms: Optional[Path] = None        # kept for the kept-MS writer (v3.write_kept_ms)
     stats: dict = field(default_factory=dict)
+
+
+class _EngineGate:
+    """Engine requests are "shared" (several in flight); a retry after an engine death is
+    "exclusive" (alone in the engine), so a request that kills the engine again while alone is
+    the culprit, and a healthy sibling that died with it gets its retry without being blamed."""
+
+    def __init__(self):
+        self._cv = threading.Condition()
+        self._readers = 0
+        self._writer = False
+        self._waiting = 0
+
+    @contextmanager
+    def shared(self):
+        with self._cv:
+            self._cv.wait_for(lambda: not self._writer and not self._waiting)
+            self._readers += 1
+        try:
+            yield
+        finally:
+            with self._cv:
+                self._readers -= 1
+                self._cv.notify_all()
+
+    @contextmanager
+    def exclusive(self):
+        with self._cv:
+            self._waiting += 1
+            self._cv.wait_for(lambda: not self._writer and self._readers == 0)
+            self._waiting -= 1
+            self._writer = True
+        try:
+            yield
+        finally:
+            with self._cv:
+                self._writer = False
+                self._cv.notify_all()
+
+
+class BatchAborted(RuntimeError):
+    """The batch cannot go on (engine failed for good, records lost, budget): stop prepping and peeling."""
 
 
 def _stamp(tar: str) -> str:
@@ -83,6 +126,11 @@ class V3Batch:
         self.mem_start = None
         self.hour_rec: Optional[dict] = None
         self.n_ok = self.n_fail = 0
+        self.n_prep_fail = 0                 # prep errors (not the no-data skips)
+        self.gate = _EngineGate()
+        self.fatal: Optional[str] = None     # set -> the batch is aborted at once
+        self.deadline: Optional[float] = None
+        self.n_guard = 0                     # memory guard escalation level
 
     # -- names ------------------------------------------------------------------------------------
     def kept_stem(self, stamp: str) -> str:
@@ -126,7 +174,10 @@ class V3Batch:
             hdr = hourstore.header_for(self.band, self.pl.date, self.w.group(stamp), self.record_phase_centre(stamp),
                                        self.pl.run_label, batch=self.batch, layout=getattr(self.pl, "layout", "utc"),
                                        cal_bp=str(self.pl.cal.bp), cal_xy=str(self.pl.cal.xy))
+        if self.memory and self.store_path is None and client.restarts:
+            raise BatchAborted("engine restarted without a record file: the band-hour's records are lost")
         r = client.request("store_open", timeout=max(600.0, self.v3.engine_timeout_s),
+                           abandoned=list(client.abandoned),
                            path=str(self.store_path) if self.store_path else None,
                            backend=self.plan.backend if self.plan else "ram", header=hdr,
                            phase_centre=self.record_phase_centre(stamp))
@@ -135,19 +186,44 @@ class V3Batch:
                  self.batch, r.get("path") or "RAM only", r.get("backend"), r.get("n", 0), r.get("nbytes", 0) / 1e9)
         return r
 
-    def _plan_store(self, n_todo: int) -> None:
+    def _ck_name(self, d) -> Path:
+        return Path(d) / self.pl.run_key / f"{self.band}MHz-{self.pl.date}-{self.group()}-b{int(self.batch):03d}.gsiv"
+
+    def _existing_store(self):
+        """(path, n records, bytes) of a record file this batch wrote before (archive or local checkpoint)."""
+        from . import hourstore
+        cands = [hourstore.archive_path(self.cfg, self.band, self.group(), self.batch)] if self.v3.archive != "none" \
+            else [self._ck_name(d) for d in self.v3.spill_dirs if d]
+        for p in cands:
+            try:
+                if p.exists() and p.stat().st_size > 0:
+                    return p, len(hourstore.scan(p).entries), p.stat().st_size
+            except Exception as e:                       # a damaged file is repaired at store_open
+                log.warning("V3_STORE_PLAN %s: %s", p, e)
+                return p, 0, p.stat().st_size
+        return None, 0, 0
+
+    def _plan_store(self, n_inputs: int) -> None:
+        """RAM or spill for the band-hour's records: every input that may give one (todo, replays and
+        the records already in the checkpoint), at the checkpoint's own bytes per record when there is
+        one, plus the fixed per-process term (prep processes, Julia, engine)."""
         from . import hourstore, memory
         if not self.records:
             return
         group = self.group()
         want_file = self.v3.archive == "none" and self.v3.checkpoint == "local"
-        self.plan = memory.plan_store(self.v3.store, n_todo, self.band, self.v3.ram_reserve_gb, self.v3.spill_dirs,
-                                      want_file=want_file)
+        old, n_old, b_old = self._existing_store()
+        rb = b_old / n_old if n_old else None
+        self.plan = memory.plan_store(self.v3.store, max(n_inputs, n_old), self.band, self.v3.ram_reserve_gb,
+                                      self.v3.spill_dirs, record_bytes=rb, want_file=want_file,
+                                      prefer_dir=str(old.parents[1]) if old is not None and want_file else None)
         if self.v3.archive != "none":
             self.store_path = hourstore.archive_path(self.cfg, self.band, group, self.batch)
         elif self.plan.spill_dir is not None and (want_file or self.plan.backend == "memmap"):
-            self.store_path = (Path(self.plan.spill_dir) / self.pl.run_key /
-                               f"{self.band}MHz-{self.pl.date}-{group}-b{int(self.batch):03d}.gsiv")
+            self.store_path = self._ck_name(self.plan.spill_dir)
+        if self.memory and self.store_path is None:
+            log.error("V3_NO_CHECKPOINT %sMHz batch%d: no record file (%s): an engine death aborts the batch",
+                      self.band, self.batch, "; ".join(self.plan.notes) or "no spill dir")
         if self.plan.backend == "memmap":
             log.warning("V3_MEM_SPILL %sMHz batch%d at start: %s -> %s", self.band, self.batch, self.plan.reason,
                         self.store_path)
@@ -156,17 +232,114 @@ class V3Batch:
                      f", checkpoint {self.store_path}" if self.store_path else "")
         for n in self.plan.notes:
             log.warning("V3_STORE_PLAN %sMHz batch%d: %s", self.band, self.batch, n)
-        memory.reserve(self.plan.need_bytes if self.plan.backend == "ram" else 0.0, band=self.band, batch=self.batch)
+        memory.reserve(self.plan.need_bytes if self.plan.backend == "ram" else memory.FIXED_BYTES, band=self.band,
+                       batch=self.batch)
 
     def _start_engine(self):
         from . import engine_client
         python, env = self._engine_env()
         c = engine_client.EngineClient(python, engine_client.engine_py(), env,
                                        start_timeout=self.v3.engine_start_timeout_s,
-                                       on_restart=lambda cl: self._open_store(cl))
+                                       on_restart=lambda cl: self._open_store(cl),
+                                       max_restarts=self.v3.engine_max_restarts)
         log.info("batch %sMHz/%d: gsi v3 engine pid %s (%s, imager %s)", self.band, self.batch, c.pid,
                  c.info.get("backend"), c.info.get("imager"))
         return c
+
+    # -- skipped inputs, budget, /dev/shm, memory guard ---------------------------------------------
+    def _skipped_path(self) -> Path:
+        return self.w.band_dir(_stamp(self.tars[0])) / "QA" / ".v3_skipped.jsonl"
+
+    def _known_skipped(self) -> set:
+        """Stamps an earlier run skipped before the peel (no data): not prepped again on reruns."""
+        try:
+            return {json.loads(ln)["stamp"] for ln in self._skipped_path().read_text().splitlines() if ln.strip()}
+        except (OSError, ValueError, KeyError):
+            return set()
+
+    def _note_skipped(self, stamp: str, nonzero: float) -> None:
+        p = self._skipped_path()
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with self._lock, open(p, "a") as fh:
+                fh.write(json.dumps(dict(stamp=stamp, nonzero_fraction=nonzero, t=time.time())) + "\n")
+        except OSError as e:
+            log.warning("cannot note skipped %s: %s", stamp, e)
+
+    _budget = None
+
+    def _start_budget(self, t0: float) -> None:
+        """hour_source=memory: the worker stops itself (killing its daemon, engine and prep processes)
+        v3.budget_margin_s before batch_timeout_seconds, so no orphan keeps writing after the
+        orchestrator gave up and dispatched a retry; the hour gets what is left of the budget."""
+        bt = getattr(self.pl, "batch_timeout_seconds", None)
+        if not (self.memory and bt):
+            return
+        left = float(bt) - float(self.v3.budget_margin_s)
+        self.deadline = t0 + left
+        self._budget = threading.Timer(max(1.0, left), self._budget_expired)
+        self._budget.daemon = True
+        self._budget.start()
+
+    def _budget_expired(self) -> None:
+        log.critical("V3_BUDGET %sMHz batch%d: batch_timeout_seconds - v3.budget_margin_s reached: stopping "
+                     "(daemon, engine, prep processes killed)", self.band, self.batch)
+        for kill in (lambda: self.daemon._p.kill() if self.daemon is not None else None,
+                     lambda: self.engine._kill("worker budget") if self.engine is not None else None):
+            try:
+                kill()
+            except Exception:
+                pass
+        pool = getattr(self.w, "_v3_pool", None)
+        for p in list((getattr(pool, "_processes", None) or {}).values()):
+            try:
+                p.kill()
+            except Exception:
+                pass
+        try:
+            from . import memory
+            memory.unreserve()
+            if self.ring is not None:
+                self.ring.close()
+        finally:
+            os._exit(124)
+
+    def _plan_shm(self) -> None:
+        """Untar into tmpfs only if it has room next to the ring: (lookahead + 2) slots + lookahead raw
+        MSes (+ the raw MSes kept for the kept-MS writer), else untar to work_root (V3_SHM_TIGHT)."""
+        root = self.w._untar_root()
+        if root is None:
+            return
+        try:
+            tar_b = Path(self.tars[0]).stat().st_size
+            free = shutil.disk_usage(str(root.parent if root.parent.exists() else "/dev/shm")).free
+            shm_free = shutil.disk_usage("/dev/shm").free
+        except OSError:
+            return
+        n_raw = self.lookahead + (2 if self.write_kept else 0)
+        need_untar = n_raw * tar_b * self.w.UNTAR_SPACE_MARGIN
+        need_slots = (self.lookahead + 2) * 130e6
+        same = os.stat(str(root.parent) if root.parent.exists() else "/dev/shm").st_dev == os.stat("/dev/shm").st_dev
+        if shm_free < need_slots * 1.2 + (need_untar if same else 0) or free < need_untar:
+            self.w._untar_disabled = True
+            log.warning("V3_SHM_TIGHT %sMHz batch%d: %.1f GB free in tmpfs for %.1f GB of slots + raw MSes: untar to "
+                        "work_root", self.band, self.batch, min(shm_free, free) / 1e9, (need_slots + need_untar) / 1e9)
+
+    def _memory_tight(self) -> None:
+        """MemAvailable below the reserve (checked every v3.mem_check_every snapshots, acted on each time):
+        1st spill the store, 2nd lookahead 2 and untar to work_root, then only logged."""
+        self.n_guard += 1
+        if self.n_guard == 1 and self.records and self.plan is not None and self.plan.backend == "ram":
+            self._spill_now("MemAvailable below v3.ram_reserve_gb")
+            return
+        if not getattr(self.w, "_untar_disabled", False) or self.lookahead > 2:
+            self.lookahead = min(self.lookahead, 2)
+            self.w._untar_disabled = True
+            log.warning("V3_MEM_SPILL %sMHz batch%d: MemAvailable below the reserve: lookahead 2, untar to "
+                        "work_root", self.band, self.batch)
+            return
+        log.warning("V3_MEM_TIGHT %sMHz batch%d: MemAvailable still below v3.ram_reserve_gb (check %d)",
+                    self.band, self.batch, self.n_guard)
 
     # -- feeders -----------------------------------------------------------------------------------
     def _feed(self, idx: int, tar: str, slot: Path, replay: bool) -> Optional[Item]:
@@ -207,6 +380,7 @@ class V3Batch:
             if not res["slot_written"]:
                 log.warning("skipping %sMHz stamp=%s before peeling: visibility nonzero_fraction %.6g is below %.6g",
                             self.band, stamp, st["nonzero_fraction"], peel.min_visibility_nonzero_fraction)
+                self._note_skipped(stamp, st["nonzero_fraction"])
                 raise _Skip()
             if not keep_raw:
                 shutil.rmtree(ms, ignore_errors=True)
@@ -217,6 +391,8 @@ class V3Batch:
             return None
         except Exception as e:
             log.error("preprocess %s failed: %s", stamp, e)
+            with self._lock:
+                self.n_prep_fail += 1
             keep_raw = False
             self._release(slot)
             return None
@@ -278,27 +454,10 @@ class V3Batch:
         prefix.parent.mkdir(parents=True, exist_ok=True)
         req = self._engine_request(it, prefix)
         released = False
+        kept_box: list = []
         try:
-            fut = self.engine.submit("image_slot", **req)
-            kept_tmp = None
-            if self.write_kept and it.raw_ms is not None and not (it.replay and w.kept_ms_path(it.stamp, w.keep_root()).exists()):
-                t1 = time.perf_counter()
-                kept_tmp = w.work / it.stamp / f"{it.stamp}_kept.ms"
-                try:
-                    w._v3_run(fastprep.kept_from_slot_task, str(w._v3_template), str(it.raw_ms), str(it.slot),
-                              str(kept_tmp))
-                    log.info("timing %sMHz batch%d stamp=%s phase=kept_write elapsed=%.2f s", self.band,
-                             self.batch, it.stamp, time.perf_counter() - t1)
-                except Exception as e:
-                    log.error("kept MS %s failed: %s", it.stamp, e)
-                    kept_tmp = None
-                    if self.v3.hour_source == "kept_ms":
-                        raise
-            try:
-                r = fut.result(self.v3.engine_timeout_s)
-            except (engine_client.EngineDied, engine_client.EngineTimeout) as e:
-                log.error("V3_ENGINE %sMHz stamp=%s: %s; retrying once on a new engine", self.band, it.stamp, e)
-                r = self.engine.request("image_slot", timeout=self.v3.engine_timeout_s, **req)
+            r = self._engine_image(it, req, lambda: kept_box.append(self._write_kept(it)))
+            kept_tmp = kept_box[0] if kept_box else None
             self._release(it.slot)
             released = True
             self._log_engine(it, r, time.perf_counter() - t0)
@@ -324,6 +483,63 @@ class V3Batch:
             if not released:
                 self._release(it.slot)
             self._cleanup_item(it)
+
+    def _write_kept(self, it: Item) -> Optional[Path]:
+        """The kept MS from the peeled slot (v3.write_kept_ms), in a pool process; None if not wanted."""
+        from . import fastprep
+        w = self.w
+        if not (self.write_kept and it.raw_ms is not None) or \
+                (it.replay and w.kept_ms_path(it.stamp, w.keep_root()).exists()):
+            return None
+        t1 = time.perf_counter()
+        kept_tmp = w.work / it.stamp / f"{it.stamp}_kept.ms"
+        try:
+            w._v3_run(fastprep.kept_from_slot_task, str(w._v3_template), str(it.raw_ms), str(it.slot),
+                      str(kept_tmp))
+        except Exception as e:
+            log.error("kept MS %s failed: %s", it.stamp, e)
+            if self.v3.hour_source == "kept_ms":
+                raise
+            return None
+        log.info("timing %sMHz batch%d stamp=%s phase=kept_write elapsed=%.2f s", self.band, self.batch, it.stamp,
+                 time.perf_counter() - t1)
+        return kept_tmp
+
+    def _engine_image(self, it: Item, req: dict, while_waiting) -> dict:
+        """image_slot with the culprit rule: a request that dies with others in flight is retried
+        alone (exclusive) -- the death need not be its own; one that dies alone is the culprit and
+        fails.  The engine failed for good (restarts exhausted, records lost) -> the batch aborts."""
+        from . import engine_client as ec
+        try:
+            with self.gate.shared():
+                h = self.engine.submit("image_slot", **req)
+                while_waiting()
+                return h.result(self.v3.engine_timeout_s)
+        except ec.EngineFailed as e:
+            self._abort(f"engine failed: {e}")
+            raise
+        except (ec.EngineDied, ec.EngineTimeout) as e:
+            if not self.records or self.store_path is not None or not self.memory:
+                log.error("V3_ENGINE %sMHz stamp=%s: %s; retrying alone on the restarted engine", self.band,
+                          it.stamp, e)
+            else:                                # no record file: the restart lost the band-hour's records
+                self._abort(f"engine died without a checkpoint file ({e}): the records are lost")
+                raise BatchAborted(self.fatal) from e
+        with self.gate.exclusive():
+            try:
+                return self.engine.request("image_slot", timeout=self.v3.engine_timeout_s, **req)
+            except ec.EngineFailed as e:
+                self._abort(f"engine failed: {e}")
+                raise
+            except (ec.EngineDied, ec.EngineTimeout) as e:
+                log.error("V3_ENGINE_CULPRIT %sMHz stamp=%s: the engine died again with only this snapshot "
+                          "in it: %s", self.band, it.stamp, e)
+                raise
+
+    def _abort(self, why: str) -> None:
+        if self.fatal is None:
+            self.fatal = why
+            log.critical("V3_ABORT %sMHz batch%d: %s", self.band, self.batch, why)
 
     def _log_engine(self, it: Item, r: dict, wall: float) -> None:
         tm = r.get("timing", {})
@@ -359,15 +575,25 @@ class V3Batch:
     def run(self) -> None:
         from . import memory, slots
         w = self.w
-        have_fits = {t for t in self.tars if w._fits_path_for_stamp(_stamp(t)).exists()}
-        todo = [t for t in self.tars if t not in have_fits]
-        if not todo and (not self.memory or self._hour_done()):
+        if self.memory and self._hour_done():
+            log.info("batch %sMHz/%d: nothing to do (hour products done)", self.band, self.batch)
+            return
+        skipped = self._known_skipped()
+        tars = [t for t in self.tars if _stamp(t) not in skipped]
+        if len(tars) < len(self.tars):
+            log.info("batch %sMHz/%d: %d input(s) skipped before (no data) are not prepped again", self.band,
+                     self.batch, len(self.tars) - len(tars))
+        have_fits = {t for t in tars if w._fits_path_for_stamp(_stamp(t)).exists()}
+        todo = [t for t in tars if t not in have_fits]
+        if not todo and not self.memory:
             log.info("batch %sMHz/%d: nothing to do", self.band, self.batch)
             return
         self.mem_start = memory.mem_available()
         batch_start = time.perf_counter()
+        self._start_budget(batch_start)
         w.work.mkdir(parents=True, exist_ok=True)
-        self._plan_store(len(todo))
+        self._plan_store(len(tars))
+        self._plan_shm()
         t0 = time.perf_counter()
         w._bp = w._stage_cal(self.pl.cal.bp)
         w._xy = w._stage_cal(self.pl.cal.xy)
@@ -385,7 +611,7 @@ class V3Batch:
             self.daemon = w._start_daemon()          # Julia JIT overlaps the engine start and the prep
             self.engine = self._start_engine()
             have_rec = set(self._open_store(self.engine).get("stems", []))
-            replay = [t for t in self.tars if t in have_fits and self.records and
+            replay = [t for t in tars if t in have_fits and self.records and
                       self.kept_stem(_stamp(t)) not in have_rec]
             self.recorded |= have_rec
             if replay:
@@ -410,6 +636,11 @@ class V3Batch:
                 self.ring.close()
                 self.ring = None
             if self.memory:
+                # never an hour without a snapshot that could have been imaged: a failed one (prep, peel,
+                # engine) fails the batch, and the orchestrator's retry redoes just the missing ones
+                if self.n_fail or self.n_prep_fail:
+                    raise RuntimeError(f"V3_INCOMPLETE batch {self.band}MHz/{self.batch}: {self.n_fail} snapshot(s) "
+                                       f"failed, {self.n_prep_fail} prep error(s): no hour products (retry)")
                 # the batch's output is the band-hour: snapshots done in earlier runs count (a rerun
                 # whose only remaining inputs are skipped snapshots still makes the hour products)
                 from .. import hour_lst
@@ -422,7 +653,9 @@ class V3Batch:
         finally:
             if self.daemon is not None:
                 self.daemon.close()
-            if self.engine is not None:
+            if self._budget is not None:
+                self._budget.cancel()
+            if self.engine is not None and self.engine.alive:     # never restart an engine just for info
                 try:
                     info = self.engine.request("info", timeout=60)
                     log.info("V3_ENGINE_INFO %sMHz batch%d: maxrss %.1f GB, %s", self.band, self.batch,
@@ -466,6 +699,7 @@ class V3Batch:
         guard = memory.MemoryGuard(self.v3.ram_reserve_gb, every=self.v3.mem_check_every)
         recycle = getattr(self.cfg.cluster, "zest_recycle_files", 25)
         futs: Dict[int, Future] = {}
+        posts: List[Future] = []
         nxt = [0]
         with ThreadPoolExecutor(max_workers=max(1, self.cfg.cluster.max_feeders)) as feeders, \
                 ThreadPoolExecutor(max_workers=3) as post:
@@ -478,9 +712,26 @@ class V3Batch:
                     j = nxt[0]
                     futs[j] = feeders.submit(self._feed, j, work[j][0], slot, work[j][1])
                     nxt[0] += 1
-            posts: List[Future] = []
             n_zested = 0
             for i in range(n):
+                if self.fatal:
+                    for f in futs.values():
+                        f.cancel()
+                    for f in futs.values():         # running feeders: wait, give their slots back
+                        if not f.cancelled():
+                            try:
+                                x = f.result()
+                                if x is not None:
+                                    self._release(x.slot)
+                                    self._cleanup_item(x)
+                            except Exception:
+                                pass
+                    for f in posts:
+                        try:
+                            f.result()
+                        except Exception:
+                            pass
+                    raise BatchAborted(self.fatal)
                 top_up(i)
                 it = futs.pop(i).result()
                 top_up(i)
@@ -503,8 +754,8 @@ class V3Batch:
                     self.n_fail += 1
                     continue
                 posts.append(post.submit(self._post, it))
-                if self.records and guard.check():
-                    self._spill_now("MemAvailable below v3.ram_reserve_gb")
+                if guard.check():
+                    self._memory_tight()
             for f in posts:
                 try:
                     f.result()
@@ -512,6 +763,8 @@ class V3Batch:
                 except Exception as e:
                     log.error("image/archive failed: %s", e)
                     self.n_fail += 1
+            if self.fatal:
+                raise BatchAborted(self.fatal)
 
     def _peel(self, it: Item) -> None:
         from . import slots
@@ -535,7 +788,7 @@ class V3Batch:
                 log.error("V3_MEM_SPILL %sMHz batch%d wanted (%s) but no spill dir has room: staying in RAM",
                           self.band, self.batch, why)
                 return
-            path = Path(d) / self.pl.run_key / f"{self.band}MHz-{self.pl.date}-{self.group()}-b{int(self.batch):03d}.gsiv"
+            path = self._ck_name(d)
         try:
             r = self.engine.request("spill", timeout=max(600.0, self.v3.engine_timeout_s), path=str(path))
         except Exception as e:
@@ -544,7 +797,7 @@ class V3Batch:
         self.store_path = Path(r["path"])
         self.plan.backend = "memmap"
         self.lookahead = min(self.lookahead, 2)
-        memory.reserve(0.0, band=self.band, batch=self.batch)
+        memory.reserve(memory.FIXED_BYTES, band=self.band, batch=self.batch)
         log.warning("V3_MEM_SPILL %sMHz batch%d: %s -> %s (%d records), lookahead %d", self.band, self.batch, why,
                     r["path"], r.get("n", 0), self.lookahead)
 
@@ -595,7 +848,13 @@ class V3Batch:
         t0 = time.perf_counter()
         rc, imaged = 0, set()
         try:
-            r = self.engine.request("hour", timeout=h.timeout_seconds, argv=argv, expected=expected,
+            hto = h.timeout_seconds
+            if self.deadline is not None:            # what is left of the batch budget
+                left = self.deadline - time.perf_counter() - 30.0
+                hto = left if hto is None else min(float(hto), left)
+                if hto <= 0:
+                    raise RuntimeError("no batch budget left for the hour stage")
+            r = self.engine.request("hour", timeout=hto, argv=argv, expected=expected,
                                     log=str(qa_dir / f"{self.band}MHz-ttcalx-image.log"))
             imaged = set(r.get("qa_stems") or [])
             rec["imager_timing_s"] = r.get("timing", {})
@@ -641,11 +900,12 @@ class V3Batch:
                    worker_peak_rss_GB=memory.peak_rss() / 1e9,
                    mem_available_GB_start=None if self.mem_start is None else self.mem_start / 1e9,
                    mem_available_GB_end=(memory.mem_available() or 0) / 1e9)
-        try:
-            info = self.engine.request("info", timeout=60)
-            v3b["engine_peak_rss_GB"] = info.get("maxrss_GB")
-        except Exception:
-            pass
+        if self.engine.alive:                        # an engine that died in the hour is not restarted for this
+            try:
+                info = self.engine.request("info", timeout=60)
+                v3b["engine_peak_rss_GB"] = info.get("maxrss_GB")
+            except Exception:
+                pass
         if self.store_path is not None and self.store_path.exists():
             v3b["store_file_bytes"] = self.store_path.stat().st_size
         hour_lst.write_provenance(self.cfg, self.band, group, w.gpu, rec, v3b)

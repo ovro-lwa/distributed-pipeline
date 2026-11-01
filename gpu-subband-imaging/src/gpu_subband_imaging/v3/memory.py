@@ -29,6 +29,10 @@ RECORD_BYTES_HIGH = 21e6       # bands >= 82 MHz (85-100 MHz flagged)
 NEED_FACTOR = 1.15
 SPILL_FREE_FACTOR = 1.2
 RES_PREFIX = "gsi3_mem_"
+# what one GPU process of the v3 batch needs besides the records (design 5.1): 4 prep processes
+# (~5.6 GB), the Julia daemon (~3-4 GB), the engine (CuPy / cuFINUFFT host side, ~5 GB), hour-stage
+# transients (~2 GB); the ring and the tmpfs raw MSes are /dev/shm (worker_v3._plan_shm)
+FIXED_BYTES = 15e9
 
 
 def mem_available(meminfo: str = "/proc/meminfo") -> Optional[float]:
@@ -117,9 +121,10 @@ class StorePlan:
     spill_dir: Optional[str] = None   # where the GSIV file goes (spill, or the local checkpoint)
     reason: str = ""
     notes: List[str] = field(default_factory=list)
+    record_bytes: float = 0.0          # the records' part of need_bytes
 
     def as_dict(self) -> dict:
-        return dict(backend=self.backend, need_GB=self.need_bytes / GB,
+        return dict(backend=self.backend, need_GB=self.need_bytes / GB, records_GB=self.record_bytes / GB,
                     avail_GB=None if self.avail_bytes is None else self.avail_bytes / GB,
                     spill_dir=self.spill_dir, reason=self.reason, notes=list(self.notes))
 
@@ -138,14 +143,19 @@ def first_spill_dir(dirs: Sequence[str], need: float) -> Optional[str]:
     return None
 
 
-def plan_store(mode: str, n_todo: int, band: int, reserve_gb: float, spill_dirs: Sequence[str],
+def plan_store(mode: str, n_records: int, band: int, reserve_gb: float, spill_dirs: Sequence[str],
                record_bytes: Optional[float] = None, avail: Optional[float] = None,
-               others: Optional[float] = None, want_file: bool = False) -> StorePlan:
-    """RAM or spill for ``n_todo`` records (``mode`` = v3.store).  ``want_file``: a local
-    checkpoint is wanted anyway (v3.checkpoint: local), so a spill dir is chosen in RAM mode too.
-    Raises RuntimeError when a spill is needed and no spill dir has room."""
+               others: Optional[float] = None, want_file: bool = False, fixed_bytes: float = FIXED_BYTES,
+               prefer_dir: Optional[str] = None) -> StorePlan:
+    """RAM or spill for the band-hour's ``n_records`` records (all of them: those to make and those
+    already in a checkpoint; ``mode`` = v3.store).  RAM if records x 1.15 + ``fixed_bytes`` fit into
+    MemAvailable - reserve - other reservations.  ``want_file``: a local checkpoint is wanted anyway
+    (v3.checkpoint: local), so a spill dir is chosen in RAM mode too; ``prefer_dir``: the dir that
+    already holds this batch's checkpoint (always taken).  Raises RuntimeError when a spill is needed
+    and no spill dir has room."""
     rb = float(record_bytes or est_record_bytes(band))
-    need = max(0, int(n_todo)) * rb * NEED_FACTOR
+    rec_need = max(0, int(n_records)) * rb * NEED_FACTOR
+    need = rec_need + fixed_bytes
     if avail is None:
         avail = mem_available()
     others = reserved_by_others() if others is None else others
@@ -162,31 +172,35 @@ def plan_store(mode: str, n_todo: int, band: int, reserve_gb: float, spill_dirs:
     else:
         backend, why = "memmap", f"need {need / GB:.1f} GB > {free / GB:.1f} GB free of the reserve"
     d = None
-    if backend == "memmap" or want_file:
-        d = first_spill_dir(spill_dirs, need)
+    if prefer_dir is not None:
+        d = prefer_dir
+    elif backend == "memmap" or want_file:
+        d = first_spill_dir(spill_dirs, rec_need)
         if d is None:
             if backend == "memmap":
                 raise RuntimeError(f"v3.store: spill needed ({why}) but no v3.spill_dirs entry {list(spill_dirs)} "
-                                   f"has {need * SPILL_FREE_FACTOR / GB:.1f} GB free")
-            notes.append(f"no spill dir with {need * SPILL_FREE_FACTOR / GB:.1f} GB free: no local checkpoint")
-    return StorePlan(backend, need, free, d, why, notes)
+                                   f"has {rec_need * SPILL_FREE_FACTOR / GB:.1f} GB free")
+            notes.append(f"no spill dir with {rec_need * SPILL_FREE_FACTOR / GB:.1f} GB free: no local checkpoint")
+    p = StorePlan(backend, need, free, d, why, notes)
+    p.record_bytes = rec_need
+    return p
 
 
 @dataclass
 class MemoryGuard:
-    """Mid-batch check (design 5.2.2): MemAvailable below the reserve -> spill."""
+    """Mid-batch check (design 5.2.2), every ``every`` snapshots: True each time MemAvailable is
+    below the reserve (the caller escalates: spill, then less lookahead and no tmpfs untar)."""
     reserve_gb: float
-    every: int = 10
+    every: int = 2
     n: int = 0
-    fired: bool = False
+    fired: int = 0
 
     def check(self, avail: Optional[float] = None) -> bool:
-        """True exactly once, when the store should spill now."""
         self.n += 1
-        if self.fired or self.n % max(1, self.every):
+        if self.n % max(1, self.every):
             return False
         avail = mem_available() if avail is None else avail
         if avail is not None and avail < self.reserve_gb * GB:
-            self.fired = True
+            self.fired += 1
             return True
         return False
