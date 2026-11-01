@@ -55,7 +55,7 @@ def _validate_lustre_write_roots(cluster: "ClusterConfig",
     if pipeline.keep_ms_root:
         _validate_lustre_write_path("pipeline.keep_ms_root", pipeline.keep_ms_root)
     if pipeline.v3.archive_root:
-        _validate_lustre_write_path("pipeline.v3.archive_root", pipeline.v3.archive_root)
+        _validate_lustre_write_path("pipeline.v3.archive_root", Path(pipeline.v3.archive_root).resolve())
 
 
 # ---- cluster ---------------------------------------------------------------
@@ -342,6 +342,8 @@ class V3Params:
             raise ConfigError("v3.hour_source=memory needs v3.snapshot_io=shm")
         if self.archive != "none" and not self.archive_root:
             raise ConfigError("v3.archive needs v3.archive_root")
+        if self.archive_root:          # absolute, so the Lustre write check sees the real path
+            object.__setattr__(self, "archive_root", os.path.abspath(self.archive_root))
         if self.archive == "full":
             raise ConfigError("v3.archive=full is not implemented yet (use iv)")
         if self.hour_source == "archive" and self.archive == "none":
