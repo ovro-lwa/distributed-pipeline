@@ -23,6 +23,9 @@
 #   ZEST_DEVICE        gpu | cpu (TTCalX on Julia threads; needs ZEST_MODEL=exact)
 #   ZEST_REG_MAX_OFFSET_DEG, ZEST_REG_TAPER_DEG, ZEST_REG_LAMBDA
 #                      Tukey phase prior on the gains (off when the offset is 0)
+#   ZEST_TEST_IO       tests only: "" (peel) | identity (no peel: read + write back) |
+#                      perturb (no peel: scale the visibilities by 1.0001 e^{0.3i} and invert
+#                      the flags of every 7th baseline), for the slot I/O equivalence test
 #   ZEST_ENGINE        daemon (the loop below) | sky_rfi (TTCalX.zest_sky_rfi!, branch
 #                      feature/sponge-restore-fast-zest) with ZEST_SMOOTH_FLUX, ZEST_RESTORE,
 #                      ZEST_RESTORE_BELOW_MHZ, ZEST_RESTORE_OFFSET_DEG, ZEST_PRECISION,
@@ -30,11 +33,20 @@
 #                      residual guard are built in)
 # Anything but the defaults needs TTCalX with solve_gains!
 # (branch feature/cpu-matched-zest).
+#
+# Commands (one per line): an MS path (peel it in place), "SHM <slot> [<id>]" (gsi v3: peel a
+# /dev/shm slot written by src/gpu_subband_imaging/v3/slots.py in place, see read_slot /
+# write_slot! below; ZEST_COLUMN must be DATA), "RESET_WARM [<id>]" (drop the warm-start
+# gains), or QUIT.  Replies: the PEEL_* / ZEST_TIMING lines, then "ZESTED <path> <seconds>"
+# or "FAILED <path> <error on one line>"; slot commands append " id=<id>" to ZESTED and put
+# "id=<id>" right after the path in FAILED; RESET_WARM answers "RESET_WARM_OK id=<id>".
 push!(LOAD_PATH, joinpath(ENV["TTCALX_DIR"], "src"))
 include(joinpath(ENV["TTCALX_DIR"], "src", "TTCalX.jl"))
 using .TTCalX
 using CUDA
 using Printf
+using Mmap
+using JSON
 
 envf(k, d) = parse(Float64, get(ENV, k, string(d)))
 envi(k, d) = parse(Int, get(ENV, k, string(d)))
@@ -79,10 +91,12 @@ restore_below_mhz = envf("ZEST_RESTORE_BELOW_MHZ", Inf)
 restore_offset_deg = envf("ZEST_RESTORE_OFFSET_DEG", 0.0)
 precision = Symbol(envs("ZEST_PRECISION", "double", ("double", "mixed")))
 warm_start = envb("ZEST_WARM_START", false)
+test_io = Symbol(envs("ZEST_TEST_IO", "", ("", "identity", "perturb")))
 sky_rfi && !isdefined(TTCalX, :zest_sky_rfi!) && error("ZEST_ENGINE=sky_rfi needs TTCalX with zest_sky_rfi!")
-sky_rfi && !(use_gpu && fast_io && exact_model && geometric && residual_guard && flag_model) &&
-    error("ZEST_ENGINE=sky_rfi is the exact-model, geometric-UVW, guarded GPU zest: " *
-                      "set model=exact uvw=geometric residual_guard flag_model fast_io device=gpu")
+# zest_sky_rfi! runs on host arrays as well (TTCalX host backend), so device=cpu is allowed
+sky_rfi && !(fast_io && exact_model && geometric && residual_guard && flag_model) &&
+    error("ZEST_ENGINE=sky_rfi is the exact-model, geometric-UVW, guarded zest: " *
+                      "set model=exact uvw=geometric residual_guard flag_model fast_io")
 
 # The original code path (gpu_stefcal!, kernel model, MS UVW, GPU) needs no new
 # TTCalX API, so the defaults also run with older TTCalX versions.
@@ -316,49 +330,262 @@ function run_sky_rfi!(vis, meta, mjd, initial_gains)
 end
 prev_gains = nothing
 
+# --- gsi v3 shared-memory slots (src/gpu_subband_imaging/v3/slots.py, design 3.2) -------------
+# A slot holds one averaged snapshot (all MS main-table rows in MS order).  read_slot and
+# write_slot! do exactly what read_ms_fast / write_ms_fast! (TTCalX src/gpu/ms_io.jl) do with
+# the arrays casacore returns, so peeling a slot gives the bytes v2 writes into the MS.
+# Channels, antenna positions and the phase centre come from the slot (prep took them from
+# the MS subtables), the MJD from its TIME rows as ms_mjd.
+const SLOT_MAGIC = Vector{UInt8}("GSISLOT1")
+const SLOT_JSON_OFFSET = 64
+const SLOT_STATE_FREE = UInt32(0)       # contents not valid
+const SLOT_STATE_PREPPED = UInt32(1)
+const SLOT_STATE_OFFSET = 12
+const SLOT_STATE_PEELED = UInt32(2)
+const SLOT_TYPES = Dict("<c8" => ComplexF32, "|b1" => Bool, "<i4" => Int32, "<f8" => Float64,
+                        "<f4" => Float32)
+
+function slot_header(io::IOStream)
+    seekstart(io)
+    read(io, 8) == SLOT_MAGIC || error("not a GSISLOT1 slot")
+    n = ltoh(read(io, UInt32))
+    state = ltoh(read(io, UInt32))
+    seek(io, SLOT_JSON_OFFSET)
+    h = JSON.parse(String(read(io, n)))
+    h["state"] = Int(state)
+    h
+end
+
+"""Mmap of one C-order slot array as Array{T,N}, dims reversed (numpy (nrow, nchan, 4) ->
+(4, nchan, nrow)).  T and N are checked against the slot JSON, so the result is concretely typed."""
+function slot_array(io::IOStream, h, name, ::Type{T}, ::Val{N}) where {T,N}
+    e = get(h["arrays"], name, nothing)
+    e === nothing && error("slot has no array $name")
+    get(SLOT_TYPES, e["dtype"], nothing) === T || error("slot array $name: dtype $(e["dtype"]), expected $T")
+    length(e["shape"]) == N || error("slot array $name: shape $(e["shape"]), expected $N dims")
+    dims = ntuple(i -> Int(e["shape"][N + 1 - i]), N)
+    Mmap.mmap(io, Array{T,N}, dims, Int64(e["offset"]); grow=false)::Array{T,N}
+end
+
+"""read_ms_fast's gather: cross rows -> baseline-major ComplexF64, flags OR'd over the pols."""
+function slot_gather!(xx, xy, yx, yy, flags, data::Array{ComplexF32,3}, flag::Array{Bool,3},
+                      cross::Vector{Int})
+    @inbounds for f in axes(xx, 2), α in eachindex(cross)
+        r = cross[α]
+        xx[α, f] = data[1, f, r]; xy[α, f] = data[2, f, r]
+        yx[α, f] = data[3, f, r]; yy[α, f] = data[4, f, r]
+        flags[α, f] = flag[1, f, r] | flag[2, f, r] | flag[3, f, r] | flag[4, f, r]
+    end
+end
+
+"""write_ms_fast!'s scatter: cross rows <- ComplexF32.(vis), FLAG of all pols <- baseline flag."""
+function slot_scatter!(data::Array{ComplexF32,3}, flag::Array{Bool,3}, a1::Vector{Int32},
+                       a2::Vector{Int32}, index::Matrix{Int}, xx, xy, yx, yy, fl)
+    @inbounds for r in eachindex(a1)
+        a1[r] == a2[r] && continue
+        b = index[min(a1[r], a2[r]) + 1, max(a1[r], a2[r]) + 1]
+        b == 0 && continue
+        for f in axes(data, 2)
+            data[1, f, r] = ComplexF32(xx[b, f]); data[2, f, r] = ComplexF32(xy[b, f])
+            data[3, f, r] = ComplexF32(yx[b, f]); data[4, f, r] = ComplexF32(yy[b, f])
+            g = fl[b, f]
+            flag[1, f, r] = g; flag[2, f, r] = g; flag[3, f, r] = g; flag[4, f, r] = g
+        end
+    end
+end
+
+unmap!(arrays...) = foreach(finalize, arrays)    # munmap now (nothing refers to them any more)
+
+"""Cross rows as read_ms_fast's _cross_rows: (cross row indices, lo, hi), 0-based antennas."""
+function slot_cross_rows(a1, a2)
+    cross = findall(a1 .!= a2)
+    lo = Int.(min.(a1[cross], a2[cross]))
+    hi = Int.(max.(a1[cross], a2[cross]))
+    length(unique(lo .* 1000003 .+ hi)) == length(cross) ||
+        error("slot has several rows per baseline (read_ms_fast would fall back; not supported)")
+    cross, lo, hi
+end
+
+"""
+    read_slot(path; gpu=true) -> (vis, cal, meta, baseline_dict, Nrows, mjd)
+
+`read_ms_fast` on a slot: baselines in order of first appearance as (min, max) antenna
+pairs, autocorrelations dropped, flags OR'd over the polarizations, the UVW of the
+baseline's row, identity calibration, ComplexF32 -> ComplexF64.
+"""
+function read_slot(path::String; gpu::Bool=true)
+    open(path, "r") do io
+        h = slot_header(io)
+        h["state"] == SLOT_STATE_PREPPED ||
+            error("slot state is $(h["state"]), expected PREPPED ($(Int(SLOT_STATE_PREPPED)))")
+        Int(h["ncorr"]) == 4 || error("slot has $(h["ncorr"]) correlations, expected 4")
+        maps = Any[]           # every mapping is unmapped below, also when a later one fails
+        try
+            m(name, T, n) = (A = slot_array(io, h, name, T, Val(n)); push!(maps, A); A)
+            a1, a2 = m("antenna1", Int32, 1), m("antenna2", Int32, 1)
+            data, flag = m("data", ComplexF32, 3), m("flag", Bool, 3)        # (4, Nf, Nrows)
+            uvw_rows, time_rows = m("uvw", Float64, 2), m("time", Float64, 1)
+            freqs, ant_pos = m("meta.freqs", Float64, 1), m("meta.ant_pos", Float64, 2)
+            pd = m("meta.phase_dir", Float64, 1)
+            Nrows = length(a1)
+            size(data, 1) == 4 && size(data, 3) == Nrows && length(a2) == Nrows &&
+                size(flag) == size(data) && size(uvw_rows) == (3, Nrows) &&
+                length(time_rows) == Nrows ||
+                error("slot arrays disagree: antenna1 $(length(a1)), antenna2 $(length(a2)), " *
+                      "data $(size(data)), flag $(size(flag)), uvw $(size(uvw_rows)), time $(length(time_rows))")
+            size(ant_pos, 1) == 3 || error("slot ant_pos must be (nant, 3)")
+            length(pd) >= 2 || error("slot phase_dir must be (2,)")
+            cross, lo0, hi0 = slot_cross_rows(a1, a2)
+            lo, hi = lo0 .+ 1, hi0 .+ 1
+            Nbase, Nf = length(cross), size(data, 2)
+            xx, xy, yx, yy = (Matrix{ComplexF64}(undef, Nbase, Nf) for _ in 1:4)
+            flags = Matrix{Bool}(undef, Nbase, Nf)
+            slot_gather!(xx, xy, yx, yy, flags, data, flag, cross)
+            uvw = Float64.(uvw_rows[:, cross])
+            channels = Float64.(vec(freqs))
+            length(channels) == Nf || error("slot has $(length(channels)) freqs for $Nf channels")
+            antenna_positions = Float64.(ant_pos)
+            ra, dec = Float64(pd[1]), Float64(pd[2])
+            mjd = (minimum(time_rows) + maximum(time_rows)) / 2 / 86400      # ms_mjd
+            Na = size(antenna_positions, 2)
+            maximum(hi) <= Na || error("slot antenna index $(maximum(hi)) > $Na antennas")
+            baselines = Int32.(permutedims(hcat(lo, hi)))
+            baseline_dict = Dict{Tuple{Int,Int}, Int}((lo[α], hi[α]) => α for α in 1:Nbase)
+            up = gpu && CUDA.functional() ? CuArray : identity
+            vis = GPUVisibilities(up(xx), up(xy), up(yx), up(yy), up(flags))
+            meta = GPUMetadata(up(antenna_positions), up(baselines), up(channels), up([0.0, 0.0, 1.0]),
+                               ra, dec, up(uvw))
+            cal = GPUCalibration(up(ones(ComplexF64, Na, Nf)), up(zeros(ComplexF64, Na, Nf)),
+                                 up(zeros(ComplexF64, Na, Nf)), up(ones(ComplexF64, Na, Nf)),
+                                 up(falses(Na, Nf)), true)
+            vis, cal, meta, baseline_dict, Nrows, mjd
+        finally
+            unmap!(maps...)
+        end
+    end
+end
+
+"""
+    write_slot!(path, vis, baseline_dict, Nrows)
+
+`write_ms_fast!` on a slot: the cross rows' DATA = ComplexF32.(vis), FLAG of all four
+polarizations = the baseline flag, autocorrelations untouched.  The state is FREE (not
+valid) while the rows are written and PEELED after, so a daemon killed mid-write never
+leaves a slot that looks prepped or peeled.
+"""
+function write_slot!(path::String, vis::GPUVisibilities, baseline_dict::Dict, Nrows::Int)
+    xx, xy, yx, yy = Array(vis.xx), Array(vis.xy), Array(vis.yx), Array(vis.yy)
+    fl = Array(vis.flags)
+    open(path, "r+") do io
+        h = slot_header(io)
+        state_offset = Int(h["state_offset"])
+        maps = Any[]
+        try
+            m(name, T, n) = (A = slot_array(io, h, name, T, Val(n)); push!(maps, A); A)
+            a1, a2 = m("antenna1", Int32, 1), m("antenna2", Int32, 1)
+            data, flag = m("data", ComplexF32, 3), m("flag", Bool, 3)
+            length(a1) == Nrows && length(a2) == Nrows && size(data, 3) == Nrows &&
+                size(flag) == size(data) && size(data, 1) == 4 &&
+                size(data, 2) == size(xx, 2) ||
+                error("slot has $(length(a1)) rows / data $(size(data)); the read had $Nrows rows, $(size(xx, 2)) channels")
+            seek(io, state_offset); write(io, htol(SLOT_STATE_FREE)); flush(io)
+            Na = maximum(maximum(k) for k in keys(baseline_dict))
+            n = max(Int(maximum(a1)), Int(maximum(a2))) + 1
+            index = zeros(Int, max(Na, n), max(Na, n))   # [a1, a2] (1-based) -> baseline
+            for ((p, q), α) in baseline_dict
+                index[p, q] = α
+            end
+            slot_scatter!(data, flag, a1, a2, index, xx, xy, yx, yy, fl)
+        finally
+            unmap!(maps...)
+        end
+        seek(io, state_offset)
+        write(io, htol(SLOT_STATE_PEELED))
+        flush(io)
+    end
+    nothing
+end
+
+"""ZEST_TEST_IO=perturb: a deterministic change at full precision (no peeling)."""
+function perturb_for_io_test!(vis)
+    for f in (:xx, :xy, :yx, :yy)
+        getfield(vis, f) .*= 1.0001 * cis(0.3)
+    end
+    vis.flags[1:7:end, :] .= .!vis.flags[1:7:end, :]
+    println("PEEL_SUMMARY pass=all selected=0 accepted=0 action=test_io_perturb")
+end
+
+"""Peel one snapshot in place with the configured engine (MS and slot commands alike)."""
+function peel_snapshot!(vis, meta, mjd)
+    if test_io != Symbol("")
+        test_io == :perturb ? perturb_for_io_test!(vis) :
+            println("PEEL_SUMMARY pass=all selected=0 accepted=0 action=test_io_identity")
+        return
+    end
+    if geometric
+        rms_w, offset = geometric_uvw!(meta, mjd)
+        @printf("UVW_GEOMETRIC rms_w_vs_ms=%.4f phase_centre_offset_deg=%.4f\n", rms_w, offset)
+    end
+    if sky_rfi
+        global prev_gains = run_sky_rfi!(vis, meta, mjd, prev_gains)
+    else
+    flag_zero && @printf("FLAG_ZERO flagged=%d\n", flag_zero_visibilities!(vis))
+    function run_pass(catalog, name)
+        before = backstop ? deepcopy_gpu(vis) : nothing
+        p0 = backstop ? TTCalX.residual_power(vis) : 0.0
+        safe_zest!(vis, meta, catalog, mjd; pass=name)
+        if backstop && TTCalX.residual_power(vis) > p0
+            @printf("PEEL_BACKSTOP pass=%s reverted=true ratio=%.4g\n", name, TTCalX.residual_power(vis) / p0)
+            for f in (:xx, :xy, :yx, :yy); getfield(vis, f) .= getfield(before, f); end
+        end
+    end
+    if rfi_joint && !isempty(rfi_sources)
+        run_pass(vcat(sources, rfi_sources), "sky")
+    else
+        run_pass(sources, "sky")
+        isempty(rfi_sources) || run_pass(rfi_sources, "rfi")
+    end
+    end
+end
+
 read_ms = fast_io ? read_ms_fast : read_ms_to_gpu
 write_ms! = fast_io ? write_ms_fast! : write_gpu_to_ms!
 
 for line in eachline(stdin)
-    ms = String(strip(line))
-    isempty(ms) && continue
-    ms == "QUIT" && break
+    cmd = String(strip(line))
+    isempty(cmd) && continue
+    cmd == "QUIT" && break
+    if cmd == "RESET_WARM" || startswith(cmd, "RESET_WARM ")
+        global prev_gains = nothing
+        println("RESET_WARM_OK id=", strip(cmd[11:end])); flush(stdout)
+        continue
+    end
+    shm = startswith(cmd, "SHM ")
+    parts = split(cmd)
+    ms = shm ? String(parts[2]) : cmd
+    rid = shm && length(parts) >= 3 ? " id=" * parts[3] : ""
     t0 = time()
     try
-        t_read = @elapsed (vis, cal, meta, bl, nrows) = read_ms(ms; gpu=use_gpu, column=col)
-        t_peel = @elapsed begin
-            mjd = (exact_model || geometric) ? ms_mjd(ms) : NaN
-            if geometric
-                rms_w, offset = geometric_uvw!(meta, mjd)
-                @printf("UVW_GEOMETRIC rms_w_vs_ms=%.4f phase_centre_offset_deg=%.4f\n", rms_w, offset)
-            end
-            if sky_rfi
-                global prev_gains = run_sky_rfi!(vis, meta, mjd, prev_gains)
-            else
-            flag_zero && @printf("FLAG_ZERO flagged=%d\n", flag_zero_visibilities!(vis))
-            function run_pass(catalog, name)
-                before = backstop ? deepcopy_gpu(vis) : nothing
-                p0 = backstop ? TTCalX.residual_power(vis) : 0.0
-                safe_zest!(vis, meta, catalog, mjd; pass=name)
-                if backstop && TTCalX.residual_power(vis) > p0
-                    @printf("PEEL_BACKSTOP pass=%s reverted=true ratio=%.4g\n", name, TTCalX.residual_power(vis) / p0)
-                    for f in (:xx, :xy, :yx, :yy); getfield(vis, f) .= getfield(before, f); end
-                end
-            end
-            if rfi_joint && !isempty(rfi_sources)
-                run_pass(vcat(sources, rfi_sources), "sky")
-            else
-                run_pass(sources, "sky")
-                isempty(rfi_sources) || run_pass(rfi_sources, "rfi")
-            end
-            end
+        if shm
+            col == "DATA" || error("SHM slots carry DATA only (ZEST_COLUMN=$col)")
+            t_read = @elapsed (vis, cal, meta, bl, nrows, slot_mjd) = read_slot(ms; gpu=use_gpu)
+        else
+            t_read = @elapsed (vis, cal, meta, bl, nrows) = read_ms(ms; gpu=use_gpu, column=col)
         end
-        t_write = @elapsed write_ms!(ms, vis, bl, nrows; column=col)
+        t_peel = @elapsed begin
+            mjd = (exact_model || geometric) ? (shm ? slot_mjd : ms_mjd(ms)) : NaN
+            peel_snapshot!(vis, meta, mjd)
+        end
+        t_write = @elapsed (shm ? write_slot!(ms, vis, bl, nrows) :
+                                  write_ms!(ms, vis, bl, nrows; column=col))
         @printf("ZEST_TIMING read=%.2f peel=%.2f write=%.2f\n", t_read, t_peel, t_write)
-        @printf("ZESTED %s %.2f\n", ms, time() - t0)
+        @printf("ZESTED %s %.2f%s\n", ms, time() - t0, rid)
     catch e
         global prev_gains = nothing
-        println("FAILED $ms $(sprint(showerror, e))")
+        # one line, so a multi-line message (e.g. a PyCall traceback) cannot be read as the
+        # next command's reply
+        msg = replace(sprint(showerror, e), r"\s*\n\s*" => " | ")
+        println("FAILED $ms$rid $msg")
     end
     flush(stdout)
     use_gpu && CUDA.reclaim()

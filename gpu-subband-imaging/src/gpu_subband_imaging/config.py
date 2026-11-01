@@ -320,6 +320,8 @@ class V3Params:
     checkpoint: str = "local"         # none | local | archive (only when hour_source != kept_ms)
     delete_checkpoint: bool = True
     lookahead: int = 8
+    peel_timeout_s: float = 600.0     # peel_io=shm: kill + restart the zest daemon after this
+    peel_start_timeout_s: float = 600.0   # peel_io=shm: deadline for the daemon's DAEMON_READY
     prep_procs: int = 4
     prep_timeout_s: float = 900.0     # per in-memory prep task (as the v2 CASA subprocess)
     peel_backend: str = "daemon"      # daemon | juliacall
@@ -355,6 +357,8 @@ class V3Params:
             raise ConfigError("v3.lookahead and v3.prep_procs must be >= 1")
         if not self.prep_timeout_s > 0:
             raise ConfigError("v3.prep_timeout_s must be > 0")
+        if self.peel_timeout_s <= 0 or self.peel_start_timeout_s <= 0:
+            raise ConfigError("v3.peel_timeout_s and v3.peel_start_timeout_s must be > 0")
 
 
 def v3_params(pipeline) -> V3Params:

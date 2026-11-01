@@ -74,6 +74,7 @@ class Worker:
         self._archives: dict = {}      # v3.archive: group -> hourstore.ArchiveClient
         self._archive_lock = threading.Lock()
         self._archive_failed = False   # a record of this batch failed (logged loudly once)
+        self._slots = None             # v3.peel_io=shm: v3.slots.SlotRing
 
     def _start_gpu_imager(self):
         from .stages import gpu_image
@@ -835,7 +836,7 @@ class Worker:
                         daemon = self._start_daemon()
                     try:
                         t0 = time.perf_counter()
-                        daemon.zest(avg)
+                        self._zest(daemon, stamp, avg)
                         n_zested += 1
                         log.info("timing %sMHz batch%d stamp=%s phase=zest elapsed=%.2f s",
                                  self.band, self.batch, stamp, time.perf_counter() - t0)
@@ -858,6 +859,9 @@ class Worker:
                 self._gpu_imager.close()
             self._v3_stop_pool()
             self._close_archives()
+            if self._slots is not None:
+                self._slots.close()
+                self._slots = None
             shutil.rmtree(self.work, ignore_errors=True)
             root = self._untar_root()
             if root is not None and not root.is_symlink():
@@ -869,6 +873,31 @@ class Worker:
             log.warning("batch %sMHz/%d completed with %d failed file(s); continuing",
                         self.band, self.batch, n_fail)
         _require_batch_outputs(self.band, self.batch, len(todo), n_ok)
+
+    def _zest(self, daemon: ZestDaemon, stamp: str, avg: Path) -> None:
+        """Peel `avg` in place: v2 through the MS, or (v3.peel_io=shm) through a /dev/shm slot."""
+        v3 = getattr(self.cfg.pipeline, "v3", None)
+        if v3 is None or v3.peel_io != "shm":
+            daemon.zest(avg)
+            return
+        from .v3 import peel_shm, slots
+        steps: dict = {}
+        try:
+            if self._slots is None:
+                try:
+                    self._slots = slots.SlotRing(1)
+                except OSError as e:
+                    raise peel_shm.SlotUnavailable(f"cannot create the slot ring: {e}") from e
+            peel_shm.peel_ms_via_slot(daemon, avg, self._slots, timeout=v3.peel_timeout_s,
+                                      timings=steps)
+        except peel_shm.SlotUnavailable as e:     # MS untouched: peel it the v2 way
+            log.warning("V3_FALLBACK %sMHz stamp=%s peel through the MS: %s",
+                        self.band, stamp, e)
+            daemon.zest(avg)
+            return
+        for name, dt in steps.items():
+            log.info("timing %sMHz batch%d stamp=%s phase=%s elapsed=%.2f s",
+                     self.band, self.batch, stamp, name, dt)
 
     def _write_qa_stats(self) -> None:
         """Pilot V statistics of this batch -> QA/.snapshot_stats/<batch>.jsonl (hour step reads them)."""
@@ -894,7 +923,10 @@ class Worker:
     def _start_daemon(self) -> ZestDaemon:
         import os
         workers_dir = os.environ["GSI_WORKERS"]
+        v3 = getattr(self.cfg.pipeline, "v3", None)
+        shm = v3 is not None and v3.peel_io == "shm"
         return ZestDaemon(
+            start_timeout=v3.peel_start_timeout_s if shm else None,
             julia=f"{self.cfg.pipeline.env.julia_bin}/julia",
             project=self.cfg.pipeline.env.ttcalx,
             daemon_jl=str(Path(workers_dir) / "zest_daemon.jl"),
