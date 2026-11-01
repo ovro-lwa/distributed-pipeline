@@ -325,6 +325,10 @@ class V3Params:
     prep_procs: int = 4
     prep_timeout_s: float = 900.0     # per in-memory prep task (as the v2 CASA subprocess)
     peel_backend: str = "daemon"      # daemon | juliacall
+    # snapshot_io=shm: workers/gsi_v3_engine.py (imaging.gpu_python), v3/engine_client.py
+    engine_timeout_s: float = 900.0   # per snapshot (image + record): kill + restart the engine after this
+    engine_start_timeout_s: float = 600.0
+    mem_check_every: int = 10         # store auto/ram: MemAvailable checked every N snapshots (spill below the reserve)
 
     def __post_init__(self) -> None:
         for name, allowed in (("prep_inmem", ("off", "shadow", "on")), ("peel_io", ("ms", "shm")),
@@ -359,6 +363,13 @@ class V3Params:
             raise ConfigError("v3.prep_timeout_s must be > 0")
         if self.peel_timeout_s <= 0 or self.peel_start_timeout_s <= 0:
             raise ConfigError("v3.peel_timeout_s and v3.peel_start_timeout_s must be > 0")
+        if self.engine_timeout_s <= 0 or self.engine_start_timeout_s <= 0:
+            raise ConfigError("v3.engine_timeout_s and v3.engine_start_timeout_s must be > 0")
+        if self.checkpoint == "archive" and self.archive == "none":
+            raise ConfigError("v3.checkpoint=archive needs v3.archive (iv)")
+        for d in self.spill_dirs:
+            if Path(d).parts[:2] == ("/", "lustre"):
+                raise ConfigError("v3.spill_dirs must be node-local (the archive is the Lustre copy)")
 
 
 def v3_params(pipeline) -> V3Params:
@@ -481,6 +492,8 @@ class PipelineConfig:
             raise ConfigError("v3.hour_source=memory needs layout=lst and stream_hour_images")
         if self.v3.hour_source == "archive" and self.layout != "lst":
             raise ConfigError("v3.hour_source=archive needs layout=lst (hour_lst.run_band)")
+        if self.v3.snapshot_io == "shm" and self.v3.archive != "none" and self.layout != "lst":
+            raise ConfigError("v3.snapshot_io=shm with v3.archive needs layout=lst (one record file per batch)")
 
     @property
     def run_key(self) -> str:
