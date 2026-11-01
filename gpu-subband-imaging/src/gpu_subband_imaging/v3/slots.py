@@ -20,12 +20,16 @@ The state lives in the fixed header word (not in the JSON) so it can be changed 
 so a crash mid-write never leaves a slot that looks ready.  workers/zest_daemon.jl
 (`read_slot` / `write_slot!`) reads the same layout and sets PEELED.
 
-`SlotRing` owns `n` reusable files `gsi3_<pid>_<k>` in /dev/shm, removes them on exit,
-and on start removes stale ones left by a pid that no longer runs.
+`SlotRing` owns `n` reusable files `gsi3_<pid>_<ring>_<k>` in /dev/shm (`ring` counts the
+rings of this process), removes them on exit, and on start removes stale ones left by a pid
+that no longer runs.  Slot space is allocated with posix_fallocate, so a full tmpfs gives
+OSError(ENOSPC) instead of a SIGBUS on the first write to a sparse page.
 """
 from __future__ import annotations
 
 import atexit
+import errno
+import itertools
 import json
 import mmap
 import os
@@ -47,7 +51,9 @@ JSON_OFFSET = 64
 ALIGN = 64
 HEADER_ALIGN = 4096
 SHM_ROOT = "/dev/shm"
-_NAME = re.compile(r"^gsi3_(\d+)_(\d+)$")
+# gsi3_<pid>_<ring>_<k>; gsi3_<pid>_<k> (the first layout) is cleaned up as well
+_NAME = re.compile(r"gsi3_(\d+)_(\d+)(?:_(\d+))?")
+_RING_IDS = itertools.count()
 
 # SnapArrays array fields, in file order (small first, DATA and FLAG last)
 FIELDS = ("antenna1", "antenna2", "uvw", "weight", "sigma", "flag_row", "time",
@@ -149,14 +155,34 @@ def slot_nbytes(snap: SnapArrays) -> int:
     return _place(head, arrays)["nbytes"]
 
 
+def _allocate(fd: int, size: int) -> None:
+    """Back the first `size` bytes with real tmpfs pages (OSError ENOSPC when it is full).
+
+    A file that is only ftruncate'd is sparse: writing through an mmap into a page tmpfs
+    cannot allocate kills the process with SIGBUS.  macOS (tests only) has no
+    posix_fallocate; there the file is just extended.
+    """
+    if hasattr(os, "posix_fallocate"):
+        try:
+            os.posix_fallocate(fd, 0, size)
+        except OSError as e:
+            if e.errno in (errno.EOPNOTSUPP, errno.EINVAL):     # filesystem without fallocate
+                if os.fstat(fd).st_size < size:
+                    os.ftruncate(fd, size)
+                return
+            raise
+    elif os.fstat(fd).st_size < size:
+        os.ftruncate(fd, size)
+
+
 def _open_map(path: PathLike, size: Optional[int] = None, writable: bool = True):
     flags = os.O_RDWR if writable else os.O_RDONLY
     if size is not None:
         flags |= os.O_CREAT
     fd = os.open(str(path), flags, 0o600)
     try:
-        if size is not None and os.fstat(fd).st_size < size:
-            os.ftruncate(fd, size)
+        if size is not None:
+            _allocate(fd, size)
         length = os.fstat(fd).st_size
         return mmap.mmap(fd, length, mmap.MAP_SHARED,
                          mmap.PROT_READ | (mmap.PROT_WRITE if writable else 0))
@@ -167,12 +193,20 @@ def _open_map(path: PathLike, size: Optional[int] = None, writable: bool = True)
 def write_slot(path: PathLike, snap: SnapArrays) -> dict:
     """Write `snap` into the slot file `path` (created or grown as needed); state PREPPED.
 
-    Returns the slot JSON.  The file is never shrunk, so a ring slot keeps its size.
+    Returns the slot JSON.  The file is never shrunk, so a ring slot keeps its size.  Raises
+    OSError (ENOSPC) before anything is written when /dev/shm has no room.
     """
     head, arrays = _layout(snap)
     h = _place(head, arrays)
     blob = json.dumps(h, sort_keys=True).encode()
-    mm = _open_map(path, size=h["nbytes"])
+    try:
+        mm = _open_map(path, size=h["nbytes"])
+    except OSError:
+        try:                                   # old contents of a reused slot are not valid
+            set_state(path, FREE)
+        except (OSError, ValueError):
+            pass
+        raise
     try:
         mm[STATE_OFFSET:STATE_OFFSET + 4] = struct.pack("<I", FREE)     # not ready while writing
         mm[0:8] = MAGIC
@@ -266,7 +300,12 @@ def _pid_alive(pid: int) -> bool:
 
 
 def cleanup_stale(root: PathLike = SHM_ROOT) -> List[str]:
-    """Remove our gsi3_<pid>_<k> slot files whose pid is gone; returns the removed paths."""
+    """Remove our gsi3_<pid>_... slot files whose pid is gone; returns the removed paths.
+
+    Only files of this uid, with an exact slot name, whose pid does not run.  Race (accepted):
+    if the pid of a crashed worker has been reused by a live process, its stale slots stay
+    until that process exits; a live ring is never removed.
+    """
     removed = []
     uid = os.getuid()
     try:
@@ -274,7 +313,7 @@ def cleanup_stale(root: PathLike = SHM_ROOT) -> List[str]:
     except FileNotFoundError:
         return removed
     for name in names:
-        m = _NAME.match(name)
+        m = _NAME.fullmatch(name)
         if not m:
             continue
         p = os.path.join(str(root), name)
@@ -294,30 +333,36 @@ def cleanup_stale(root: PathLike = SHM_ROOT) -> List[str]:
 
 
 class SlotRing:
-    """`n` reusable slot files /dev/shm/gsi3_<pid>_<k>, handed out FREE and given back.
+    """`n` reusable slot files /dev/shm/gsi3_<pid>_<ring>_<k>, handed out FREE and given back.
 
-    `acquire()` blocks until a slot is free (this bounds the prep lookahead).  The files are
-    pre-sized to `slot_bytes` (grown by `write_slot` if a snapshot needs more) and removed
-    by `close()`, at interpreter exit, or by the next ring's stale cleanup after a crash.
+    `acquire()` blocks until a slot is free (this bounds the prep lookahead).  Each file gets
+    `slot_bytes` of allocated tmpfs space up front (posix_fallocate: OSError ENOSPC here if
+    /dev/shm cannot hold the ring), is grown by `write_slot` if a snapshot needs more, and is
+    removed by `close()`, at interpreter exit, or by the next ring's stale cleanup after a crash.
     """
 
-    def __init__(self, n: int, slot_bytes: int = 0, root: PathLike = SHM_ROOT,
-                 pid: Optional[int] = None):
+    def __init__(self, n: int, slot_bytes: int = 0, root: PathLike = SHM_ROOT):
         if n < 1:
             raise ValueError("SlotRing needs n >= 1")
         self.root = Path(root)
         self.removed_stale = cleanup_stale(self.root)
-        self.pid = os.getpid() if pid is None else pid
-        self.paths = [self.root / f"gsi3_{self.pid}_{k}" for k in range(n)]
+        self.pid = os.getpid()
+        self.ring_id = next(_RING_IDS)
+        self.paths = [self.root / f"gsi3_{self.pid}_{self.ring_id}_{k}" for k in range(n)]
         self._free = list(self.paths)
         self._cv = threading.Condition()
         self._closed = False
-        for p in self.paths:
-            fd = os.open(str(p), os.O_RDWR | os.O_CREAT | os.O_TRUNC, 0o600)
-            try:
-                os.ftruncate(fd, max(int(slot_bytes), HEADER_ALIGN))
-            finally:
-                os.close(fd)
+        try:
+            for p in self.paths:
+                fd = os.open(str(p), os.O_RDWR | os.O_CREAT | os.O_TRUNC, 0o600)
+                try:
+                    _allocate(fd, max(int(slot_bytes), HEADER_ALIGN))
+                finally:
+                    os.close(fd)
+        except BaseException:
+            self._closed = True
+            self._unlink_all()
+            raise
         atexit.register(self.close)
 
     def __enter__(self) -> "SlotRing":
@@ -358,17 +403,20 @@ class SlotRing:
             self._free.append(path)
             self._cv.notify()
 
+    def _unlink_all(self) -> None:
+        for p in self.paths:
+            try:
+                os.unlink(p)
+            except FileNotFoundError:
+                pass
+
     def close(self) -> None:
         with self._cv:
             if self._closed:
                 return
             self._closed = True
             self._cv.notify_all()
-        for p in self.paths:
-            try:
-                os.unlink(p)
-            except FileNotFoundError:
-                pass
+        self._unlink_all()
         try:
             atexit.unregister(self.close)
         except Exception:

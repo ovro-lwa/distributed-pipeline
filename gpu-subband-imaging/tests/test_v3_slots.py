@@ -1,10 +1,12 @@
 """v3 shared-memory slots: round trip, alignment, state, ring, stale cleanup (no GPU, no CASA)."""
+import errno
 import json
 import os
 import struct
 import subprocess
 import sys
 import threading
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -191,7 +193,7 @@ def test_crash_mid_write_is_not_ready(tmp_path, monkeypatch):
 def test_ring_acquire_release_and_cleanup(tmp_path):
     ring = slots.SlotRing(2, slot_bytes=1 << 16, root=tmp_path)
     names = sorted(x.name for x in tmp_path.iterdir())
-    assert names == [f"gsi3_{os.getpid()}_0", f"gsi3_{os.getpid()}_1"]
+    assert names == [f"gsi3_{os.getpid()}_{ring.ring_id}_0", f"gsi3_{os.getpid()}_{ring.ring_id}_1"]
     assert all(x.stat().st_size == 1 << 16 for x in tmp_path.iterdir())
     a = ring.acquire()
     b = ring.acquire()
@@ -218,7 +220,7 @@ def test_stale_cleanup_dead_pid_only(tmp_path):
     p = subprocess.Popen([sys.executable, "-c", "pass"])
     p.wait()
     dead = p.pid                                    # a pid that is gone
-    stale = [tmp_path / f"gsi3_{dead}_{k}" for k in range(3)]
+    stale = [tmp_path / f"gsi3_{dead}_{k}" for k in range(3)] + [tmp_path / f"gsi3_{dead}_4_0"]
     for s in stale:
         s.write_bytes(b"old")
     live = tmp_path / f"gsi3_{os.getppid()}_0"      # alive (our parent)
@@ -227,9 +229,11 @@ def test_stale_cleanup_dead_pid_only(tmp_path):
     mine.write_bytes(b"mine")
     other = tmp_path / "gsi3_mem_gpu0.json"         # not a slot name
     other.write_bytes(b"{}")
+    near = tmp_path / f"gsi3_{dead}_1.bak"           # fullmatch only
+    near.write_bytes(b"x")
     ring = slots.SlotRing(1, root=tmp_path)
     assert sorted(ring.removed_stale) == sorted(str(s) for s in stale)
-    assert live.exists() and mine.exists() and other.exists()
+    assert live.exists() and mine.exists() and other.exists() and near.exists()
     ring.close()
 
 
@@ -250,3 +254,70 @@ def test_ring_removed_at_exit_and_after_crash(tmp_path):
     assert len(ring.removed_stale) == 3
     ring.close()
     assert list(tmp_path.iterdir()) == []
+
+
+def test_two_rings_in_one_process_do_not_collide(tmp_path):
+    r1, r2 = slots.SlotRing(2, root=tmp_path), slots.SlotRing(2, root=tmp_path)
+    assert not set(r1.paths) & set(r2.paths)
+    assert len(list(tmp_path.iterdir())) == 4
+    r1.close()
+    assert sorted(tmp_path.iterdir()) == sorted(r2.paths)
+    r2.close()
+
+
+def _enospc(fd, off, n):
+    raise OSError(errno.ENOSPC, "No space left on device")
+
+
+def test_full_shm_gives_enospc_not_sigbus(tmp_path, monkeypatch):
+    p = tmp_path / "slot"
+    slots.write_slot(p, make_snap())
+    monkeypatch.setattr(slots.os, "posix_fallocate", _enospc, raising=False)
+    with pytest.raises(OSError) as e:
+        slots.write_slot(p, make_snap(seed=3))
+    assert e.value.errno == errno.ENOSPC
+    assert slots.get_state(p) == slots.FREE          # stale contents never look ready
+    ring_dir = tmp_path / "ring"
+    ring_dir.mkdir()
+    with pytest.raises(OSError):
+        slots.SlotRing(2, slot_bytes=1 << 20, root=ring_dir)
+    assert list(ring_dir.iterdir()) == []             # a failed ring leaves nothing behind
+
+
+_TMPFS_CHILD = r"""
+import errno, sys
+sys.path.insert(0, sys.argv[2])
+from gpu_subband_imaging.v3 import slots
+import test_v3_slots as t
+d = sys.argv[1]
+s = t.make_snap(nant=40, nchan=48)          # ~1.6 MB data
+try:
+    for k in range(10):                     # 4 MB tmpfs: fills after 2
+        slots.write_slot(f"{d}/slot{k}", s)
+except OSError as e:
+    print("ENOSPC" if e.errno == errno.ENOSPC else f"OSError {e.errno}", k)
+    sys.exit(0)
+print("NOERROR")
+"""
+
+
+def test_full_tmpfs_real(tmp_path):
+    """A real 4 MB tmpfs in a user + mount namespace (skipped where unshare is not allowed)."""
+    import shutil
+    if sys.platform != "linux" or not shutil.which("unshare"):
+        pytest.skip("needs Linux unshare")
+    mnt = tmp_path / "mnt"
+    mnt.mkdir()
+    src = str(Path(slots.__file__).resolve().parents[2])
+    probe = subprocess.run(["unshare", "-rm", "sh", "-c", f"mount -t tmpfs -o size=4m none {mnt}"],
+                           capture_output=True, text=True)
+    if probe.returncode != 0:
+        pytest.skip(f"cannot mount a tmpfs in a user namespace: {probe.stderr.strip()}")
+    script = tmp_path / "child.py"
+    script.write_text(_TMPFS_CHILD)
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join([src, str(Path(__file__).parent)]))
+    r = subprocess.run(["unshare", "-rm", "sh", "-c",
+                        f"mount -t tmpfs -o size=4m none {mnt} && exec {sys.executable} {script} {mnt} {src}"],
+                       capture_output=True, text=True, env=env)
+    assert r.returncode == 0, (r.returncode, r.stderr[-2000:])     # rc 135 would be SIGBUS
+    assert r.stdout.startswith("ENOSPC"), r.stdout
