@@ -31,6 +31,11 @@
 #                      ZEST_RESTORE_BELOW_MHZ, ZEST_RESTORE_OFFSET_DEG, ZEST_PRECISION,
 #                      ZEST_WARM_START (the exact model, geometric UVW, flagged models and the
 #                      residual guard are built in)
+#   ZEST_WORKSPACE     sky_rfi engine only (default off): keep one TTCalX.PeelWorkspace and the
+#                      slot's device visibilities across snapshots, so a peel allocates almost no
+#                      GPU memory and CUDA.jl does not collect inside the solve under
+#                      JULIA_CUDA_SOFT_MEMORY_LIMIT (bitwise the same results; needs TTCalX
+#                      with PeelWorkspace, branch exp/peel-workspace)
 # Anything but the defaults needs TTCalX with solve_gains!
 # (branch feature/cpu-matched-zest).
 #
@@ -93,6 +98,12 @@ restore_offset_deg = envf("ZEST_RESTORE_OFFSET_DEG", 0.0)
 precision = Symbol(envs("ZEST_PRECISION", "double", ("double", "mixed")))
 warm_start = envb("ZEST_WARM_START", false)
 test_io = Symbol(envs("ZEST_TEST_IO", "", ("", "identity", "perturb")))
+use_workspace = envb("ZEST_WORKSPACE", false)
+use_workspace && !sky_rfi && error("ZEST_WORKSPACE needs ZEST_ENGINE=sky_rfi")
+use_workspace && !isdefined(TTCalX, :PeelWorkspace) &&
+    error("ZEST_WORKSPACE needs TTCalX with PeelWorkspace (branch exp/peel-workspace)")
+# reused peel buffers; the keyword is only passed when on, so older TTCalX runs with it off
+peel_ws_kw = use_workspace ? (workspace=TTCalX.PeelWorkspace(),) : NamedTuple()
 sky_rfi && !isdefined(TTCalX, :zest_sky_rfi!) && error("ZEST_ENGINE=sky_rfi needs TTCalX with zest_sky_rfi!")
 # zest_sky_rfi! runs on host arrays as well (TTCalX host backend), so device=cpu is allowed
 sky_rfi && !(fast_io && exact_model && geometric && residual_guard && flag_model) &&
@@ -298,9 +309,9 @@ println(
 restore_sources = isempty(restore_path) ? GPUSource[] : read_gpu_sources(restore_path)
 any(s -> get_name(s) in ("Sun", "Moon", "Jupiter"), restore_sources) &&
     error("ZEST_RESTORE: a source named Sun/Moon/Jupiter is read as a placeholder; rename it")
-sky_rfi && println(@sprintf("SKY_RFI smooth_flux=%g restore=%d below_mhz=%g offset_deg=%g precision=%s warm_start=%s peeliter=%d",
+sky_rfi && println(@sprintf("SKY_RFI smooth_flux=%g restore=%d below_mhz=%g offset_deg=%g precision=%s warm_start=%s peeliter=%d workspace=%s",
                            smooth_flux, length(restore_sources), restore_below_mhz, restore_offset_deg,
-                           precision, warm_start, piter))
+                           precision, warm_start, piter, use_workspace))
 flush(stdout)
 
 # zest_sky_rfi! for one snapshot; returns the gains for a warm start of the next one
@@ -317,7 +328,7 @@ function run_sky_rfi!(vis, meta, mjd, initial_gains)
                       flag_zeros=flag_zero, report=report, smooth_flux=smooth_flux,
                       restore=restore_sources, restore_below_mhz=restore_below_mhz,
                       restore_offset_deg=restore_offset_deg, precision=precision,
-                      initial_gains=initial_gains)
+                      initial_gains=initial_gains, peel_ws_kw...)
     @printf("PEEL_SUMMARY pass=all selected=%d accepted=%d skipped=%d flagged_zeros=%d action=sky_rfi\n",
             length(sources) - length(r.skipped) + length(rfi_sources), length(r.peeled),
             length(r.skipped), r.flagged_zeros)
@@ -397,6 +408,20 @@ end
 
 unmap!(arrays...) = foreach(finalize, arrays)    # munmap now (nothing refers to them any more)
 
+# ZEST_WORKSPACE: one set of device visibilities, overwritten by every slot of the same shape
+# (the previous snapshot's are written back before the next read)
+const slot_device_vis = Ref{Any}(nothing)
+function reused_device_vis(xx, xy, yx, yy, flags)
+    v = slot_device_vis[]
+    if v === nothing || size(v.xx) != size(xx)
+        v === nothing || foreach(f -> CUDA.unsafe_free!(getfield(v, f)), (:xx, :xy, :yx, :yy, :flags))
+        v = slot_device_vis[] = GPUVisibilities(CuArray(xx), CuArray(xy), CuArray(yx), CuArray(yy), CuArray(flags))
+    else
+        foreach(((d, h),) -> copyto!(d, h), ((v.xx, xx), (v.xy, xy), (v.yx, yx), (v.yy, yy), (v.flags, flags)))
+    end
+    v
+end
+
 """Cross rows as read_ms_fast's _cross_rows: (cross row indices, lo, hi), 0-based antennas."""
 function slot_cross_rows(a1, a2)
     cross = findall(a1 .!= a2)
@@ -453,7 +478,8 @@ function read_slot(path::String; gpu::Bool=true)
             baselines = Int32.(permutedims(hcat(lo, hi)))
             baseline_dict = Dict{Tuple{Int,Int}, Int}((lo[α], hi[α]) => α for α in 1:Nbase)
             up = gpu && CUDA.functional() ? CuArray : identity
-            vis = GPUVisibilities(up(xx), up(xy), up(yx), up(yy), up(flags))
+            vis = use_workspace && up === CuArray ? reused_device_vis(xx, xy, yx, yy, flags) :
+                  GPUVisibilities(up(xx), up(xy), up(yx), up(yy), up(flags))
             meta = GPUMetadata(up(antenna_positions), up(baselines), up(channels), up([0.0, 0.0, 1.0]),
                                ra, dec, up(uvw))
             cal = GPUCalibration(up(ones(ComplexF64, Na, Nf)), up(zeros(ComplexF64, Na, Nf)),
