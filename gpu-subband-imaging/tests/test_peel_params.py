@@ -157,3 +157,12 @@ def test_yaml_smoothing_gate_and_band_override(tmp_path):
     (tmp_path / "pipeline.yaml").write_text(yaml.safe_dump(d))
     with pytest.raises(ConfigError, match="smooth_below_mhz"):
         Config.load(tmp_path)
+
+
+def test_workspace_switch_maps_to_env_only_when_on():
+    from gpu_subband_imaging.config import ConfigError, PeelParams
+    assert "ZEST_WORKSPACE" not in PeelParams(engine="sky_rfi").daemon_env(None)
+    assert PeelParams(engine="sky_rfi", workspace=True).daemon_env(None)["ZEST_WORKSPACE"] == "True"
+    import pytest
+    with pytest.raises(ConfigError):
+        PeelParams(workspace=True)

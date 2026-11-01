@@ -210,6 +210,7 @@ class PeelParams:
     restore_offset_deg: float = 0.0   # Stokes V position search radius (0.5 for Jupiter)
     precision: str = "double"         # double | mixed (normal equations in single precision)
     warm_start: bool = False          # start from the previous snapshot's gains (same channels, <= 60 s)
+    workspace: bool = False           # sky_rfi: reuse TTCalX PeelWorkspace buffers (same results, less GC)
 
     def __post_init__(self) -> None:
         choices = {"solver": ("damped", "rk4"), "model": ("kernels", "exact"),
@@ -222,6 +223,8 @@ class PeelParams:
                                   f"got {getattr(self, name)!r}")
         if self.device == "cpu" and self.model != "exact":
             raise ConfigError("peel.device=cpu needs peel.model=exact")
+        if self.workspace and self.engine != "sky_rfi":
+            raise ConfigError("peel.workspace needs peel.engine=sky_rfi")
         if self.maxiter < 1 or self.peeliter < 1:
             raise ConfigError("peel.maxiter and peel.peeliter must be >= 1")
         for name in ("smooth_flux", "smooth_below_mhz", "smooth_exempt_flux", "rfi_smooth_flux",
@@ -234,7 +237,7 @@ class PeelParams:
 
     # ZEST_* variables sent only when set, so the default environment stays as before
     _UNSET = {"smooth_below_mhz": 0.0, "smooth_exempt_flux": 0.0, "rfi_smooth_flux": None,
-              "smooth_exempt_below_el_deg": 0.0}
+              "smooth_exempt_below_el_deg": 0.0, "workspace": False}
 
     def daemon_env(self, rfi_sources: Optional[str]) -> Dict[str, str]:
         """ZEST_* environment for the zest daemon."""
