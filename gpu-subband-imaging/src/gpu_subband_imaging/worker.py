@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import shutil
 import sys
 import threading
@@ -16,7 +17,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from . import lst
-from .config import Config
+from .config import Config, v3_params
 from .stages import (average, calibrate, compress, fastcal, flag, image, movie, quality,
                      stage_ms, uvw)
 from .stages.peel import ZestDaemon
@@ -70,6 +71,9 @@ class Worker:
         self._v3_tpl_lock = threading.Lock()
         self._v3_template: Optional[Path] = None
         self._v3_template_failed = False
+        self._archives: dict = {}      # v3.archive: group -> hourstore.ArchiveClient
+        self._archive_lock = threading.Lock()
+        self._archive_failed = False   # a record of this batch failed (logged loudly once)
 
     def _start_gpu_imager(self):
         from .stages import gpu_image
@@ -551,6 +555,110 @@ class Worker:
         log.info("timing %sMHz batch%d stamp=%s phase=fix_uvw elapsed=%.2f s",
                  self.band, self.batch, stamp, time.perf_counter() - t0)
 
+    # -- v3 step 5: one GSIV record file per band-hour (v3.archive) ----------------
+
+    def _archive_python_env(self):
+        """(python, env) of the archive writer: v3.archive_python (else imaging.gpu_python, else the
+        python beside hour_imaging.ttcalx_image), the imager env (hour_imaging.env may set the
+        PYTHONPATH of the imager to use) with this pipeline's src in front."""
+        from . import hour_image
+        pl = self.cfg.pipeline
+        python = (v3_params(pl).archive_python or getattr(pl.imaging, "gpu_python", None) or
+                  str(Path(pl.hour_imaging.ttcalx_image).parent / "python"))
+        env = hour_image.imager_env(self.cfg)
+        env["CUDA_VISIBLE_DEVICES"] = ""          # the writer never touches the GPU
+        src = str(Path(__file__).resolve().parents[1])
+        env["PYTHONPATH"] = src + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+        return python, env
+
+    def _check_archive_imager(self) -> None:
+        """Batch start: the archive writer's imager must have gsiv (fail fast, not per snapshot)."""
+        from .v3 import hourstore
+        python, env = self._archive_python_env()
+        try:
+            where = hourstore.probe_imager(python, env)
+        except hourstore.GSIVError as e:
+            raise RuntimeError(f"v3.archive={v3_params(self.cfg.pipeline).archive}: {e} -- set v3.archive_python "
+                               "or hour_imaging.env PYTHONPATH to an imager with ttcalx_imager.gsiv") from None
+        log.info("archive %sMHz batch%d: writer imager %s", self.band, self.batch, where)
+
+    def _archive_client(self, stamp: str):
+        """The archive writer of this stamp's band-hour (started on first use): an
+        ``hourstore serve`` process in the imager venv, appending to one file per batch."""
+        from .v3 import hourstore
+        pl = self.cfg.pipeline
+        group = self.group(stamp)
+        with self._archive_lock:
+            c = self._archives.get(group)
+            if c is not None and not c.alive:
+                self._archives.pop(group, None)
+                c = None
+            if c is None:
+                python, env = self._archive_python_env()
+                pc = lst.phase_centre(self.lst_hour(stamp)) if self.lst_layout else None
+                out = hourstore.archive_path(self.cfg, self.band, group, self.batch)
+                hdr = hourstore.header_for(self.band, pl.date, group, pc, pl.run_label, batch=self.batch,
+                                           layout=getattr(pl, "layout", "utc"), cal_bp=str(pl.cal.bp),
+                                           cal_xy=str(pl.cal.xy))
+                c = hourstore.ArchiveClient(python, out, pc, hdr, env=env)
+                log.info("archive %sMHz batch%d group=%s: %s (writer pid %s, %s records, imager %s)",
+                         self.band, self.batch, group, out, c.info.get("pid"), c.info.get("n"),
+                         c.info.get("imager"))
+                self._archives[group] = c
+        return c
+
+    def _archive_expected(self, stamp: str) -> None:
+        """The snapshot's FITS are archived: list it as expected in the band-hour archive (the hour
+        job checks the archive against these lists and never images a reduced set)."""
+        from .v3 import hourstore
+        out = hourstore.archive_path(self.cfg, self.band, self.group(stamp), self.batch)
+        hourstore.add_expected(out, self._kept_stem(stamp), batch=self.batch)
+
+    def _kept_stem(self, stamp: str) -> str:
+        return self.kept_ms_path(stamp, ".").name[:-len(".ms")]
+
+    def _archive_record(self, stamp: str, ms: Path, kept: Optional[Path] = None) -> None:
+        """Append the compact record of the peeled MS (the kept MS if there is one) to the
+        band-hour archive, named as the kept MS (stem, path), not as the work-dir <stamp>_avg.ms.
+
+        A failed writer is killed and dropped (the next snapshot starts a new one, which resumes
+        the file).  hour_source=archive: the error fails the snapshot (the hour job then sees it
+        missing from the archive and falls back to the kept MSes or fails); hour_source=kept_ms:
+        logged loudly once per batch, the v2 hour job does not need the archive."""
+        t0 = time.perf_counter()
+        group = self.group(stamp)
+        try:
+            r = self._archive_client(stamp).add(ms, stem=self._kept_stem(stamp),
+                                                path=str(kept) if kept else f"{self._kept_stem(stamp)}.ms")
+        except Exception as e:
+            with self._archive_lock:
+                c = self._archives.pop(group, None)
+            if c is not None:
+                c.close()
+            if v3_params(self.cfg.pipeline).hour_source == "archive":
+                log.error("ARCHIVE_RECORD_FAILED %sMHz stamp=%s: %s", self.band, stamp, e)
+                raise
+            if not self._archive_failed:
+                log.error("ARCHIVE_RECORD_FAILED %sMHz batch%d stamp=%s: %s (hour_source=kept_ms: the hour "
+                          "job is unaffected; the writer is restarted for the next snapshot; further "
+                          "failures of this batch at warning level)", self.band, self.batch, stamp, e)
+            else:
+                log.warning("archive record %sMHz stamp=%s failed: %s", self.band, stamp, e)
+            self._archive_failed = True
+            return
+        log.info("timing %sMHz batch%d stamp=%s phase=archive_record elapsed=%.2f s nbytes=%s n_kept=%s%s",
+                 self.band, self.batch, stamp, time.perf_counter() - t0, r.get("nbytes"), r.get("n_kept"),
+                 " (supersedes an older record)" if r.get("superseded") else "")
+
+    def _close_archives(self) -> None:
+        with self._archive_lock:
+            for c in self._archives.values():
+                try:
+                    c.close()
+                except Exception as e:
+                    log.warning("archive writer close: %s", e)
+            self._archives.clear()
+
     # -- image + archive (background thread; GPU moves on to the next zest) --
 
     def _image_archive(self, stamp: str, avg: Path) -> None:
@@ -619,11 +727,18 @@ class Worker:
                      self.band, self.batch, stamp, f.name, time.perf_counter() - t0)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(fz), str(target.parent / fz.name))
-        if self.cfg.pipeline.keep_ms_root or getattr(self.cfg.pipeline, "keep_ms_local", None):
+        archive = v3_params(self.cfg.pipeline).archive != "none"
+        if archive:            # the snapshot is archived: the hour job must find its record
+            self._archive_expected(stamp)
+        kept = None
+        if (self.cfg.pipeline.keep_ms_root or getattr(self.cfg.pipeline, "keep_ms_local", None)) and \
+                v3_params(self.cfg.pipeline).write_kept_ms:
             t0 = time.perf_counter()
             kept = self.keep_ms(stamp, avg)
             log.info("timing %sMHz batch%d stamp=%s phase=keep_ms elapsed=%.2f s dst=%s",
                      self.band, self.batch, stamp, time.perf_counter() - t0, kept)
+        if archive:            # after the FITS and keep_ms: the archive's set is v2's kept set
+            self._archive_record(stamp, kept or avg, kept)
         shutil.rmtree(self.work / stamp, ignore_errors=True)
 
     def keep_root(self) -> str:
@@ -670,6 +785,8 @@ class Worker:
         if not todo:
             log.info("batch %sMHz/%d: nothing to do", self.band, self.batch)
             return
+        if v3_params(self.cfg.pipeline).archive != "none":
+            self._check_archive_imager()
         self.work.mkdir(parents=True, exist_ok=True)
         batch_start = time.perf_counter()
         t0 = time.perf_counter()
@@ -740,6 +857,7 @@ class Worker:
             if self._gpu_imager is not None:
                 self._gpu_imager.close()
             self._v3_stop_pool()
+            self._close_archives()
             shutil.rmtree(self.work, ignore_errors=True)
             root = self._untar_root()
             if root is not None and not root.is_symlink():

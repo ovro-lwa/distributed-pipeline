@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Tuple
 
-from .config import Config
+from .config import Config, v3_params
 
 log = logging.getLogger("gsi.hour_image")
 
@@ -70,7 +70,8 @@ def imager_env(cfg: Config, base: Optional[Mapping[str, str]] = None) -> Dict[st
 
 def run_band(cfg: Config, band: int, hour: str, gpu: Optional[int] = None) -> Dict:
     """Image one band-hour on this node (CUDA_VISIBLE_DEVICES set by the launcher)."""
-    if not cfg.pipeline.keep_ms_root:
+    archive = v3_params(cfg.pipeline).hour_source == "archive"
+    if not cfg.pipeline.keep_ms_root and not archive:
         raise RuntimeError("hour imaging needs pipeline.keep_ms_root")
     if getattr(cfg.pipeline, "layout", "utc") == "lst":
         from . import hour_lst
@@ -144,8 +145,11 @@ def plan(cfg: Config, bands: Optional[List[int]] = None,
          hours: Optional[List[str]] = None) -> List[Tuple[int, str]]:
     """Band-hours with kept MSes, largest images first (they take longest)."""
     hrs = hours or _hours(cfg)
+    archive = v3_params(cfg.pipeline).hour_source == "archive"
+    if archive:
+        from .v3 import hourstore
     jobs = [(b, h) for b in (bands or cfg.pipeline.bands) for h in hrs
-            if list_kept(cfg, b, h)]
+            if list_kept(cfg, b, h) or (archive and hourstore.archive_files(cfg, b, h))]
     return sorted(jobs, key=lambda j: (-cfg.subbands.geom(j[0]).pixels, j[0], j[1]))
 
 

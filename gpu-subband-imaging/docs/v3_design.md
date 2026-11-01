@@ -63,6 +63,8 @@ Per-snapshot cost of each storage layout:
 
 The compact u, v, w are rebuilt as `(uvw[:, k:k+1] * freqs/C)[ok].astype(float32)`. That is one float64 multiply and then a cast, so the values are bit-identical to `load_samples`, on numpy or CuPy.
 
+R is not bit-reproducible in this sense. casacore measures caching makes `snapshot_rotation` depend on the order of the calls in a process, by |ΔR| up to about 1.8e-10 (`scripts/v3_store/r_history.py`), a phase of about 1e-7 rad. A record's R equals a sequential `load_samples` in the writer's order (`hourstore build` sorts by stem), but not, bit for bit, a process-pool load. v2's own hour job (`load_all`, nproc 8) has the same property between any two runs, so this sits inside the v2 floor.
+
 The v2 hour job holds the 23.2 GB of samples in RAM. With `TTCALX_CHUNK_CACHE=auto` it also holds host-side concatenations for chunks that do not fit on the GPU, about 24 B/sample more. Its peak RSS is likely 25–40 GB. This is not measured yet; step 0 measures it.
 
 ### 1.3 Node state and the current per-snapshot flow
@@ -370,6 +372,17 @@ Validation in `__post_init__`:
 - `ttcalx_imager/gsiv.py` (TTCalX repo, python): `load_archive(path, ra, dec) -> list[LazySnap]`, plus `hour.image_hour_snaps` (3.4) and the CLI `ttcalx-image hour --archive <file>[,<file>]`.
 - `hour_lst.run_band` builds that command when `hour_source == archive`; the archive lands under `QA/`.
 - **Test:** run with `write_kept_ms: true` and the archive. The hour job on the archive against the hour job on the kept MSes of the **same** run must give bitwise-identical sample arrays (unit test: `load_samples(ms)` vs `load_archive` for every snapshot), and products within the floor.
+- **As implemented (exp/gsi-v3-store, exp/imager-v3-store):**
+  - one file per worker batch, `<archive_root>/<band>MHz/<date>/<run_label>/<LST>h/<band>MHz-<date>-<LST>h-peeled-bNNN.gsiv`, so two batches of one band-hour never append to the same file. The hour job reads every `*.gsiv` of the band-hour.
+  - The worker hook (`Worker._archive_record`, before the FITS move) sends each peeled MS to `python -m gpu_subband_imaging.v3.hourstore serve` running in the imager venv (`v3.archive_python`, default `imaging.gpu_python` or the python beside `hour_imaging.ttcalx_image`). Records, their R and the hour job's own MS reading therefore use the same msio, casacore and numpy. A stamp that is already in the file is skipped.
+  - QA rejections go to the imager by stem (`--exclude-stems`), not by index.
+  - **Order in `_image_archive`:** FITS fpacked and moved → the stem appended to `<archive>.expected.jsonl` → keep_ms → the record, made from the kept MS. The archive's snapshot set is therefore v2's kept set. At batch start the writer's imager is probed (`hourstore.probe_imager`); without `ttcalx_imager.gsiv` the batch fails at once.
+  - **Writer:** requests carry ids. On a timeout or a dead child the client kills its `serve`, the worker drops it and the next snapshot starts a new one, which resumes the file. With `hour_source=kept_ms` the failure is logged loudly once per batch.
+  - **Reruns:** a reprocessed stem is appended again; the newest record wins by (written_ns, seq), then path, also across bNNN files. A resume refuses another band, date, group, run_label, calibration table, phase centre or channelisation. Each file has an O_EXCL lock file with pid and host, touched on every append and taken over when stale.
+  - **Strict loading:** torn bytes, dropped index lines, unindexed records, a bad crc or a record of another band raise `GSIVError` (array tables are bounds-checked whether or not the crc is verified). `load_archive(band=...)` checks the header band.
+  - **The hour job never images a reduced set.** It verifies the archive structure and crc, the band and the phase centre, and that the newest-per-stem set equals the expected set (worker lists ∪ CLEAN snapshot FITS) and the kept MSes. Otherwise it falls back to the kept MSes when they cover the expected set, and fails loudly when they don't. With `hour_source: archive`, kept MSes are deleted only when the imager loaded exactly the stems it was given, and then only those stems. At the defaults (`kept_ms`), deletion is unchanged from 13405ce: on success the band-hour's kept directories are removed whole. A test compares old and new `run_band` on the same fixtures. No-data and failed jobs delete nothing. See `scripts/v3_store/corruption_table.py`.
+  - `hour_source: archive` needs `archive: iv`, and `hour_source: kept_ms` needs `write_kept_ms`. `archive: full` is rejected (not implemented).
+  - With `--archive`, `TTCALX_CHUNK_CACHE` defaults to `store`. A `LazySnap` expands u, v, w, nw on the GPU in `HourGrid` in every mode.
 - **Speedup:**
   - keep_ms 2.6 / 7.3 s of Lustre writes per file → about 0.05 s append;
   - hour load + rotation 46 → about 8 s (c00) and 171 → about 20 s (calim07);

@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from . import lst
-from .config import Config
+from .config import Config, v3_params
 
 log = logging.getLogger("gsi.hour_lst")
 
@@ -178,10 +178,27 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
     qa_dir = bdir / "QA"
     qa_dir.mkdir(parents=True, exist_ok=True)
     ms = hour_image.list_kept(cfg, band, group)
-    stamps = [Path(p).name[:-3] for p in ms]
+    archives: List[Path] = []
+    source = "kept_ms"
     rec: Dict = dict(band=band, date=pl.date, lst_label=group, run_label=pl.run_label,
                      n_ms=len(ms), host=os.uname().nodename, gpu=gpu,
                      products=list(h.products), start_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    if v3_params(pl).hour_source == "archive":    # gsi v3 step 5: the band-hour's GSIV record file(s)
+        source, archives, why = _archive_or_fallback(cfg, band, group, lst_hour, ms)
+        rec.update(hour_source=source, archive=[str(a) for a in archives],
+                   archive_bytes=sum(a.stat().st_size for a in archives if a.exists()))
+        if why:
+            rec["archive_problems"] = why
+    if source == "archive":
+        from .v3 import hourstore
+        stamps = hourstore.archive_inventory(archives)["stems"]
+        rec["n_records"] = len(stamps)
+        ms_for_cmd: List[str] = []
+    elif source == "failed":
+        stamps, ms_for_cmd = [], []
+    else:
+        stamps = [Path(p).name[:-3] for p in ms]
+        ms_for_cmd = ms
     t_all = time.perf_counter()
 
     # 1. QA
@@ -191,22 +208,43 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
     exclude = [i for i, s in enumerate(stamps) if lst.timestamp(s) in bad_ts]
     rec["qa"]["excluded_from_hour"] = len(exclude)
     rec["timing_s"] = {"qa": time.perf_counter() - t0}
-    log.info("hour %sMHz %s: %d kept MSes, QA %s", band, group, len(ms), rec["qa"])
+    log.info("hour %sMHz %s: %d %s, QA %s", band, group, len(stamps),
+             f"records in {len(archives)} archive file(s)" if source == "archive" else "kept MSes", rec["qa"])
 
     rc = 0
-    if not ms:
+    # hour_source=archive: the stricter rules (the job must load exactly the given stems; only those
+    # kept MSes are deleted).  Defaults (kept_ms): exactly 13405ce -- no such check, and on success
+    # the whole kept dirs are removed (QA-rejected MSes and leftovers included).
+    strict = v3_params(pl).hour_source == "archive"
+    imaged: set = set()          # stems the imager loaded in this job
+    if source == "failed":
+        rec["status"] = "failed"
+        rc = -2
+    elif not stamps:
         rec["status"] = "no-data"
     else:
         # 2. imager
         work = bdir / ".hour_work"
         shutil.rmtree(work, ignore_errors=True)
         work.mkdir(parents=True)
-        list_file = work / "ms-list.txt"
-        list_file.write_text("\n".join(ms) + "\n")
-        cmd = ([h.ttcalx_image, "hour", f"@{list_file}", "--band", str(band),
+        if source == "archive":
+            # QA rejections by stem: the record order of the archive need not be the MS order
+            xs = [s for s in stamps if lst.timestamp(s) in bad_ts]
+            list_file = work / "archive-list.txt"
+            list_file.write_text("\n".join(map(str, archives)) + "\n")
+            src = ["--archive", f"@{list_file}"]
+            if xs:
+                (work / "exclude-stems.txt").write_text("\n".join(xs) + "\n")
+            excl = ["--exclude-stems", f"@{work / 'exclude-stems.txt'}"] if xs else []
+        else:
+            list_file = work / "ms-list.txt"
+            list_file.write_text("\n".join(ms_for_cmd) + "\n")
+            src = [f"@{list_file}"]
+            excl = ["--exclude", ",".join(map(str, exclude))] if exclude else []
+        cmd = ([h.ttcalx_image, "hour"] + src + ["--band", str(band),
                 "--out", str(work / f"{band}MHz"), "--products", ",".join(h.products),
                 "--lst-hour", str(lst_hour), "--qa", "none", "--nproc", str(h.nproc), "-v"]
-               + (["--exclude", ",".join(map(str, exclude))] if exclude else []) + list(h.extra_args))
+               + excl + list(h.extra_args))
         rec["cmd"] = cmd
         log.info("hour %sMHz %s: %s", band, group, " ".join(cmd))
         t0 = time.perf_counter()
@@ -226,9 +264,17 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
                 rec["n_loaded"] = s.get("n_loaded")
                 rec["n_rejected_hour"] = len(s.get("rejected", []))
                 rec["phase_centre_deg"] = s.get("phase_centre")
+                if rc == 0:
+                    imaged = {q["stem"] for q in s.get("qa", [])}
                 shutil.move(str(summary), str(qa_dir / summary.name))
-            except ValueError as e:
+            except (ValueError, KeyError, TypeError) as e:
                 log.warning("cannot parse %s: %s", summary, e)
+        if strict and rc == 0 and imaged != set(stamps):
+            # the job did not load exactly the snapshots it was given: fail, delete nothing
+            rec["imaged_mismatch"] = dict(missing=sorted(set(stamps) - imaged), extra=sorted(imaged - set(stamps)))
+            log.error("hour %sMHz %s: the imager loaded %d snapshots, expected %d: %s", band, group,
+                      len(imaged), len(stamps), rec["imaged_mismatch"])
+            rc, imaged = -3, set()
         # 3. products
         t0 = time.perf_counter()
         rec["files"] = place_products(work, bdir, stamps)
@@ -266,15 +312,109 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
         "software": software_versions(cfg),
         "sun_cut": pl.sun_cut, "n_snapshots_clean": len(snaps), "hour": rec,
     }
+    if v3_params(pl).hour_source == "archive":
+        prov["v3"] = {"hour_source": "archive", "used": source, "archive": v3_params(pl).archive,
+                      "files": [{"path": str(a), "bytes": a.stat().st_size} for a in archives if a.exists()],
+                      "n_records": len(stamps) if source == "archive" else None,
+                      "problems": rec.get("archive_problems")}
     (bdir / "provenance.json").write_text(json.dumps(prov, indent=1, default=str))
     (qa_dir / f"{band}MHz-hour-timing.json").write_text(json.dumps(rec, indent=1, default=str))
     log.info("timing %sMHz lst=%s phase=hour_total elapsed=%.2f s rc=%s n_ms=%d",
              band, group, rec["timing_s"]["total"], rc, len(ms))
+    if source == "failed":
+        raise RuntimeError(f"hour {band}MHz {group}: the archive is unusable and there are no complete kept "
+                           f"MSes to fall back to: {rec.get('archive_problems')}")
     if rc != 0:
         raise RuntimeError(f"ttcalx-image hour failed for {band}MHz {group} (rc={rc})")
-    if ms and h.delete_kept_ms:
+    if strict:
+        if imaged and h.delete_kept_ms:
+            _delete_kept(cfg, band, group, imaged)
+    elif ms and h.delete_kept_ms:            # v2 (13405ce), unchanged
         for kd in hour_image.kept_dirs(cfg, band, group):
             if kd.is_dir():
                 shutil.rmtree(kd, ignore_errors=True)
                 log.info("deleted kept MSes %s", kd)
     return rec
+
+
+def _delete_kept(cfg: Config, band: int, group: str, imaged: set) -> None:
+    """Delete the kept MSes whose stems this hour job imaged -- never any other (a no-data job,
+    a failed one or a reduced archive deletes nothing it did not image)."""
+    from . import hour_image
+    for kd in hour_image.kept_dirs(cfg, band, group):
+        if not kd.is_dir():
+            continue
+        n = 0
+        for p in sorted(kd.iterdir()):
+            if p.name.endswith(".ms") and not p.name.startswith(".") and p.name[:-3] in imaged:
+                shutil.rmtree(p, ignore_errors=True)
+                n += 1
+        left = [p for p in kd.iterdir() if not p.name.startswith(".")]
+        if not left:
+            shutil.rmtree(kd, ignore_errors=True)
+        log.info("deleted %d kept MSes in %s%s", n, kd, f" ({len(left)} not imaged here kept)" if left else "")
+
+
+def _imager_has_archive(cfg: Config) -> bool:
+    from . import hour_image
+    try:
+        p = subprocess.run([cfg.pipeline.hour_imaging.ttcalx_image, "hour", "--help"], capture_output=True,
+                           text=True, timeout=120, env=hour_image.imager_env(cfg))
+        return "--archive" in p.stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _archive_or_fallback(cfg: Config, band: int, group: str, lst_hour: int, ms: List[str]):
+    """hour_source=archive: ("archive", files, []) if the archive is complete and sound, else
+    ("kept_ms", files, problems) when the kept MSes cover the expected snapshots, else
+    ("failed", files, problems); ("kept_ms", [], []) when there is nothing at all (no-data).
+
+    Expected snapshots = the worker lists (<archive>.expected.jsonl: FITS archived) and the CLEAN
+    snapshot FITS of the band-hour; the archive must hold exactly those (newest record per
+    stem), structurally sound (no torn bytes, dropped index lines, unindexed records), of this
+    band and phase centre, every record's crc good (checked here, so that a bad record falls back
+    to the MSes; the imager checks the crc and the freqs again)."""
+    from .v3 import hourstore
+    files = hourstore.archive_files(cfg, band, group)
+    expected = hourstore.expected_stems(cfg, band, group) or set()
+    expected |= _fits_stems(cfg, band, lst_hour)
+    kept = {Path(p).name[:-3] for p in ms}
+    if not files and not expected and not kept:
+        return "kept_ms", [], []                         # nothing to image (no-data, deletes nothing)
+    problems: List[str] = []
+    if not files:
+        problems.append("no archive files")
+    inv = hourstore.archive_inventory(files, band=band, phase_centre=lst.phase_centre(lst_hour), verify=True)
+    problems += inv["problems"]
+    got = set(inv["stems"])
+    if files and got != expected:
+        problems.append(f"archive has {len(got)} snapshots, expected {len(expected)}: missing "
+                        f"{sorted(expected - got)[:10]}, unexpected {sorted(got - expected)[:10]}")
+    if kept and kept != got:
+        problems.append(f"kept MSes ({len(kept)}) and archive ({len(got)}) differ")
+    if files and not problems and not _imager_has_archive(cfg):
+        problems.append(f"{cfg.pipeline.hour_imaging.ttcalx_image} has no --archive (imager without gsiv)")
+    if not problems:
+        return "archive", files, []
+    if kept and expected <= kept:
+        log.error("ARCHIVE_UNUSABLE %sMHz %s: %s -- falling back to the %d kept MSes", band, group,
+                  "; ".join(problems), len(kept))
+        return "kept_ms", files, problems
+    log.error("ARCHIVE_UNUSABLE %sMHz %s: %s -- and the kept MSes do not cover the %d expected snapshots",
+              band, group, "; ".join(problems), len(expected))
+    return "failed", files, problems
+
+
+def _fits_stems(cfg: Config, band: int, lst_hour: int) -> set:
+    """Stems of the band-hour's archived CLEAN snapshot FITS (<band>MHz-Clean-Snapshot-<ts>-image.fits.fz)."""
+    d = _band_dir(cfg, band, lst_hour) / "snapshots_clean"
+    if not d.is_dir():
+        return set()
+    out = set()
+    for f in d.glob("*.fits.fz"):
+        try:
+            out.add(f"{lst.timestamp(f.name)}_{band}MHz")
+        except ValueError:
+            continue
+    return out
