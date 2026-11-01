@@ -66,7 +66,7 @@ The gate is simpler. It is logged on every snapshot as `PEEL_SMOOTH_GATE centre_
 **Strict alternative.** If Tau A must never be left in more than in production, use `smooth_flux: 0` everywhere, keeping mixed, peeliter 2, warm_start false and the restore.
 - At 82 MHz this is equal to production in every metric.
 - It gives up the faint-source gain: in the rule study 3C134 kept 0.66, instead of 0.82 with smoothing (all 36 snapshots).
-- On the bursts, Jupiter with smooth 0 + restore was not tested.
+- The restore still saves Jupiter without smoothing: Stokes V kept 0.986 (0.970–1.035) on the 8 bursts (Jupiter check below).
 
 ## The switches
 
@@ -315,11 +315,31 @@ There are 8 detections (|V| > 10 × the blank-sky V rms) in the tuning set: 12-2
 | production | 0.05 | −0.00 – 0.18 |
 | conservative (smooth 1000 + restore) | 0.995 | 0.969 – 1.097 |
 | **recommended L30** (smooth 1000 + below-30° exemption + restore) | **0.995** | **0.969 – 1.042** |
+| **strict** (smooth_flux 0 + restore) | **0.986** | **0.970 – 1.035** |
 | catalog exempt 500 + restore (superseded) | 0.995 | 0.969 – 1.057 |
 | catalog exempt 500 without restore | 0.10 | −0.00 – 0.27 |
 
 - The 60 λ values are the same within ±0.02. Jupiter Stokes I kept is 0.84–0.99 with the restore.
 - The restore is what keeps Jupiter: per-channel directions absorb it (0.10 without restore), and the restore fits it back (600 Jy to 205 kJy, V peak 2–15′ from the ephemeris).
-- Every rule with the restore keeps at least 0.969 of Jupiter's V on every detection.
+- Every rule with the restore keeps at least 0.969 of Jupiter's V on every detection at 10 λ.
+
+### Strict vs L30 vs production on the 8 Jupiter detections
+
+The run uses the merged daemon (exp/gsi-v3 00871ad) with TTCalX exp/ttcalx-v3 c78f0b5. It reproduces the earlier L30 and production runs exactly (0 difference over 448 values each).
+
+Medians, with ranges:
+
+| | Jupiter V kept 10 λ | Jupiter V kept 60 λ | Jupiter I kept | \|Tau A\| 60 λ | \|Cas A\| 60 λ | 3C134 | Per A | blank V / prod | blank I / prod | peel s |
+|---|---|---|---|---|---|---|---|---|---|---|
+| production | 0.046 (−0.00–0.18) | 0.049 | 0.060 | 0.31 | 0.006 | 0.850 | 0.75 | 1.00 | 1.00 | 20.7 |
+| L30 | 0.995 (0.969–1.042) | 0.988 (0.959–1.052) | 0.971 (0.85–0.99) | 0.50 | 0.005 | 0.934 | 0.87 | 3.2 | 1.12 | 19.2 |
+| strict | 0.986 (0.970–1.035) | 0.978 (0.935–0.999) | 0.968 (0.85–0.99) | 0.28 | 0.005 | 0.918 | 0.84 | 3.3 | 1.09 | 18.2 |
+
+- **The restore saves Jupiter without smoothing.** The 10 λ V is at least 0.97 on every detection. At 60 λ the lowest value is 0.935 (12-27 18 MHz 03h, 287 Jy).
+- **These snapshots are dominated by the kept Jupiter:**
+  - blank-sky V is up to 80× production at 18 MHz 03h, from Jupiter's own sidelobes;
+  - the Tau A ratios there, at 9.6° from Jupiter, are not peeling metrics.
+- Even so, strict leaves less at the Tau A position than L30 on 7 of the 8 detections. That is consistent with the held-out finding.
+- **12-20 18 MHz 12h (Jupiter 364 Jy):** Cas A is 0.070 strict, 0.173 L30 and 0.064 production.
 
 **Note on the 10-31 option ablation:** its Jupiter position came from the astropy ephemeris converted to barycentric ICRS *with* the distance, which is about 3° off (parallax). That column is not valid; Jupiter was weak that hour (the restore fitted 3.5–6.5 Jy). The estimator now uses the direction only, which matches the restore JSONs to 1.6′, plus the V-peak search.
