@@ -193,6 +193,18 @@ class PeelParams:
     # minuvw, peeliter, max_gain_amplitude, min_source_elevation_deg, rfi_mode, flag_zero) apply
     engine: str = "daemon"            # daemon (the daemon's own guarded_zest! loop) | sky_rfi
     smooth_flux: float = 0.0          # Jy; > 0 ties faint directions' per-channel gains to a band gain
+    # Only on the subbands where it helps (docs/peel_config.md): smooth_below_mhz > 0 applies
+    # smooth_flux (and rfi_smooth_flux) only when the subband centre frequency is below it;
+    # smooth_exempt_flux > 0 keeps per-channel gains for sky sources whose catalog flux at the
+    # subband centre is >= it (TTCalX smooth_exempt_flux); rfi_smooth_flux (None = smooth_flux)
+    # is the RFI emitters' value; smooth_exempt_below_el_deg > 0 keeps per-channel gains for sky
+    # sources below that elevation in each snapshot (robust across LST; needs TTCalX with
+    # zest_sky_rfi!(...; smooth_exempt_names), branch exp/sponge-exempt-apparent).
+    # The defaults (0, 0, None, 0) leave smoothing as before.
+    smooth_below_mhz: float = 0.0
+    smooth_exempt_flux: float = 0.0
+    rfi_smooth_flux: Optional[float] = None
+    smooth_exempt_below_el_deg: float = 0.0
     restore: str = ""                 # point sources given back after peeling (TTCal JSON, e.g. Jupiter)
     restore_below_mhz: float = 41.0
     restore_offset_deg: float = 0.0   # Stokes V position search radius (0.5 for Jupiter)
@@ -212,10 +224,22 @@ class PeelParams:
             raise ConfigError("peel.device=cpu needs peel.model=exact")
         if self.maxiter < 1 or self.peeliter < 1:
             raise ConfigError("peel.maxiter and peel.peeliter must be >= 1")
+        for name in ("smooth_flux", "smooth_below_mhz", "smooth_exempt_flux", "rfi_smooth_flux",
+                     "smooth_exempt_below_el_deg"):
+            value = getattr(self, name)
+            if value is None and name == "rfi_smooth_flux":
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not value >= 0:
+                raise ConfigError(f"peel.{name} must be >= 0, got {value!r}")
+
+    # ZEST_* variables sent only when set, so the default environment stays as before
+    _UNSET = {"smooth_below_mhz": 0.0, "smooth_exempt_flux": 0.0, "rfi_smooth_flux": None,
+              "smooth_exempt_below_el_deg": 0.0}
 
     def daemon_env(self, rfi_sources: Optional[str]) -> Dict[str, str]:
         """ZEST_* environment for the zest daemon."""
-        opts = {k: v for k, v in vars(self).items() if k != "rfi"}
+        opts = {k: v for k, v in vars(self).items()
+                if k != "rfi" and not (k in self._UNSET and v == self._UNSET[k])}
         if self.rfi:
             if not rfi_sources:
                 raise ConfigError("peel.rfi is true but cal.rfi_sources is not set")

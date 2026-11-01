@@ -13,6 +13,10 @@ from typing import Dict, List, Optional
 log = logging.getLogger("gsi.peel")
 
 
+# daemon lines passed to the gsi.peel log (the sky_rfi engine prints its SKY_RFI settings line
+# once, in front of the first reply)
+LOGGED_PREFIXES = ("PEEL_", "ZEST_TIMING", "UVW_GEOMETRIC", "SKY_RFI")
+
 class ZestTimeout(RuntimeError):
     """The daemon gave no reply in time; it was killed and restarted."""
 
@@ -89,7 +93,7 @@ class ZestDaemon:
         self._p.stdin.write(str(ms) + "\n")             # type: ignore[union-attr]
         self._p.stdin.flush()                           # type: ignore[union-attr]
         for line in self._p.stdout:                      # type: ignore[union-attr]
-            if line.startswith(("PEEL_", "ZEST_TIMING", "UVW_GEOMETRIC")):
+            if line.startswith(LOGGED_PREFIXES):
                 log.info(line.strip())
                 continue
             if line.startswith("ZESTED "):
@@ -153,7 +157,7 @@ class ZestDaemon:
                 rc = self._p.wait()
                 self._kill_restart(f"daemon exited (rc={rc}) during {name}")
                 raise RuntimeError(f"zest daemon closed unexpectedly (rc={rc}) on {name}")
-            if line.startswith(("PEEL_", "ZEST_TIMING", "UVW_GEOMETRIC")):
+            if line.startswith(LOGGED_PREFIXES):
                 log.info(line.strip())
                 continue
             if line.startswith((ok_token + " ", "FAILED ")):

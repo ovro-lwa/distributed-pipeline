@@ -30,7 +30,12 @@
 #                      feature/sponge-restore-fast-zest) with ZEST_SMOOTH_FLUX, ZEST_RESTORE,
 #                      ZEST_RESTORE_BELOW_MHZ, ZEST_RESTORE_OFFSET_DEG, ZEST_PRECISION,
 #                      ZEST_WARM_START (the exact model, geometric UVW, flagged models and the
-#                      residual guard are built in)
+#                      residual guard are built in), and the smoothing switches
+#                      ZEST_SMOOTH_BELOW_MHZ (> 0: smooth only subbands whose centre frequency
+#                      is below it), ZEST_SMOOTH_EXEMPT_FLUX (> 0: sky sources with catalog flux
+#                      >= it keep per-channel gains), ZEST_SMOOTH_EXEMPT_BELOW_EL_DEG (> 0: sky
+#                      sources below this elevation keep them) and ZEST_RFI_SMOOTH_FLUX (unset:
+#                      the ZEST_SMOOTH_FLUX value), all unset by default
 #   ZEST_WORKSPACE     sky_rfi engine only (default off): keep one TTCalX.PeelWorkspace and the
 #                      slot's device visibilities across snapshots, so a peel allocates almost no
 #                      GPU memory and CUDA.jl does not collect inside the solve under
@@ -47,6 +52,7 @@
 # "id=<id>" right after the path in FAILED; RESET_WARM answers "RESET_WARM_OK id=<id>".
 push!(LOAD_PATH, joinpath(ENV["TTCALX_DIR"], "src"))
 include(joinpath(ENV["TTCALX_DIR"], "src", "TTCalX.jl"))
+include(joinpath(@__DIR__, "zest_smooth.jl"))
 using .TTCalX
 using CUDA
 using Printf
@@ -92,6 +98,23 @@ reg_taper = envf("ZEST_REG_TAPER_DEG", 1.0)
 reg_lambda = envf("ZEST_REG_LAMBDA", 1.0)
 sky_rfi = envs("ZEST_ENGINE", "daemon", ("daemon", "sky_rfi")) == "sky_rfi"
 smooth_flux = envf("ZEST_SMOOTH_FLUX", 0.0)
+smooth_below_mhz = envf("ZEST_SMOOTH_BELOW_MHZ", 0.0)       # 0: smooth every subband
+smooth_exempt_flux = envf("ZEST_SMOOTH_EXEMPT_FLUX", 0.0)   # 0: no source exempt
+rfi_smooth_flux = envf("ZEST_RFI_SMOOTH_FLUX", smooth_flux)
+# ZEST_SMOOTH_EXEMPT_BELOW_EL_DEG > 0: sky sources below this elevation (in this snapshot) keep
+# per-channel gains under smoothing (low-elevation models need them; robust across LST, see
+# docs/peel_config.md); needs TTCalX zest_sky_rfi!(...; smooth_exempt_names)
+smooth_exempt_below_el = envf("ZEST_SMOOTH_EXEMPT_BELOW_EL_DEG", 0.0)
+for (k, v) in (("ZEST_SMOOTH_FLUX", smooth_flux), ("ZEST_SMOOTH_BELOW_MHZ", smooth_below_mhz),
+               ("ZEST_SMOOTH_EXEMPT_FLUX", smooth_exempt_flux), ("ZEST_RFI_SMOOTH_FLUX", rfi_smooth_flux),
+               ("ZEST_SMOOTH_EXEMPT_BELOW_EL_DEG", smooth_exempt_below_el))
+    v >= 0 || (println("CONFIG_ERROR $k must be >= 0, got $v"); flush(stdout); exit(2))
+end
+!(sky_rfi && smooth_flux > 0 && smooth_exempt_below_el > 0) ||
+    (isdefined(TTCalX, :zest_sky_rfi!) &&
+     any(m -> :smooth_exempt_names in Base.kwarg_decl(m), methods(TTCalX.zest_sky_rfi!))) ||
+    (println("CONFIG_ERROR ZEST_SMOOTH_EXEMPT_BELOW_EL_DEG needs TTCalX zest_sky_rfi!(...; smooth_exempt_names)");
+     flush(stdout); exit(2))
 restore_path = get(ENV, "ZEST_RESTORE", "")
 restore_below_mhz = envf("ZEST_RESTORE_BELOW_MHZ", Inf)
 restore_offset_deg = envf("ZEST_RESTORE_OFFSET_DEG", 0.0)
@@ -104,7 +127,8 @@ use_workspace && !isdefined(TTCalX, :PeelWorkspace) &&
     error("ZEST_WORKSPACE needs TTCalX with PeelWorkspace (branch exp/peel-workspace)")
 # reused peel buffers; the keyword is only passed when on, so older TTCalX runs with it off
 peel_ws_kw = use_workspace ? (workspace=TTCalX.PeelWorkspace(),) : NamedTuple()
-sky_rfi && !isdefined(TTCalX, :zest_sky_rfi!) && error("ZEST_ENGINE=sky_rfi needs TTCalX with zest_sky_rfi!")
+sky_rfi && !isdefined(TTCalX, :zest_sky_rfi!) &&
+    (println("CONFIG_ERROR ZEST_ENGINE=sky_rfi needs TTCalX with zest_sky_rfi!"); flush(stdout); exit(2))
 # zest_sky_rfi! runs on host arrays as well (TTCalX host backend), so device=cpu is allowed
 sky_rfi && !(fast_io && exact_model && geometric && residual_guard && flag_model) &&
     error("ZEST_ENGINE=sky_rfi is the exact-model, geometric-UVW, guarded zest: " *
@@ -309,15 +333,32 @@ println(
 restore_sources = isempty(restore_path) ? GPUSource[] : read_gpu_sources(restore_path)
 any(s -> get_name(s) in ("Sun", "Moon", "Jupiter"), restore_sources) &&
     error("ZEST_RESTORE: a source named Sun/Moon/Jupiter is read as a placeholder; rename it")
-sky_rfi && println(@sprintf("SKY_RFI smooth_flux=%g restore=%d below_mhz=%g offset_deg=%g precision=%s warm_start=%s peeliter=%d workspace=%s",
+sky_rfi && println(@sprintf("SKY_RFI smooth_flux=%g restore=%d below_mhz=%g offset_deg=%g precision=%s warm_start=%s peeliter=%d smooth_below_mhz=%g smooth_exempt_flux=%g rfi_smooth_flux=%g smooth_exempt_below_el_deg=%g workspace=%s",
                            smooth_flux, length(restore_sources), restore_below_mhz, restore_offset_deg,
-                           precision, warm_start, piter, use_workspace))
+                           precision, warm_start, piter, smooth_below_mhz, smooth_exempt_flux,
+                           rfi_smooth_flux, smooth_exempt_below_el, use_workspace))
 flush(stdout)
 
 # zest_sky_rfi! for one snapshot; returns the gains for a warm start of the next one
 function run_sky_rfi!(vis, meta, mjd, initial_gains)
+    # smoothing switches: the subband-centre gate and the bright-source exemption
+    sflux, rflux = smooth_flux, rfi_smooth_flux
+    if smooth_below_mhz > 0
+        centre_mhz = sum(Array(meta.channels)) / length(meta.channels) / 1e6
+        gated = centre_mhz >= smooth_below_mhz
+        gated && (sflux = rflux = 0.0)
+        @printf("PEEL_SMOOTH_GATE centre_mhz=%.3f below_mhz=%g smoothing=%s\n", centre_mhz,
+                smooth_below_mhz, (sflux == 0 && rflux == 0) ? "off" : "on")
+    end
     elev = Dict(get_name(s) => elevation_deg(s, meta) for s in vcat(sources, rfi_sources))
     rfi_names = Set(get_name.(rfi_sources))
+    exempt_kw = (;)
+    if smooth_exempt_below_el > 0 && sflux > 0
+        exempt = smooth_exempt_by_elevation(get_name.(sources), [elev[get_name(s)] for s in sources],
+                                            min_elevation, smooth_exempt_below_el)
+        exempt_kw = (; smooth_exempt_names=exempt)
+        @printf("PEEL_SMOOTH_EXEMPT below_el_deg=%g names=\"%s\"\n", smooth_exempt_below_el, join(exempt, ","))
+    end
     report = (name, it; converged, niters, finite, max_gain, p_with, p_old, p_new, action) -> @printf(
         "PEEL_SOLVE pass=%s name=\"%s\" elevation_deg=%.2f iteration=%d/%d converged=%s niters=%d finite=%s max_gain=%.6g accepted=%s action=%s p_ratio_new=%.4g p_ratio_old=%.4g\n",
         name in rfi_names ? "rfi" : "sky", name, elev[name], it, piter, converged, niters, finite,
@@ -325,10 +366,11 @@ function run_sky_rfi!(vis, meta, mjd, initial_gains)
     r = zest_sky_rfi!(vis, meta, mjd, sources, rfi_sources;
                       rfi_mode=rfi_joint ? :joint : :after, solver=solver, maxiter=mi, tolerance=tol,
                       minuvw=muvw, peeliter=piter, max_gain=max_gain, min_elevation=min_elevation,
-                      flag_zeros=flag_zero, report=report, smooth_flux=smooth_flux,
+                      flag_zeros=flag_zero, report=report, smooth_flux=sflux, rfi_smooth_flux=rflux,
+                      smooth_exempt_flux=smooth_exempt_flux > 0 ? smooth_exempt_flux : Inf,
                       restore=restore_sources, restore_below_mhz=restore_below_mhz,
                       restore_offset_deg=restore_offset_deg, precision=precision,
-                      initial_gains=initial_gains, peel_ws_kw...)
+                      initial_gains=initial_gains, exempt_kw..., peel_ws_kw...)
     @printf("PEEL_SUMMARY pass=all selected=%d accepted=%d skipped=%d flagged_zeros=%d action=sky_rfi\n",
             length(sources) - length(r.skipped) + length(rfi_sources), length(r.peeled),
             length(r.skipped), r.flagged_zeros)
