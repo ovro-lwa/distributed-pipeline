@@ -186,7 +186,14 @@ Production chains are hundreds of snapshots long, so leave warm start off.
 
 - The sin(el)^1.6 is a fit to the OVRO-LWA Stokes I beam (`OVRO-LWA_MROsoil_updatedheight.h5`, via orca): exponent 1.6 at 20–25 MHz, 1.5 at 55 MHz, 1.2 at 84 MHz.
 - Results are in `/lustre/nkosogor/peel_exp/ablate/results/exempt/`.
-- [`peel_config_ratios.csv`](peel_config_ratios.csv) has, per night, band and hour, the signed and |·| ratios for P / C / L30 and a `jupiter_detected` flag.
+- [`peel_config_ratios.csv`](peel_config_ratios.csv) has the group medians for production / conservative / recommended (L30) / strict, per set, night, band and hour.
+  - It covers all 35 groups: 20 tuning, 14 held-out, and 82 MHz from the option ablation.
+  - Ratios are given signed and as |·|, at 10 and 60 λ, with `held_out` and `jupiter_detected` flags.
+  - At 82 MHz the 65 MHz gate turns smoothing off, so conservative = recommended = strict there (bitwise, see the checks above).
+- [`peel_config_fig_bands.csv`](peel_config_fig_bands.csv) is the figure table: per band (18, 23, 27, 41, 55, 82 MHz), quantity and config, the median and 16–84% range over that band's groups.
+  - Residuals are |·| at 60 λ (Tau A, Cas A, Hya A, 3C123). Retained sources are at 10 λ (3C134, 3C196, Per A, 3C48). Both are given over all groups and over non-Jupiter groups.
+  - Jupiter V kept is over Jupiter-detected snapshots; blank-sky V and I relative to production are over non-Jupiter groups.
+  - Strict was run on every tuning and held-out snapshot (merged daemon exp/gsi-v3, TTCalX c78f0b5). The new production / conservative / L30 values reproduce the earlier table exactly.
 
 **Jupiter-affected groups are excluded from the medians.** Jupiter is detected in 8 of the 20 groups:
 - 12-20 18/23/27 MHz 03h;
