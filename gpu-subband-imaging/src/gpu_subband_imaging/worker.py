@@ -271,8 +271,14 @@ class Worker:
         hour_source=archive a failure fails the snapshot (its FITS are not archived yet, so a
         rerun redoes it); otherwise it is only logged."""
         t0 = time.perf_counter()
+        # name the record as the kept MS (load_samples of it gives this stem and path), not as
+        # the work-dir <stamp>_avg.ms
+        pl = self.cfg.pipeline
+        root = pl.keep_ms_root or getattr(pl, "keep_ms_local", None)
+        kept = self.kept_ms_path(stamp, root or ".")
         try:
-            r = self._archive_client(stamp).add(avg)
+            r = self._archive_client(stamp).add(avg, stem=kept.name[:-len(".ms")],
+                                                path=str(kept) if root else kept.name)
         except Exception as e:
             if v3_params(self.cfg.pipeline).hour_source == "archive":
                 raise

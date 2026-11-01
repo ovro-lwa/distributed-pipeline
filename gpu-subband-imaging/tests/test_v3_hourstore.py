@@ -319,14 +319,20 @@ def test_archive_client_serve_end_to_end(tmp_path):
     rs = [c.add(m) for m in ms]
     assert all(r["ok"] for r in rs) and [r["seq"] for r in rs] == [1, 2, 3]
     assert c.add(ms[1])["skipped"] == "duplicate"
+    avg = tmp_path / "20261031_101099_55MHz_avg.ms"                # the worker's work-dir name
+    _make_ms(avg, seed=9)
+    r = c.add(avg, stem="20261031_101099_55MHz", path="/keep/20261031_101099_55MHz.ms")
+    assert r["stem"] == "20261031_101099_55MHz" and r["seq"] == 4
     with pytest.raises(hs.GSIVError):
         c.add(tmp_path / "missing.ms")                  # an error reply; the writer keeps serving
     c.close()
     c = hs.ArchiveClient(sys.executable, out, None, hdr, env=env, timeout=120)   # rerun: resumes
-    assert c.info["n"] == 3
+    assert c.info["n"] == 4
     c.close()
     sc = hs.scan(out, verify=True)
-    assert sc.clean and sc.stems == [m.name[:-3] for m in ms] and sc.header_meta["group"] == "04h"
+    assert sc.clean and sc.stems == [m.name[:-3] for m in ms] + ["20261031_101099_55MHz"]
+    assert sc.header_meta["group"] == "04h"
+    assert hs.read_records(out)[2][3].meta["path"] == "/keep/20261031_101099_55MHz.ms"
     for m, s in zip(ms, gsiv.load_archive(out)):
         ref = load_samples(str(m))
         for k in ("u", "v", "w", "nw", "I", "V", "R", "freqs"):
@@ -417,8 +423,8 @@ def test_worker_archive_hook(tmp_path, monkeypatch):
                           env["CUDA_VISIBLE_DEVICES"]))
             self.info = dict(pid=1, n=0)
 
-        def add(self, ms):
-            calls.append(("add", str(ms)))
+        def add(self, ms, stem=None, path=None):
+            calls.append(("add", str(ms), stem, path))
             return dict(ok=True, nbytes=10, n_kept=5)
 
         def close(self):
@@ -427,7 +433,9 @@ def test_worker_archive_hook(tmp_path, monkeypatch):
     cfg = _lst_cfg(tmp_path, tmp_path / "venv" / "bin" / "ttcalx-image")
     cfg.pipeline.imaging = SimpleNamespace(gpu_python=None)
     w = wmod.Worker.__new__(wmod.Worker)
-    w.cfg, w.band, w.batch, w._lst = cfg, 55, 2, {}
+    # LST hours given (lst.lst_hours needs astropy IERS data, see test_lst_layout)
+    w.cfg, w.band, w.batch = cfg, 55, 2
+    w._lst = {f"20261031_1010{k}7_55MHz": 4 for k in range(5)}
     w._archives, w._archive_lock = {}, __import__("threading").Lock()
     w._archive_record("20261031_101007_55MHz", tmp_path / "avg.ms")
     w._archive_record("20261031_101017_55MHz", tmp_path / "avg2.ms")
@@ -438,9 +446,10 @@ def test_worker_archive_hook(tmp_path, monkeypatch):
     assert start[3] == "04h30m00s 37d12m57.057s" and start[4] == "04h"
     assert start[5] == str(REPO_SRC) and start[6] == ""
     assert [c[0] for c in calls] == ["start", "add", "add", "close"]
+    assert calls[1][1:] == (str(tmp_path / "avg.ms"), "20261031_101007_55MHz", "20261031_101007_55MHz.ms")
 
     class Failing(FakeClient):
-        def add(self, ms):
+        def add(self, ms, stem=None, path=None):
             raise hs.GSIVError("disk full")
     monkeypatch.setattr(hs, "ArchiveClient", Failing)
     with pytest.raises(hs.GSIVError):                          # hour_source=archive: the snapshot fails

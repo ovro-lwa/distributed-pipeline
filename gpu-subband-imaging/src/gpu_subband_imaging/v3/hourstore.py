@@ -655,12 +655,20 @@ def record_from_compact(c: Dict[str, Any], peel: Optional[Dict[str, Any]] = None
 
 
 def records_from_ms(ms_path: PathLike, ra: Optional[float] = None, dec: Optional[float] = None,
-                    want_v: bool = True, peel: Optional[Dict[str, Any]] = None) -> Record:
+                    want_v: bool = True, peel: Optional[Dict[str, Any]] = None, stem: Optional[str] = None,
+                    path: Optional[str] = None) -> Record:
     """Record of one (peeled) snapshot MS: msio.read_ms + samples_from_msdata(compact=True),
-    i.e. exactly what ``msio.load_samples(ms_path, ra, dec)`` computes.  Needs the imager venv."""
+    i.e. exactly what ``msio.load_samples(ms_path, ra, dec)`` computes.  Needs the imager venv.
+    stem / path: the name the snapshot has in the hour job (the worker's MS is the work-dir
+    ``<stamp>_avg.ms``; the kept MS, and so load_samples, call it ``<stamp>_<band>MHz``)."""
     from ttcalx_imager.msio import read_ms, samples_from_msdata
     ms = read_ms(str(ms_path), want_v=want_v)
-    return record_from_compact(samples_from_msdata(ms, ra, dec, want_v, compact=True), peel)
+    rec = record_from_compact(samples_from_msdata(ms, ra, dec, want_v, compact=True), peel)
+    if stem:
+        rec.meta["stem"] = str(stem)
+    if path:
+        rec.meta["path"] = str(path)
+    return rec
 
 
 def records_from_snap(snap, ra: Optional[float] = None, dec: Optional[float] = None, want_v: bool = True,
@@ -754,11 +762,13 @@ class ArchiveClient:
                 except ValueError:
                     continue
 
-    def add(self, ms_path: PathLike, peel: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def add(self, ms_path: PathLike, stem: Optional[str] = None, path: Optional[str] = None,
+            peel: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Append the record of ``ms_path``, named ``stem`` / ``path`` (see records_from_ms)."""
         with self._lock:
             if self.p.poll() is not None:
                 raise GSIVError(f"archive writer exited (rc={self.p.returncode})")
-            self.p.stdin.write(json.dumps(dict(op="add", ms=str(ms_path), peel=peel)) + "\n")
+            self.p.stdin.write(json.dumps(dict(op="add", ms=str(ms_path), stem=stem, path=path, peel=peel)) + "\n")
             self.p.stdin.flush()
             r = self._reply(self.timeout)
         if not r.get("ok"):
@@ -806,7 +816,8 @@ def _serve(a) -> int:
             if q.get("op") == "close":
                 break
             t0 = time.perf_counter()
-            rec = records_from_ms(q["ms"], ra, dec, want_v=not a.no_v, peel=q.get("peel"))
+            rec = records_from_ms(q["ms"], ra, dec, want_v=not a.no_v, peel=q.get("peel"), stem=q.get("stem"),
+                                  path=q.get("path"))
             t1 = time.perf_counter()
             if w is None:
                 w = RecordWriter(a.out, header, {k: rec.arrays[k] for k in SHARED_ARRAYS},
