@@ -34,7 +34,7 @@ def _imager_src():
 
 IMAGER_SRC = _imager_src()
 if IMAGER_SRC and IMAGER_SRC not in sys.path:
-    sys.path.append(IMAGER_SRC)
+    sys.path.insert(0, IMAGER_SRC)
 try:
     import casacore.tables  # noqa: F401
     CASACORE = True
@@ -91,7 +91,7 @@ def test_roundtrip_bitwise(tmp_path, backend):
     assert hm["format"] == "GSIV" and hm["version"] == 1 and hm["mode"] == "iv" and hm["band"] == 55
     assert [g.stem for g in got] == [r.stem for r in recs]
     for r, g in zip(recs, got):
-        assert g.meta == r.meta
+        assert {k: v for k, v in g.meta.items() if k != "written_ns"} == r.meta and g.meta["written_ns"] > 0
         assert set(g.arrays) == set(r.arrays)
         for k in r.arrays:
             assert _eq(g.arrays[k], r.arrays[k]), k
@@ -127,8 +127,15 @@ def test_torn_tail_and_resume(tmp_path):
         fh.truncate(e3["offset"] + 100)                 # crash inside record 3
     sc = hs.scan(p)
     assert len(sc.entries) == 2 and sc.torn_bytes == 100 and sc.idx_dropped == 1 and not sc.clean
-    assert [r.stem for r in hs.read_records(p)[2]] == [recs[0].stem, recs[1].stem]
-    st = hs.HourStore(p, backend="memmap")              # opening a store does not modify the file
+    with pytest.raises(hs.GSIVError, match="torn"):
+        hs.read_records(p)
+    rep = {}
+    assert [r.stem for r in hs.read_records(p, strict=False)[2]] == [recs[0].stem, recs[1].stem]
+    hs.read_blocks(p, strict=False, report=rep)
+    assert any("torn" in x for x in rep["problems"]) and any("index line" in x for x in rep["problems"])
+    with pytest.raises(hs.GSIVError, match="torn"):
+        hs.HourStore(p, backend="memmap")               # strict by default
+    st = hs.HourStore(p, backend="memmap", strict=False)   # opening a store does not modify the file
     assert len(st) == 2 and p.stat().st_size == e3["offset"] + 100
     st.append(recs[2])                                  # appending resumes: truncate + rewrite index
     st.close()
@@ -312,35 +319,205 @@ def test_archive_client_serve_end_to_end(tmp_path):
     for k in range(3):
         p = tmp_path / f"20261031_1010{k:02d}_55MHz.ms"
         _make_ms(p, seed=k); ms.append(p)
-    env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(REPO_SRC), IMAGER_SRC]), CUDA_VISIBLE_DEVICES="")
+    env = _serve_env()
     out = tmp_path / "arch" / "55MHz-x-04h-peeled-b000.gsiv"
-    hdr = hs.header_for(55, "2026-10-31", "04h", None, "Run_T", batch=0)
+    hdr = hs.header_for(55, "2026-10-31", "04h", None, "Run_T", batch=0, cal_bp="b", cal_xy="x")
     c = hs.ArchiveClient(sys.executable, out, None, hdr, env=env, timeout=120)
+    assert c.info["imager"].startswith(IMAGER_SRC)
     rs = [c.add(m) for m in ms]
     assert all(r["ok"] for r in rs) and [r["seq"] for r in rs] == [1, 2, 3]
-    assert c.add(ms[1])["skipped"] == "duplicate"
-    avg = tmp_path / "20261031_101099_55MHz_avg.ms"                # the worker's work-dir name
+    _make_ms(ms[1], seed=7)                                    # reprocessed: other data, same stem
+    r = c.add(ms[1])
+    assert r["superseded"] and r["seq"] == 4
+    avg = tmp_path / "20261031_101099_55MHz_avg.ms"            # the worker's work-dir name
     _make_ms(avg, seed=9)
     r = c.add(avg, stem="20261031_101099_55MHz", path="/keep/20261031_101099_55MHz.ms")
-    assert r["stem"] == "20261031_101099_55MHz" and r["seq"] == 4
+    assert r["stem"] == "20261031_101099_55MHz" and r["seq"] == 5 and not r["superseded"]
     with pytest.raises(hs.GSIVError):
-        c.add(tmp_path / "missing.ms")                  # an error reply; the writer keeps serving
+        c.add(tmp_path / "missing.ms")                         # an error reply; the writer keeps serving
+    assert c.alive and c.add(ms[0])["seq"] == 6
     c.close()
     c = hs.ArchiveClient(sys.executable, out, None, hdr, env=env, timeout=120)   # rerun: resumes
-    assert c.info["n"] == 4
+    assert c.info["n"] == 6
     c.close()
+    with pytest.raises(hs.GSIVError, match="cal_bp"):          # another calibration: no resume
+        hs.ArchiveClient(sys.executable, out, None, dict(hdr, cal_bp="other"), env=env, timeout=120)
     sc = hs.scan(out, verify=True)
-    assert sc.clean and sc.stems == [m.name[:-3] for m in ms] + ["20261031_101099_55MHz"]
-    assert sc.header_meta["group"] == "04h"
-    assert hs.read_records(out)[2][3].meta["path"] == "/keep/20261031_101099_55MHz.ms"
-    for m, s in zip(ms, gsiv.load_archive(out)):
+    assert sc.clean and len(sc.entries) == 6 and sc.header_meta["group"] == "04h"
+    inv = hs.archive_inventory([out], band=55)
+    assert inv["stems"] == sorted([m.name[:-3] for m in ms] + ["20261031_101099_55MHz"]) and not inv["problems"]
+    snaps = {s["stem"]: s for s in gsiv.load_archive(out, band=55)}
+    assert snaps["20261031_101099_55MHz"]["path"] == "/keep/20261031_101099_55MHz.ms"
+    for m in ms:                                                # the newest record of each stem
         ref = load_samples(str(m))
         for k in ("u", "v", "w", "nw", "I", "V", "R", "freqs"):
-            assert _eq(s[k], ref[k]), k
+            assert _eq(snaps[m.name[:-3]][k], ref[k]), k
+    assert not Path(f"{out}.lock").exists()
+
+
+def _serve_env(**kw):
+    return dict(os.environ, PYTHONPATH=os.pathsep.join([str(REPO_SRC), IMAGER_SRC]), CUDA_VISIBLE_DEVICES="", **kw)
+
+
+@needs_ms
+def test_archive_client_timeout_kills_and_restarts(tmp_path):
+    ms = []
+    for k in range(3):
+        p = tmp_path / f"20261031_1010{k:02d}_55MHz.ms"
+        _make_ms(p, seed=k); ms.append(p)
+    out = tmp_path / "a.gsiv"
+    hdr = hs.header_for(55, "2026-10-31", "04h", None, "Run_T")
+    c = hs.ArchiveClient(sys.executable, out, None, hdr, env=_serve_env(GSIV_SERVE_TEST_SLEEP="2:30"), timeout=3)
+    assert c.add(ms[0])["seq"] == 1
+    with pytest.raises(hs.GSIVError, match="writer killed"):
+        c.add(ms[1])                                            # no reply in time: the child is killed
+    assert not c.alive and c.p.poll() is not None
+    with pytest.raises(hs.GSIVError, match="not running"):
+        c.add(ms[2])                                            # never a stale reply for another request
+    c.close()
+    c = hs.ArchiveClient(sys.executable, out, None, hdr, env=_serve_env(), timeout=60)   # restart: resumes
+    assert c.info["n"] == 1
+    assert c.add(ms[1])["seq"] == 2 and c.add(ms[2])["seq"] == 3
+    c.close()
+    assert hs.scan(out, verify=True).stems == [m.name[:-3] for m in ms]
+
+
+def test_archive_client_matches_replies_to_requests(tmp_path):
+    fake = tmp_path / "fake_serve.py"
+    fake.write_text("""import json, sys
+out = sys.stdout
+out.write(json.dumps(dict(id=0, ok=True, n=0, pid=1)) + "\\n"); out.flush()
+for line in sys.stdin:
+    q = json.loads(line)
+    if q.get("op") == "close":
+        break
+    out.write(json.dumps(dict(id=q["id"] + 1000, ok=False, error="stale")) + "\\n")   # not ours
+    out.write("garbage\\n")
+    out.write(json.dumps(dict(id=q["id"], ok=True, stem=q["ms"], seq=q["id"])) + "\\n"); out.flush()
+""")
+    c = hs.ArchiveClient("x", tmp_path / "a.gsiv", None, {}, cmd=[sys.executable, str(fake)], timeout=10)
+    assert [c.add(f"m{k}")["stem"] for k in range(3)] == ["m0", "m1", "m2"]
+    c.close()
+
+
+def _fake_imager_pkg(tmp_path):
+    d = tmp_path / "old_imager" / "ttcalx_imager"
+    d.mkdir(parents=True)
+    (d / "__init__.py").write_text("")
+    (d / "msio.py").write_text("def load_samples(*a): pass\n")       # the production imager: no gsiv
+    return str(d.parent)
+
+
+def test_probe_and_serve_fail_fast_without_gsiv(tmp_path):
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(REPO_SRC), _fake_imager_pkg(tmp_path)]))
+    with pytest.raises(hs.GSIVError, match="no usable ttcalx_imager.gsiv"):
+        hs.probe_imager(sys.executable, env)
+    with pytest.raises(hs.GSIVError, match="did not start.*gsiv"):
+        hs.ArchiveClient(sys.executable, tmp_path / "a.gsiv", None, {}, env=env, timeout=30)
+    if IMAGER_SRC:
+        assert hs.probe_imager(sys.executable, _serve_env()).startswith(IMAGER_SRC)
+
+
+def test_worker_fails_fast_at_batch_start_without_gsiv(tmp_path):
+    from gpu_subband_imaging import worker as wmod
+    cfg = _lst_cfg(tmp_path, tmp_path / "venv" / "bin" / "ttcalx-image")
+    cfg.pipeline.imaging = SimpleNamespace(gpu_python=sys.executable)
+    cfg.pipeline.hour_imaging = HourImagingParams(env={"PYTHONPATH": _fake_imager_pkg(tmp_path)})
+    w = _bare_worker(wmod, cfg)
+    with pytest.raises(RuntimeError, match="no usable ttcalx_imager.gsiv"):
+        w.run_batch(["/x/20261031_101007_55MHz.ms.tar"])
+
+
+def test_writer_lock(tmp_path):
+    p = tmp_path / "x.gsiv"
+    r, _ = _rec()
+    w = hs.RecordWriter(p, dict(mode="iv"))
+    with pytest.raises(hs.GSIVError, match="being written by pid"):
+        hs.RecordWriter(p, dict(mode="iv"))
+    w.close()
+    assert not Path(f"{p}.lock").exists()
+    Path(f"{p}.lock").write_text(json.dumps(dict(pid=2 ** 22 + 12345, host=os.uname().nodename, t=0)))
+    w = hs.RecordWriter(p, dict(mode="iv"))                     # a dead writer's lock is taken over
+    w.append(r.meta, r.arrays)
+    w.close()
+    Path(f"{p}.lock").write_text(json.dumps(dict(pid=1, host="elsewhere", t=0)))
+    with pytest.raises(hs.GSIVError, match="elsewhere"):
+        hs.RecordWriter(p, dict(mode="iv"))
+    os.utime(f"{p}.lock", (0, 0))                               # untouched for long: stale
+    hs.RecordWriter(p, dict(mode="iv")).close()
+
+
+def test_decode_bounds_checked_without_crc(tmp_path):
+    r, _ = _rec()
+    hdr, pieces, nbytes, _ = hs.encode_block(hs.MAGIC_REC, 1, r.meta, r.arrays)
+    blk = bytearray(hdr + b"".join(bytes(x) for x in pieces))
+    meta_len = hs.decode_header(bytes(blk[:64]))["meta_len"]
+    js = bytes(blk[64:64 + meta_len])
+    assert b'"offset":0,' in js
+    blk[64:64 + meta_len] = js.replace(b'"offset":0,', b'"offset":9,', 1)     # same length, misplaced
+    with pytest.raises(hs.GSIVError, match="outside"):
+        hs.decode_block(bytes(blk), 0)
+    with pytest.raises(hs.GSIVError, match="buffer"):
+        hs.decode_block(bytes(blk[:nbytes // 2]), 0, hs.decode_header(bytes(blk[:64])))
+
+
+def test_newest_record_wins_within_and_across_files(tmp_path):
+    a, b = tmp_path / "b000.gsiv", tmp_path / "b001.gsiv"
+    r_old, _ = _rec(seed=1, stem="S1")
+    r_new, _ = _rec(seed=2, stem="S1")
+    r_mid, _ = _rec(seed=3, stem="S1")
+    wb = hs.RecordWriter(b, dict(mode="iv"))
+    wb.append(r_old.meta, r_old.arrays)                         # oldest, in the later-named file
+    wb.close()
+    wa = hs.RecordWriter(a, dict(mode="iv"))
+    wa.append(r_mid.meta, r_mid.arrays)
+    wa.append(r_new.meta, r_new.arrays)                         # newest: second record of a
+    wa.close()
+    for files in ([a, b], [b, a]):
+        inv = hs.archive_inventory(files)
+        assert inv["stems"] == ["S1"] and inv["files"]["S1"] == str(a) and len(inv["superseded"]) == 2
+    if IMAGER_SRC:
+        from ttcalx_imager import gsiv
+        for spec in (f"{a},{b}", f"{b},{a}"):
+            (s,) = gsiv.load_archive(spec)
+            assert _eq(s["I"], r_new.arrays["I"]) and s.source == str(a)
+
+
+def test_band_and_freqs_checked(tmp_path):
+    p = tmp_path / "x.gsiv"
+    r55, _ = _rec(seed=0)
+    w = hs.RecordWriter(p, dict(mode="iv", band=82), {k: r55.arrays[k] for k in hs.SHARED_ARRAYS + hs.CHECK_ARRAYS})
+    w.append(r55.meta, r55.arrays)
+    other = dict(r55.arrays, freqs=r55.arrays["freqs"] + 1e6)   # another band's channels
+    with pytest.raises(hs.GSIVError, match="another band"):
+        w.append(r55.meta, other)
+    w.close()
+    with pytest.raises(hs.GSIVError, match="band"):
+        hs.RecordWriter(p, dict(mode="iv", band=55))
+    with pytest.raises(hs.GSIVError, match="another band"):
+        hs.RecordWriter(p, dict(mode="iv", band=82), dict(freqs=other["freqs"]))
+    assert any("band 82 != 55" in x for x in hs.archive_inventory([p], band=55)["problems"])
+    # a structurally valid record of another band written past the writer: refused on load
+    sc = hs.scan(p)
+    hdr, pieces, nbytes, crc = hs.encode_block(hs.MAGIC_REC, 2, dict(r55.meta, stem="X"), other)
+    with open(p, "ab") as fh:
+        fh.write(hdr); [fh.write(x) for x in pieces]
+    with open(hs.idx_path(p), "a") as fh:
+        fh.write(json.dumps(hs._entry(dict(r55.meta, stem="X"), other, 2, sc.end, nbytes, crc)) + "\n")
+    assert hs.scan(p).clean
+    with pytest.raises(hs.GSIVError, match="another band"):
+        hs.read_records(p)
+    if IMAGER_SRC:
+        from ttcalx_imager import gsiv
+        with pytest.raises(gsiv.GSIVError, match="another band"):
+            gsiv.load_archive(p)
+        rep = {}
+        assert [s["stem"] for s in gsiv.load_archive(p, strict=False, report=rep)] == [r55.stem]
+        assert rep["problems"]
 
 
 # ----------------------------------------------------------------------------- config / worker / hour job
-def test_v3_archive_config_validation():
+def test_v3_archive_config_validation(tmp_path, monkeypatch):
     assert v3_params(SimpleNamespace()) == V3Params()
     with pytest.raises(ConfigError, match="archive_root"):
         V3Params(archive="iv")
@@ -351,6 +528,8 @@ def test_v3_archive_config_validation():
     with pytest.raises(ConfigError, match="write_kept_ms"):
         V3Params(write_kept_ms=False)
     V3Params(archive="iv", archive_root="/x", hour_source="archive", write_kept_ms=False)
+    monkeypatch.chdir(tmp_path)
+    assert V3Params(archive="iv", archive_root="rel/arch").archive_root == str(tmp_path / "rel" / "arch")
 
 
 def test_archive_hour_source_needs_lst_layout(tmp_path):
@@ -363,10 +542,11 @@ def test_archive_hour_source_needs_lst_layout(tmp_path):
     replace(cfg.pipeline, layout="lst", run_label="Run_T", v3=v)
 
 
-def _lst_cfg(tmp_path, ttcalx_image, **v3):
+def _lst_cfg(tmp_path, ttcalx_image, keep=False, **v3):
     v = V3Params(archive="iv", archive_root=str(tmp_path / "arch"), hour_source="archive", **v3)
     pl = SimpleNamespace(date="2026-10-31", output_root=str(tmp_path / "out"), layout="lst", run_label="Run_T",
-                         keep_ms_root=None, keep_ms_local=None, v3=v, sun_cut=True, snapshot_phase_centre="lst",
+                         keep_ms_root=str(tmp_path / "keep") if keep else None, keep_ms_local=None, v3=v,
+                         sun_cut=True, snapshot_phase_centre="lst",
                          hour_imaging=HourImagingParams(ttcalx_image=str(ttcalx_image), nproc=2, delete_kept_ms=True),
                          movie=SimpleNamespace(enabled=False), cal=SimpleNamespace(bp="b", xy="x", sources="s",
                                                                                    rfi_sources=None),
@@ -375,34 +555,88 @@ def _lst_cfg(tmp_path, ttcalx_image, **v3):
     return SimpleNamespace(pipeline=pl, cluster=SimpleNamespace(work_root=str(tmp_path / "work")))
 
 
+def _bare_worker(wmod, cfg, batch=2):
+    w = wmod.Worker.__new__(wmod.Worker)
+    # LST hours given (lst.lst_hours needs astropy IERS data, see test_lst_layout)
+    w.cfg, w.band, w.batch = cfg, 55, batch
+    w._lst = {f"20261031_1010{k}7_55MHz": 4 for k in range(9)}
+    w._archives, w._archive_lock, w._archive_failed = {}, __import__("threading").Lock(), False
+    w._qa, w._gpu_imager = [], None
+    w.work = Path(cfg.cluster.work_root) / "b55_2"
+    w.geom = None
+    return w
+
+
 def test_archive_paths(tmp_path):
     cfg = _lst_cfg(tmp_path, "/v/ttcalx-image")
     p = hs.archive_path(cfg, 55, "04h", 3)
     assert p == tmp_path / "arch" / "55MHz" / "2026-10-31" / "Run_T" / "04h" / "55MHz-2026-10-31-04h-peeled-b003.gsiv"
     assert hs.archive_files(cfg, 55, "04h") == []
+    assert hs.expected_path(p).name == "55MHz-2026-10-31-04h-peeled-b003.expected.jsonl"
+
+
+# --- the archive hour job: verified archive, fallback to the kept MSes, never a reduced set
+FAKE_IMAGER = """#!{py}
+import json, os, sys
+sys.path.insert(0, {src!r})
+from gpu_subband_imaging.v3 import hourstore as hs
+a = sys.argv
+if "--help" in a:
+    print("usage: ... --archive ARCHIVE ...")
+    sys.exit(0)
+json.dump(a, open({log!r}, "a")); open({log!r}, "a").write("\\n")
+out = a[a.index("--out") + 1]
+if "--archive" in a:            # what ttcalx_imager.gsiv.load_archive does: strict, newest per stem
+    files = [l.strip() for l in open(a[a.index("--archive") + 1][1:]) if l.strip()]
+    try:
+        per = [(f, hs.read_blocks(f)[2]) for f in files]
+    except hs.GSIVError as e:
+        print("GSIVError", e); sys.exit(1)
+    stems = sorted(hs.newest(per)[0])
+else:
+    stems = sorted(os.path.basename(l.strip())[:-3] for l in open(a[2][1:]) if l.strip())
+stems = stems[:int(os.environ.get("FAKE_LOAD_ONLY", len(stems)))]
+open(out + "-I-Deep-Taper-Robust-0-image.fits", "w").write("x")
+json.dump(dict(timing=dict(TOTAL=1.0), n_loaded=len(stems), rejected=[], phase_centre=[1, 2], products={{}},
+               qa=[dict(stem=s) for s in stems]), open(out + "-summary.json", "w"))
+"""
+
+
+def _hour_setup(tmp_path, monkeypatch, n=8, n_records=None, kept=True, expected=True, archive=True, env=None):
+    log = tmp_path / "imager_calls.jsonl"
+    fake = tmp_path / "fake-ttcalx-image"
+    fake.write_text(FAKE_IMAGER.format(py=sys.executable, src=str(REPO_SRC), log=str(log)))
+    fake.chmod(0o755)
+    cfg = _lst_cfg(tmp_path, fake, keep=True)
+    if env:
+        cfg.pipeline.hour_imaging = HourImagingParams(ttcalx_image=str(fake), nproc=2, delete_kept_ms=True, env=env)
+    monkeypatch.setattr("gpu_subband_imaging.metadata.software_versions", lambda cfg: {})
+    stems = [f"20261031_10{10 + k:02d}07_55MHz" for k in range(n)]      # valid times for the product names
+    f = hs.archive_path(cfg, 55, "04h", 0)
+    if archive:
+        r0, _ = _rec(seed=0)
+        w = hs.RecordWriter(f, dict(mode="iv", band=55, phase_centre="04h30m00s 37d12m57.057s"),
+                            {k: r0.arrays[k] for k in hs.SHARED_ARRAYS + hs.CHECK_ARRAYS})
+        for k, s in enumerate(stems[::-1][:n if n_records is None else n_records]):
+            r, _ = _rec(seed=k, stem=s)
+            w.append(r.meta, r.arrays)
+        w.close()
+    if expected:
+        for s in stems:
+            hs.add_expected(f, s, batch=0)
+    kd = Path(cfg.pipeline.keep_ms_root) / "55MHz" / "2026-10-31" / "04h"
+    if kept:
+        for s in stems:
+            (kd / f"{s}.ms").mkdir(parents=True)
+    return cfg, stems, f, kd, log
+
+
+def _calls(log):
+    return [json.loads(l) for l in log.read_text().splitlines()] if log.exists() else []
 
 
 def test_run_band_archive_command(tmp_path, monkeypatch):
-    fake = tmp_path / "fake-ttcalx-image"
-    fake.write_text(f"""#!{sys.executable}
-import json, sys
-a = sys.argv
-json.dump(a, open({str(tmp_path / 'argv.json')!r}, "w"))
-out = a[a.index("--out") + 1]
-open(out + "-I-Deep-Taper-Robust-0-image.fits", "w").write("x")
-json.dump(dict(timing=dict(TOTAL=1.0), n_loaded=3, rejected=[1], phase_centre=[1, 2], products={{}}),
-          open(out + "-summary.json", "w"))
-""")
-    fake.chmod(0o755)
-    cfg = _lst_cfg(tmp_path, fake)
-    monkeypatch.setattr("gpu_subband_imaging.metadata.software_versions", lambda cfg: {})
-    stems = [f"20261031_1010{k}7_55MHz" for k in range(3)]
-    f = hs.archive_path(cfg, 55, "04h", 0)
-    w = hs.RecordWriter(f, dict(mode="iv"))
-    for k, s in enumerate(stems[::-1]):                       # archive order != time order
-        r, _ = _rec(seed=k, stem=s)
-        w.append(r.meta, r.arrays)
-    w.close()
+    cfg, stems, f, kd, log = _hour_setup(tmp_path, monkeypatch, n=3, kept=False)
     bdir = hour_lst._band_dir(cfg, 55, 4)
     st = bdir / "QA" / ".snapshot_stats"
     st.mkdir(parents=True)
@@ -411,60 +645,190 @@ json.dump(dict(timing=dict(TOTAL=1.0), n_loaded=3, rejected=[1], phase_centre=[1
     rows[-1]["ts"] = stems[1][:15]                            # the outlier is the middle archived stamp
     (st / "b0.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
     rec = hour_lst.run_band(cfg, 55, "04h", gpu=0)
-    argv = json.load(open(tmp_path / "argv.json"))
+    (argv,) = _calls(log)
     assert argv[1] == "hour" and argv[2] == "--archive" and argv[3].startswith("@")
     assert "--lst-hour" in argv and argv[argv.index("--lst-hour") + 1] == "4" and "--exclude" not in argv
     xs = argv[argv.index("--exclude-stems") + 1]
-    assert xs.startswith("@") and rec["n_records"] == 3 and rec["archive"] == [str(f)]
+    assert xs.startswith("@") and Path(xs[1:]).name == "exclude-stems.txt"
+    assert rec["n_records"] == 3 and rec["archive"] == [str(f)] and rec["hour_source"] == "archive"
     assert rec["status"] == "ok" and rec["n_ms"] == 0
+    excluded = json.loads((bdir / "QA" / "55MHz-hour-timing.json").read_text())["qa"]["excluded_from_hour"]
+    assert excluded == 1
     prov = json.loads((bdir / "provenance.json").read_text())
-    assert prov["v3"]["hour_source"] == "archive" and prov["v3"]["files"][0]["path"] == str(f)
+    assert prov["v3"]["used"] == "archive" and prov["v3"]["files"][0]["path"] == str(f)
     assert list((bdir / "I" / "deep").glob("55MHz-I-Deep-Taper-Robust-0-image-*.fits"))
 
 
-def test_worker_archive_hook(tmp_path, monkeypatch):
-    """_image_archive appends the record before the FITS move; kept MSes follow write_kept_ms."""
+def test_run_band_archive_excludes_the_rejected_stem(tmp_path, monkeypatch):
+    """The stem written to --exclude-stems is the QA-rejected one (the work dir is removed after
+    the job, so the fake imager records the file's content)."""
+    cfg, stems, f, kd, log = _hour_setup(tmp_path, monkeypatch, n=3, kept=False)
+    seen = tmp_path / "xs.txt"
+    fake = Path(cfg.pipeline.hour_imaging.ttcalx_image)
+    fake.write_text(fake.read_text().replace(
+        'out = a[a.index("--out") + 1]',
+        f'out = a[a.index("--out") + 1]\nif "--exclude-stems" in a: open({str(seen)!r}, "w").write('
+        f'open(a[a.index("--exclude-stems") + 1][1:]).read())'))
+    bdir = hour_lst._band_dir(cfg, 55, 4)
+    st = bdir / "QA" / ".snapshot_stats"
+    st.mkdir(parents=True)
+    rows = [dict(ts=f"20261031_1{k:05d}", rms=1.0, peak=1.0, file="x") for k in range(11)]
+    rows.append(dict(ts=stems[1][:15], rms=50.0, peak=1.0, file="x"))
+    (st / "b0.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    hour_lst.run_band(cfg, 55, "04h", gpu=0)
+    assert seen.read_text().split() == [stems[1]]
+
+
+def test_run_band_clean_archive_deletes_only_imaged_kept_ms(tmp_path, monkeypatch):
+    cfg, stems, f, kd, log = _hour_setup(tmp_path, monkeypatch)
+    (kd.parent / "05h").mkdir()
+    rec = hour_lst.run_band(cfg, 55, "04h", gpu=0)
+    assert rec["hour_source"] == "archive" and rec["status"] == "ok" and _calls(log)[0][2] == "--archive"
+    assert not kd.exists() and (kd.parent / "05h").exists()
+
+
+def test_run_band_nothing_at_all_is_no_data(tmp_path, monkeypatch):
+    cfg, stems, f, kd, log = _hour_setup(tmp_path, monkeypatch, kept=False, expected=False, archive=False)
+    rec = hour_lst.run_band(cfg, 55, "04h", gpu=0)
+    assert rec["status"] == "no-data" and not _calls(log)
+
+
+@pytest.mark.parametrize("case", ["missing", "torn", "partial", "no_manifest_extra", "bitflip"])
+def test_run_band_unusable_archive_falls_back_to_kept_ms(tmp_path, monkeypatch, case):
+    kw = dict(missing=dict(archive=False), torn={}, partial=dict(n_records=4), no_manifest_extra={},
+              bitflip={})[case]
+    cfg, stems, f, kd, log = _hour_setup(tmp_path, monkeypatch, **kw)
+    if case == "bitflip":                                   # only a crc check sees it
+        e = hs.scan(f).entries[2]
+        with open(f, "r+b") as fh:
+            fh.seek(e["offset"] + e["nbytes"] - 300)
+            b = fh.read(1); fh.seek(-1, 1); fh.write(bytes([b[0] ^ 4]))
+    if case == "torn":
+        e = hs.scan(f).entries[-1]
+        with open(f, "r+b") as fh:
+            fh.truncate(e["offset"] + 100)
+    if case == "no_manifest_extra":                       # a stamp archived as FITS but not as a record
+        (kd / "20261031_105007_55MHz.ms").mkdir()
+        fits = hour_lst._band_dir(cfg, 55, 4) / "snapshots_clean"
+        fits.mkdir(parents=True)
+        (fits / "55MHz-Clean-Snapshot-20261031_105007-image.fits.fz").write_text("x")
+    rec = hour_lst.run_band(cfg, 55, "04h", gpu=0)
+    (argv,) = _calls(log)
+    assert rec["hour_source"] == "kept_ms" and rec["archive_problems"] and argv[2].startswith("@")
+    assert "--archive" not in argv and rec["status"] == "ok"
+    assert not kd.exists()                                  # all of them imaged (from the MSes)
+
+
+@pytest.mark.parametrize("case", ["missing", "torn", "partial"])
+def test_run_band_unusable_archive_without_kept_ms_fails_loudly(tmp_path, monkeypatch, case):
+    kw = dict(missing=dict(archive=False), torn={}, partial=dict(n_records=4))[case]
+    cfg, stems, f, kd, log = _hour_setup(tmp_path, monkeypatch, kept=False, **kw)
+    if case == "torn":
+        e = hs.scan(f).entries[-1]
+        with open(f, "r+b") as fh:
+            fh.truncate(e["offset"] + 100)
+    with pytest.raises(RuntimeError, match="unusable"):
+        hour_lst.run_band(cfg, 55, "04h", gpu=0)
+    assert not _calls(log)
+    t = json.loads((hour_lst._band_dir(cfg, 55, 4) / "QA" / "55MHz-hour-timing.json").read_text())
+    assert t["status"] == "failed" and t["archive_problems"]
+
+
+def test_run_band_partial_kept_ms_never_fall_back_to_a_reduced_set(tmp_path, monkeypatch):
+    cfg, stems, f, kd, log = _hour_setup(tmp_path, monkeypatch, n_records=4)
+    for s in stems[:3]:
+        os.rmdir(kd / f"{s}.ms")                            # kept MSes do not cover the expected set
+    with pytest.raises(RuntimeError, match="unusable"):
+        hour_lst.run_band(cfg, 55, "04h", gpu=0)
+    assert sorted(p.name[:-3] for p in kd.iterdir()) == stems[3:]
+
+
+def test_run_band_imager_loading_fewer_deletes_nothing(tmp_path, monkeypatch):
+    cfg, stems, f, kd, log = _hour_setup(tmp_path, monkeypatch, env={"FAKE_LOAD_ONLY": "4"})
+    with pytest.raises(RuntimeError, match="rc=-3"):
+        hour_lst.run_band(cfg, 55, "04h", gpu=0)
+    assert sorted(p.name[:-3] for p in kd.iterdir()) == stems
+
+
+def test_run_band_v2_kept_ms_deletes_only_imaged(tmp_path, monkeypatch):
+    cfg, stems, f, kd, log = _hour_setup(tmp_path, monkeypatch, archive=False, expected=False,
+                                         env={"FAKE_LOAD_ONLY": "5"})
+    cfg.pipeline.v3 = V3Params()                               # v2: hour from the kept MSes
+    with pytest.raises(RuntimeError, match="rc=-3"):
+        hour_lst.run_band(cfg, 55, "04h", gpu=0)
+    assert len(list(kd.iterdir())) == 8
+    cfg.pipeline.hour_imaging = HourImagingParams(ttcalx_image=cfg.pipeline.hour_imaging.ttcalx_image,
+                                                  nproc=2, delete_kept_ms=True)
+    rec = hour_lst.run_band(cfg, 55, "04h", gpu=0)
+    assert rec["status"] == "ok" and not kd.exists() and _calls(log)[-1][2].startswith("@")
+
+
+def test_worker_image_archive_order_and_record(tmp_path, monkeypatch):
+    """_image_archive: FITS archived -> expected list -> keep_ms -> record of the kept MS."""
     from gpu_subband_imaging import worker as wmod
     calls = []
+    cfg = _lst_cfg(tmp_path, tmp_path / "venv" / "bin" / "ttcalx-image", keep=True)
+    cfg.pipeline.imaging = SimpleNamespace(gpu_python=None)
+    cfg.pipeline.snapshot_phase_centre = "zenith"
+    cfg.pipeline.movie = SimpleNamespace(enabled=False, fixed_vmax=20.0)
+    cfg.pipeline.keep_ms_local_min_free_gb = 0
+    w = _bare_worker(wmod, cfg)
+    stamp = "20261031_101007_55MHz"
 
     class FakeClient:
+        alive = True
+
         def __init__(self, python, out, pc, hdr, env=None, **kw):
-            calls.append(("start", python, str(out), pc, hdr["group"], env["PYTHONPATH"].split(os.pathsep)[0],
-                          env["CUDA_VISIBLE_DEVICES"]))
+            calls.append(("start", python, str(out), pc, hdr["group"], hdr["cal_bp"],
+                          env["PYTHONPATH"].split(os.pathsep)[0], env["CUDA_VISIBLE_DEVICES"]))
             self.info = dict(pid=1, n=0)
 
         def add(self, ms, stem=None, path=None):
-            calls.append(("add", str(ms), stem, path))
+            fits = w._fits_path_for_stamp(stamp)
+            exp = hs.expected_stems(cfg, 55, "04h") or set()
+            calls.append(("add", str(ms), stem, path, fits.exists(), Path(ms).is_dir(), stem in exp))
             return dict(ok=True, nbytes=10, n_kept=5)
 
         def close(self):
             calls.append(("close",))
+
+    class Imager:
+        def image(self, src, prefix, geom, imaging, timings=None):
+            out = [Path(f"{prefix}-I-image.fits"), Path(f"{prefix}-V-image.fits")]
+            for p in out:
+                p.write_text("fits")
+            return out
     monkeypatch.setattr(hs, "ArchiveClient", FakeClient)
-    cfg = _lst_cfg(tmp_path, tmp_path / "venv" / "bin" / "ttcalx-image")
-    cfg.pipeline.imaging = SimpleNamespace(gpu_python=None)
-    w = wmod.Worker.__new__(wmod.Worker)
-    # LST hours given (lst.lst_hours needs astropy IERS data, see test_lst_layout)
-    w.cfg, w.band, w.batch = cfg, 55, 2
-    w._lst = {f"20261031_1010{k}7_55MHz": 4 for k in range(5)}
-    w._archives, w._archive_lock = {}, __import__("threading").Lock()
-    w._archive_record("20261031_101007_55MHz", tmp_path / "avg.ms")
-    w._archive_record("20261031_101017_55MHz", tmp_path / "avg2.ms")
+    monkeypatch.setattr(wmod.image, "v_stats", lambda f: dict(rms=1.0, peak=2.0))
+
+    def fpack(f):
+        fz = Path(f"{f}.fz"); f.rename(fz); return fz
+    monkeypatch.setattr(wmod.compress, "fpack", fpack)
+    w._gpu_imager = Imager()
+    avg = w.work / stamp / f"{stamp}_avg.ms"
+    avg.mkdir(parents=True)
+    (avg / "table.dat").write_text("x")
+    w._image_archive(stamp, avg)
     w._close_archives()
-    start = calls[0]
+    kept = w.kept_ms_path(stamp)
+    assert kept.is_dir() and not avg.exists()
+    start, add = calls[0], calls[1]
     assert start[1] == str(tmp_path / "venv" / "bin" / "python")
     assert start[2].endswith("55MHz-2026-10-31-04h-peeled-b002.gsiv")
-    assert start[3] == "04h30m00s 37d12m57.057s" and start[4] == "04h"
-    assert start[5] == str(REPO_SRC) and start[6] == ""
-    assert [c[0] for c in calls] == ["start", "add", "add", "close"]
-    assert calls[1][1:] == (str(tmp_path / "avg.ms"), "20261031_101007_55MHz", "20261031_101007_55MHz.ms")
+    assert start[3:6] == ("04h30m00s 37d12m57.057s", "04h", "b") and start[6] == str(REPO_SRC) and start[7] == ""
+    # the record is made from the kept MS, after the FITS are in place and the stem is listed
+    assert add[1:] == (str(kept), stamp, str(kept), True, True, True)
+    assert calls[-1] == ("close",)
 
     class Failing(FakeClient):
         def add(self, ms, stem=None, path=None):
             raise hs.GSIVError("disk full")
     monkeypatch.setattr(hs, "ArchiveClient", Failing)
+    s2 = "20261031_101017_55MHz"
     with pytest.raises(hs.GSIVError):                          # hour_source=archive: the snapshot fails
-        w._archive_record("20261031_101027_55MHz", tmp_path / "avg3.ms")
-    w._close_archives()
+        w._archive_record(s2, tmp_path / "avg3.ms")
+    assert not w._archives                                     # the failed writer is dropped
     w.cfg.pipeline.v3 = V3Params(archive="iv", archive_root=str(tmp_path / "arch"))
-    w._archive_record("20261031_101037_55MHz", tmp_path / "avg4.ms")   # kept_ms hour source: only logged
-    w._close_archives()
+    w._archive_record("20261031_101027_55MHz", tmp_path / "avg4.ms")   # kept_ms hour source: logged
+    w._archive_record("20261031_101037_55MHz", tmp_path / "avg5.ms")
+    assert w._archive_failed and not w._archives
