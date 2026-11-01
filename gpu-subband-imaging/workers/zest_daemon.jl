@@ -47,6 +47,7 @@
 # "id=<id>" right after the path in FAILED; RESET_WARM answers "RESET_WARM_OK id=<id>".
 push!(LOAD_PATH, joinpath(ENV["TTCALX_DIR"], "src"))
 include(joinpath(ENV["TTCALX_DIR"], "src", "TTCalX.jl"))
+include(joinpath(@__DIR__, "zest_smooth.jl"))
 using .TTCalX
 using CUDA
 using Printf
@@ -103,8 +104,9 @@ for (k, v) in (("ZEST_SMOOTH_FLUX", smooth_flux), ("ZEST_SMOOTH_BELOW_MHZ", smoo
                ("ZEST_SMOOTH_EXEMPT_BELOW_EL_DEG", smooth_exempt_below_el))
     v >= 0 || (println("CONFIG_ERROR $k must be >= 0, got $v"); flush(stdout); exit(2))
 end
-smooth_exempt_below_el == 0 ||
-    any(m -> :smooth_exempt_names in Base.kwarg_decl(m), methods(TTCalX.zest_sky_rfi!)) ||
+!(sky_rfi && smooth_flux > 0 && smooth_exempt_below_el > 0) ||
+    (isdefined(TTCalX, :zest_sky_rfi!) &&
+     any(m -> :smooth_exempt_names in Base.kwarg_decl(m), methods(TTCalX.zest_sky_rfi!))) ||
     (println("CONFIG_ERROR ZEST_SMOOTH_EXEMPT_BELOW_EL_DEG needs TTCalX zest_sky_rfi!(...; smooth_exempt_names)");
      flush(stdout); exit(2))
 restore_path = get(ENV, "ZEST_RESTORE", "")
@@ -113,7 +115,8 @@ restore_offset_deg = envf("ZEST_RESTORE_OFFSET_DEG", 0.0)
 precision = Symbol(envs("ZEST_PRECISION", "double", ("double", "mixed")))
 warm_start = envb("ZEST_WARM_START", false)
 test_io = Symbol(envs("ZEST_TEST_IO", "", ("", "identity", "perturb")))
-sky_rfi && !isdefined(TTCalX, :zest_sky_rfi!) && error("ZEST_ENGINE=sky_rfi needs TTCalX with zest_sky_rfi!")
+sky_rfi && !isdefined(TTCalX, :zest_sky_rfi!) &&
+    (println("CONFIG_ERROR ZEST_ENGINE=sky_rfi needs TTCalX with zest_sky_rfi!"); flush(stdout); exit(2))
 # zest_sky_rfi! runs on host arrays as well (TTCalX host backend), so device=cpu is allowed
 sky_rfi && !(fast_io && exact_model && geometric && residual_guard && flag_model) &&
     error("ZEST_ENGINE=sky_rfi is the exact-model, geometric-UVW, guarded zest: " *
@@ -318,10 +321,10 @@ println(
 restore_sources = isempty(restore_path) ? GPUSource[] : read_gpu_sources(restore_path)
 any(s -> get_name(s) in ("Sun", "Moon", "Jupiter"), restore_sources) &&
     error("ZEST_RESTORE: a source named Sun/Moon/Jupiter is read as a placeholder; rename it")
-sky_rfi && println(@sprintf("SKY_RFI smooth_flux=%g restore=%d below_mhz=%g offset_deg=%g precision=%s warm_start=%s peeliter=%d smooth_below_mhz=%g smooth_exempt_flux=%g rfi_smooth_flux=%g",
+sky_rfi && println(@sprintf("SKY_RFI smooth_flux=%g restore=%d below_mhz=%g offset_deg=%g precision=%s warm_start=%s peeliter=%d smooth_below_mhz=%g smooth_exempt_flux=%g rfi_smooth_flux=%g smooth_exempt_below_el_deg=%g",
                            smooth_flux, length(restore_sources), restore_below_mhz, restore_offset_deg,
                            precision, warm_start, piter, smooth_below_mhz, smooth_exempt_flux,
-                           rfi_smooth_flux))
+                           rfi_smooth_flux, smooth_exempt_below_el))
 flush(stdout)
 
 # zest_sky_rfi! for one snapshot; returns the gains for a warm start of the next one
@@ -333,14 +336,14 @@ function run_sky_rfi!(vis, meta, mjd, initial_gains)
         gated = centre_mhz >= smooth_below_mhz
         gated && (sflux = rflux = 0.0)
         @printf("PEEL_SMOOTH_GATE centre_mhz=%.3f below_mhz=%g smoothing=%s\n", centre_mhz,
-                smooth_below_mhz, gated ? "off" : "on")
+                smooth_below_mhz, (sflux == 0 && rflux == 0) ? "off" : "on")
     end
     elev = Dict(get_name(s) => elevation_deg(s, meta) for s in vcat(sources, rfi_sources))
     rfi_names = Set(get_name.(rfi_sources))
     exempt_kw = (;)
     if smooth_exempt_below_el > 0 && sflux > 0
-        exempt = [get_name(s) for s in sources
-                  if min_elevation <= elev[get_name(s)] < smooth_exempt_below_el]
+        exempt = smooth_exempt_by_elevation(get_name.(sources), [elev[get_name(s)] for s in sources],
+                                            min_elevation, smooth_exempt_below_el)
         exempt_kw = (; smooth_exempt_names=exempt)
         @printf("PEEL_SMOOTH_EXEMPT below_el_deg=%g names=\"%s\"\n", smooth_exempt_below_el, join(exempt, ","))
     end
