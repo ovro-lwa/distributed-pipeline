@@ -664,7 +664,6 @@ class Worker:
 
     def _image_archive(self, stamp: str, avg: Path) -> None:
         """Image, render frame, compress+archive FITS for one peeled MS."""
-        vmax = self.cfg.pipeline.movie.fixed_vmax
         t0 = time.perf_counter()
         prefix = self.work / stamp / f"img_{stamp}"
         steps: dict = {}
@@ -690,7 +689,24 @@ class Worker:
                      self.band, self.batch, stamp, name, dt)
         log.info("timing %sMHz batch%d stamp=%s phase=image elapsed=%.2f s",
                  self.band, self.batch, stamp, time.perf_counter() - t0)
+        self._post_image(stamp, fits_files)
+        archive = v3_params(self.cfg.pipeline).archive != "none"
+        if archive:            # the snapshot is archived: the hour job must find its record
+            self._archive_expected(stamp)
+        kept = None
+        if (self.cfg.pipeline.keep_ms_root or getattr(self.cfg.pipeline, "keep_ms_local", None)) and \
+                v3_params(self.cfg.pipeline).write_kept_ms:
+            t0 = time.perf_counter()
+            kept = self.keep_ms(stamp, avg)
+            log.info("timing %sMHz batch%d stamp=%s phase=keep_ms elapsed=%.2f s dst=%s",
+                     self.band, self.batch, stamp, time.perf_counter() - t0, kept)
+        if archive:            # after the FITS and keep_ms: the archive's set is v2's kept set
+            self._archive_record(stamp, kept or avg, kept)
+        shutil.rmtree(self.work / stamp, ignore_errors=True)
 
+    def _post_image(self, stamp: str, fits_files: List[Path]) -> None:
+        """Frame, pilot QA row, fpack and archive move of one snapshot's [I, V] FITS (v2 and v3)."""
+        vmax = self.cfg.pipeline.movie.fixed_vmax
         if (self.cfg.pipeline.movie.enabled and
                 self.cfg.pipeline.movie.scale_mode == "adaptive_i"):
             t0 = time.perf_counter()
@@ -728,19 +744,6 @@ class Worker:
                      self.band, self.batch, stamp, f.name, time.perf_counter() - t0)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(fz), str(target.parent / fz.name))
-        archive = v3_params(self.cfg.pipeline).archive != "none"
-        if archive:            # the snapshot is archived: the hour job must find its record
-            self._archive_expected(stamp)
-        kept = None
-        if (self.cfg.pipeline.keep_ms_root or getattr(self.cfg.pipeline, "keep_ms_local", None)) and \
-                v3_params(self.cfg.pipeline).write_kept_ms:
-            t0 = time.perf_counter()
-            kept = self.keep_ms(stamp, avg)
-            log.info("timing %sMHz batch%d stamp=%s phase=keep_ms elapsed=%.2f s dst=%s",
-                     self.band, self.batch, stamp, time.perf_counter() - t0, kept)
-        if archive:            # after the FITS and keep_ms: the archive's set is v2's kept set
-            self._archive_record(stamp, kept or avg, kept)
-        shutil.rmtree(self.work / stamp, ignore_errors=True)
 
     def keep_root(self) -> str:
         """keep_ms_local while it has keep_ms_local_min_free_gb free, else keep_ms_root."""
@@ -781,6 +784,9 @@ class Worker:
         return dst
 
     def run_batch(self, tars: List[str]) -> None:
+        if v3_params(self.cfg.pipeline).snapshot_io == "shm":
+            from .v3 import worker_v3              # gsi v3: no MS files, hour stage in the batch
+            return worker_v3.run_batch_v3(self, tars)
         todo = [t for t in tars
                 if not self._fits_path_for_stamp(_stamp(t)).exists()]
         if not todo:
