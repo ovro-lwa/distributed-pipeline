@@ -62,6 +62,7 @@ class Worker:
         self._lst: dict = {}
         self._qa: List[dict] = []      # pilot V statistics of this batch (layout=lst)
         self._gpu_imager = None        # stages.gpu_image.SnapshotDaemon with imaging.imager=ttcalx
+        self._slots = None             # v3.peel_io=shm: v3.slots.SlotRing
 
     def _start_gpu_imager(self):
         from .stages import gpu_image
@@ -399,7 +400,7 @@ class Worker:
                         daemon = self._start_daemon()
                     try:
                         t0 = time.perf_counter()
-                        daemon.zest(avg)
+                        self._zest(daemon, stamp, avg)
                         n_zested += 1
                         log.info("timing %sMHz batch%d stamp=%s phase=zest elapsed=%.2f s",
                                  self.band, self.batch, stamp, time.perf_counter() - t0)
@@ -420,6 +421,9 @@ class Worker:
             daemon.close()
             if self._gpu_imager is not None:
                 self._gpu_imager.close()
+            if self._slots is not None:
+                self._slots.close()
+                self._slots = None
             shutil.rmtree(self.work, ignore_errors=True)
             self._write_qa_stats()
         log.info("batch %sMHz/%d: total elapsed %.2f s for %d files (%d failed)",
@@ -428,6 +432,22 @@ class Worker:
             log.warning("batch %sMHz/%d completed with %d failed file(s); continuing",
                         self.band, self.batch, n_fail)
         _require_batch_outputs(self.band, self.batch, len(todo), n_ok)
+
+    def _zest(self, daemon: ZestDaemon, stamp: str, avg: Path) -> None:
+        """Peel `avg` in place: v2 through the MS, or (v3.peel_io=shm) through a /dev/shm slot."""
+        v3 = getattr(self.cfg.pipeline, "v3", None)
+        if v3 is None or v3.peel_io != "shm":
+            daemon.zest(avg)
+            return
+        from .v3 import peel_shm, slots
+        if self._slots is None:
+            self._slots = slots.SlotRing(1)
+        steps: dict = {}
+        peel_shm.peel_ms_via_slot(daemon, avg, self._slots, timeout=v3.peel_timeout_s,
+                                  timings=steps)
+        for name, dt in steps.items():
+            log.info("timing %sMHz batch%d stamp=%s phase=%s elapsed=%.2f s",
+                     self.band, self.batch, stamp, name, dt)
 
     def _write_qa_stats(self) -> None:
         """Pilot V statistics of this batch -> QA/.snapshot_stats/<batch>.jsonl (hour step reads them)."""
