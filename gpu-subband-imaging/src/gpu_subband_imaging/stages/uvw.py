@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -63,6 +63,57 @@ def _data_columns(t) -> Sequence[str]:
     return [c for c in ("DATA", "CORRECTED_DATA", "MODEL_DATA") if c in t.colnames()]
 
 
+def fix_uvw_arrays(old: np.ndarray, a1: np.ndarray, a2: np.ndarray, tcol: np.ndarray,
+                   ant_pos: np.ndarray, ra: float, dec: float, freqs: np.ndarray,
+                   max_dw_m: float = 1.0, rephase_tol_rad: float = 1e-3,
+                   dry_run: bool = False, label: str = "snapshot"
+                   ) -> Tuple[np.ndarray, Optional[np.ndarray], UVWFixStats]:
+    """J2000 UVW for PHASE_DIR (ra, dec) at the per-row times ``tcol``.
+
+    Returns (new_uvw, phase, stats).  ``phase`` is None, or the (nrow, nchan, 1) factor
+    exp(-2 pi i dw f / c) the visibilities must be multiplied by (chgcentre rephasing);
+    it is only computed when the change in w exceeds ``rephase_tol_rad`` at the highest
+    frequency and not ``dry_run``.  Raises ValueError (``label`` names the snapshot) if
+    any |w new - stored| exceeds ``max_dw_m`` and not ``dry_run``.
+    """
+    new = np.empty_like(old)
+    times = np.unique(tcol)
+    for ts in times:
+        rows = tcol == ts
+        A = antenna_uvw(ant_pos, float(ts), ra, dec)
+        new[rows] = A[a1[rows]] - A[a2[rows]]
+    dw = new[:, 2] - old[:, 2]
+    max_dw = float(np.max(np.abs(dw))) if dw.size else 0.0
+    if max_dw > max_dw_m and not dry_run:
+        raise ValueError(f"{label}: |w new - stored| up to {max_dw:.3f} m > {max_dw_m} m; "
+                         "PHASE_DIR and stored UVW disagree, UVW left unchanged")
+    cross = a1 != a2
+    rot = rotation_about_w_deg(old[cross], new[cross]) if cross.any() else 0.0
+    rms_duv = float(np.sqrt(np.mean(np.sum((new[cross, :2] - old[cross, :2]) ** 2, 1)))) \
+        if cross.any() else 0.0
+    rephase = (not dry_run and
+               max_dw * 2 * np.pi * float(np.max(freqs)) / C_LIGHT > rephase_tol_rad)
+    phase = None
+    if rephase:
+        phase = np.exp(-2j * np.pi * dw[:, None] * freqs[None, :] / C_LIGHT)[:, :, None]
+    stats = UVWFixStats(n_times=int(times.size), rot_deg=rot, rms_duv_m=rms_duv,
+                        max_dw_m=max_dw, rephased=bool(rephase))
+    return new, phase, stats
+
+
+def phase_centre(ms: Path) -> Tuple[float, float]:
+    """(ra, dec) [rad] of the single J2000 FIELD of an MS."""
+    from casacore.tables import table
+    with table(str(Path(ms) / "FIELD"), ack=False) as f:
+        if f.nrows() != 1:
+            raise ValueError(f"{ms}: expected one FIELD row, got {f.nrows()}")
+        ref = f.getcolkeywords("PHASE_DIR").get("MEASINFO", {}).get("Ref", "J2000")
+        if ref != "J2000":
+            raise ValueError(f"{ms}: PHASE_DIR frame {ref}, expected J2000")
+        ra, dec = (float(x) for x in f.getcol("PHASE_DIR")[0, 0])
+    return ra, dec
+
+
 def fix_uvw(ms: Path, epoch: str = "centroid", max_dw_m: float = 1.0,
             rephase_tol_rad: float = 1e-3, dry_run: bool = False) -> UVWFixStats:
     """Rewrite UVW (and rephase if w changes) for the MS's own J2000 PHASE_DIR.
@@ -76,13 +127,7 @@ def fix_uvw(ms: Path, epoch: str = "centroid", max_dw_m: float = 1.0,
         raise ValueError(f"uvw epoch must be one of {EPOCHS}, got {epoch!r}")
     from casacore.tables import table
 
-    with table(str(Path(ms) / "FIELD"), ack=False) as f:
-        if f.nrows() != 1:
-            raise ValueError(f"{ms}: expected one FIELD row, got {f.nrows()}")
-        ref = f.getcolkeywords("PHASE_DIR").get("MEASINFO", {}).get("Ref", "J2000")
-        if ref != "J2000":
-            raise ValueError(f"{ms}: PHASE_DIR frame {ref}, expected J2000")
-        ra, dec = (float(x) for x in f.getcol("PHASE_DIR")[0, 0])
+    ra, dec = phase_centre(ms)
     with table(str(Path(ms) / "ANTENNA"), ack=False) as a:
         ant_pos = a.getcol("POSITION")
     with table(str(Path(ms) / "SPECTRAL_WINDOW"), ack=False) as s:
@@ -94,29 +139,13 @@ def fix_uvw(ms: Path, epoch: str = "centroid", max_dw_m: float = 1.0,
         old = t.getcol("UVW")
         a1, a2 = t.getcol("ANTENNA1"), t.getcol("ANTENNA2")
         tcol = t.getcol("TIME_CENTROID" if epoch == "centroid" else "TIME")
-        new = np.empty_like(old)
-        times = np.unique(tcol)
-        for ts in times:
-            rows = tcol == ts
-            A = antenna_uvw(ant_pos, float(ts), ra, dec)
-            new[rows] = A[a1[rows]] - A[a2[rows]]
-        dw = new[:, 2] - old[:, 2]
-        max_dw = float(np.max(np.abs(dw))) if dw.size else 0.0
-        if max_dw > max_dw_m and not dry_run:
-            raise ValueError(f"{ms}: |w new - stored| up to {max_dw:.3f} m > {max_dw_m} m; "
-                             "PHASE_DIR and stored UVW disagree, UVW left unchanged")
-        cross = a1 != a2
-        rot = rotation_about_w_deg(old[cross], new[cross]) if cross.any() else 0.0
-        rms_duv = float(np.sqrt(np.mean(np.sum((new[cross, :2] - old[cross, :2]) ** 2, 1)))) \
-            if cross.any() else 0.0
-        rephase = (not dry_run and
-                   max_dw * 2 * np.pi * float(np.max(freqs)) / C_LIGHT > rephase_tol_rad)
-        if rephase:
-            ph = np.exp(-2j * np.pi * dw[:, None] * freqs[None, :] / C_LIGHT)[:, :, None]
+        new, phase, stats = fix_uvw_arrays(old, a1, a2, tcol, ant_pos, ra, dec, freqs,
+                                           max_dw_m=max_dw_m, rephase_tol_rad=rephase_tol_rad,
+                                           dry_run=dry_run, label=str(ms))
+        if phase is not None:
             for col in _data_columns(t):
                 d = t.getcol(col)
-                t.putcol(col, (d * ph).astype(d.dtype))
+                t.putcol(col, (d * phase).astype(d.dtype))
         if not dry_run:
             t.putcol("UVW", new)
-    return UVWFixStats(n_times=int(times.size), rot_deg=rot, rms_duv_m=rms_duv,
-                       max_dw_m=max_dw, rephased=bool(rephase))
+    return stats
