@@ -111,8 +111,14 @@ def _layout(snap: SnapArrays) -> Tuple[dict, Dict[str, np.ndarray]]:
     for k in REQUIRED_META:
         if f"meta.{k}" not in arrays:
             raise ValueError(f"SnapArrays.meta[{k!r}] must be a numpy array for a slot")
-    if arrays["meta.freqs"].shape != (nchan,):
-        raise ValueError(f"meta freqs shape {arrays['meta.freqs'].shape}, expected ({nchan},)")
+    for k, ok, want in (("freqs", arrays["meta.freqs"].shape == (nchan,), f"({nchan},)"),
+                        ("phase_dir", arrays["meta.phase_dir"].shape == (2,), "(2,) [ra, dec] rad"),
+                        ("ant_pos", arrays["meta.ant_pos"].ndim == 2 and
+                         arrays["meta.ant_pos"].shape[1] == 3, "(nant, 3)")):
+        if not ok:
+            raise ValueError(f"meta {k} shape {arrays['meta.' + k].shape}, expected {want}")
+        if arrays["meta." + k].dtype != np.float64:
+            raise TypeError(f"meta {k} must be float64 (the peel reads it bit exact)")
     head = {"format": "GSISLOT1", "nrow": int(nrow), "nchan": int(nchan), "ncorr": int(ncorr),
             "stem": snap.stem, "mjd": ms_mjd(arrays["time"]), "state_offset": STATE_OFFSET,
             "meta": meta_json}

@@ -144,6 +144,18 @@ def test_validation(tmp_path):
     s.antenna1 = s.antenna1.astype(np.int64)        # value-preserving cast is fine
     slots.write_slot(tmp_path / "c", s)
     assert slots.view_slot(tmp_path / "c").antenna1.dtype == np.int32
+    s = make_snap()
+    s.meta["phase_dir"] = s.meta["phase_dir"].reshape(1, 1, 2)   # FIELD PHASE_DIR shape
+    with pytest.raises(ValueError, match="phase_dir"):
+        slots.write_slot(tmp_path / "d", s)
+    s = make_snap()
+    s.meta["ant_pos"] = s.meta["ant_pos"].T.copy()
+    with pytest.raises(ValueError, match="ant_pos"):
+        slots.write_slot(tmp_path / "e", s)
+    s = make_snap()
+    s.meta["freqs"] = s.meta["freqs"].astype(np.float32)
+    with pytest.raises(TypeError, match="freqs"):
+        slots.write_slot(tmp_path / "f", s)
     (tmp_path / "junk").write_bytes(b"x" * 100)
     with pytest.raises(ValueError):
         slots.read_header(tmp_path / "junk")
