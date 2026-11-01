@@ -193,7 +193,9 @@ def test_engine_death_restart_reopens_the_store(tmp_path):
         with pytest.raises(engine_client.EngineDied):
             c.request("image_slot", **_req(tmp_path / "s2", tmp_path / "i2", "20261031_101702_23MHz"))
         r = c.request("info")                          # restarted, store re-opened from the checkpoint
-        assert c.pid != pid and c.restarts == 1 and opened[0]["n"] == 2 and r["store"]["n"] == 2
+        # the dying request's record may or may not have reached the file (store thread vs exit)
+        assert c.pid != pid and c.restarts == 1 and opened[0]["n"] in (2, 3) and r["store"]["n"] == opened[0]["n"]
+        assert opened[0]["stems"][:2] == ["20261031_101700_23MHz", "20261031_101701_23MHz"]
     finally:
         c.close()
 
