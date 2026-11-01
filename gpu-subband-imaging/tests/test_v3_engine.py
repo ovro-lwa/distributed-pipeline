@@ -303,6 +303,30 @@ def test_hour_op_uses_the_newest_record_of_the_expected_stems(tmp_path):
 
 
 @needs_v3_imager
+@pytest.mark.parametrize("env,want", [({}, "auto"), ({"TTCALX_CACHE_RESERVE": "3"}, "3")])
+def test_hour_op_sets_the_cache_reserve_and_reports_the_fallback(tmp_path, env, want):
+    """The hour op runs the imager with TTCALX_CACHE_RESERVE=auto (the engine's own value wins), only
+    for the hour, and passes the imager's GPU OOM fallback record on."""
+    if not CASACORE:
+        pytest.skip("records without R at 05h30m need casacore measures for lazy_snaps")
+    c = _client(GSI_V3_FAKE_HOUR="cache_fallback", **env)
+    try:
+        c.request("store_open", path=None, backend="ram")
+        st = "20261031_101700_23MHz"
+        _peeled_slot(tmp_path / "s0", seed=0, stem=st)
+        c.request("image_slot", **_req(tmp_path / "s0", tmp_path / "i0", st))
+        out = tmp_path / "hw" / "23MHz"
+        argv = ["--band", "23", "--out", str(out), "--products", "I-Deep-Taper-Robust-0", "--lst-hour", "5",
+                "--qa", "none"]
+        r = c.request("hour", timeout=300, argv=argv, expected=[st])
+        s = json.loads((out.parent / "23MHz-summary.json").read_text())
+        assert s["env"] == {"TTCALX_CHUNK_CACHE": "store", "TTCALX_CACHE_RESERVE": want}
+        assert r["cache_fallback"] == [dict(name=f"{out}-1h", error="OutOfMemoryError: fake", device_cache_GB=1.0)]
+    finally:
+        c.close()
+
+
+@needs_v3_imager
 def test_failed_store_reopen_fails_the_engine_for_good(tmp_path):
     calls = []
 

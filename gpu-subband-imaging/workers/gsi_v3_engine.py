@@ -314,7 +314,11 @@ def _fake_hour_module():
             out[p.tag if p.image_i else p.v_tag] = [dict(name=f"{out_prefix}-{p.tag}", n_snap=len(keep), files=files)]
         summary = dict(band=band, n_loaded=len(snaps), rejected=drop, phase_centre=[math.degrees(ra), math.degrees(dec)],
                        qa=[dict(stem=x["stem"], time=x["time"]) for x in snaps], timing=dict(timing or {}),
-                       products=out, n_samples=int(sum(x.n for x in keep)))
+                       products=out, n_samples=int(sum(x.n for x in keep)),
+                       env={k: os.environ.get(k) for k in ("TTCALX_CHUNK_CACHE", "TTCALX_CACHE_RESERVE")})
+        if mode == "cache_fallback":                      # tests: as the imager after a GPU OOM fallback
+            summary["cache_fallback"] = [dict(name=f"{out_prefix}-1h", error="OutOfMemoryError: fake",
+                                              device_cache_GB=1.0)]
         json.dump(summary, open(f"{out_prefix}-summary.json", "w"), default=float)
         return summary
     m._want_v = _want_v
@@ -529,6 +533,14 @@ class Engine:
         recs = [latest[s] for s in stems]
         self.b.before_hour()
         log = q.get("log")
+        # the device chunk cache leaves the multiscale CLEAN the workspace it needs (ttcalx_imager hour.py
+        # TTCALX_CACHE_RESERVE=auto, estimated from the image size and the scales; the 5 GB default margin
+        # ran out of GPU memory at 64 / 69 MHz on a 16 GB card), and a GPU OOM despite that is imaged again
+        # without the device cache (the imager's fallback, on by default).  The cache does not change the
+        # products.  A TTCALX_CACHE_RESERVE in the engine's environment wins.
+        own_reserve = "TTCALX_CACHE_RESERVE" not in os.environ
+        if own_reserve:
+            os.environ["TTCALX_CACHE_RESERVE"] = "auto"
         try:
             with (open(log, "a") if log else contextlib.nullcontext(sys.stderr)) as fh, \
                     contextlib.redirect_stdout(fh):
@@ -536,10 +548,13 @@ class Engine:
                 s = cli.run_hour_snaps(list(q["argv"]), lambda ra, dec, want_v: gsiv.lazy_snaps(
                     [(r.meta, r.arrays, src) for r in recs], ra, dec, want_v=want_v), timing=T, t0=t0)
         finally:
+            if own_reserve:
+                os.environ.pop("TTCALX_CACHE_RESERVE", None)
             self.b.after_hour()
         return dict(status="ok", n_loaded=s.get("n_loaded"), rejected=s.get("rejected"),
                     qa_stems=[x["stem"] for x in s.get("qa", [])], timing=s.get("timing"),
                     phase_centre=s.get("phase_centre"), extra_records=extra, wall=time.perf_counter() - t0,
+                    cache_fallback=s.get("cache_fallback"),
                     products={k: [dict(name=o["name"], n_snap=o["n_snap"], beam=o.get("beam")) for o in v]
                               for k, v in s.get("products", {}).items()})
 

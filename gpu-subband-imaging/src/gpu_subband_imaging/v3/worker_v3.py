@@ -1049,6 +1049,10 @@ class V3Batch:
             rec["n_loaded"] = r.get("n_loaded")
             rec["n_rejected_hour"] = len(r.get("rejected") or [])
             rec["phase_centre_deg"] = r.get("phase_centre")
+            if r.get("cache_fallback"):      # imager: a GPU OOM, imaged again without the device chunk cache
+                rec["hour_cache_fallback"] = r["cache_fallback"]
+                log.warning("hour %sMHz %s: GPU OOM fallback (no device chunk cache) for %s", self.band, group,
+                            [os.path.basename(x.get("name", "")) for x in r["cache_fallback"]])
             if r.get("extra_records"):
                 rec["extra_records"] = r["extra_records"]
                 log.warning("hour %sMHz %s: %d record(s) without CLEAN FITS not imaged: %s", self.band, group,
