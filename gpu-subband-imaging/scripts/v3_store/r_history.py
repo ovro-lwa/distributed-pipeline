@@ -19,7 +19,7 @@ def run(paths, env):
     o = subprocess.run([sys.executable, "-c", CODE] + paths, capture_output=True, text=True, env=env).stdout
     return json.loads([l for l in o.splitlines() if l.startswith("RJSON")][0][5:])
 import numpy as np
-ms = sorted(str(p) for p in Path(os.environ.get("MS_ROOT", "/tmp/nk_v3_store/ms")) / "23MHz".glob("*.ms"))
+ms = sorted(str(p) for p in (Path(os.environ.get("MS_ROOT", "/tmp/nk_v3_store/ms")) / "23MHz").glob("*.ms"))
 for tag, rc in (("prod casarc", os.environ["CASARCFILES"]), ("d_interval=0", sys.argv[1])):
     env = dict(os.environ, CASARCFILES=rc)
     seq = run(ms, env)                                   # 0..11 in one process

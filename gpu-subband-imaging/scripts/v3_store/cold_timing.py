@@ -37,7 +37,7 @@ def main():
     out = {}
     for band, b in build.items():
         ra, dec = parse_phase_centre(b["phase_centre"])
-        ms = sorted(str(p) for p in Path(os.environ.get("MS_ROOT", "/tmp/nk_v3_store/ms")) / f"{band}MHz".glob("*.ms"))
+        ms = sorted(str(p) for p in (Path(os.environ.get("MS_ROOT", "/tmp/nk_v3_store/ms")) / f"{band}MHz").glob("*.ms"))
         r = {}
         hour.load_all(ms[:1], ra, dec, nproc=1)                       # imports / measures warm
         for rep in range(2):

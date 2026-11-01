@@ -20,7 +20,7 @@ out, lh = sys.argv[1], int(sys.argv[2])
 ra, dec = parse_phase_centre(bands.hour_phase_centre(lh))
 res = {}
 for band in sys.argv[3:]:
-    for m in sorted(Path(os.environ.get("MS_ROOT", "/tmp/nk_v3_store/ms")) / f"{band}MHz".glob("*.ms")):
+    for m in sorted((Path(os.environ.get("MS_ROOT", "/tmp/nk_v3_store/ms")) / f"{band}MHz").glob("*.ms")):
         s = load_samples(str(m), ra, dec)
         res[s["stem"]] = digest(s)
 json.dump(dict(imager=ttcalx_imager.__file__, digests=res), open(out, "w"))

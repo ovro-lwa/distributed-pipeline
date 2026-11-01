@@ -123,7 +123,7 @@ def main():
     log = lambda *x: print(*x, flush=True)
     import ttcalx_imager
     log("imager:", ttcalx_imager.__file__)
-    ms = sorted(glob.glob(os.path.join(a.ms_dir, "*.ms")))
+    ms = sorted(glob.glob(os.path.join(os.path.abspath(a.ms_dir), "*.ms")))     # the archive stores absolute paths
     ctx = None
     if a.cpu:
         sys.path.insert(0, a.tests_dir)

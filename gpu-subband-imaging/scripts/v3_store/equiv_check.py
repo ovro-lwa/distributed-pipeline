@@ -21,7 +21,7 @@ def main():
     for band, b in build.items():
         f = b["file"]
         ra, dec = parse_phase_centre(b["phase_centre"])
-        ms = sorted(str(p) for p in Path(os.environ.get("MS_ROOT", "/tmp/nk_v3_store/ms")) / f"{band}MHz".glob("*.ms"))
+        ms = sorted(str(p) for p in (Path(os.environ.get("MS_ROOT", "/tmp/nk_v3_store/ms")) / f"{band}MHz").glob("*.ms"))
         r = dict(n_ms=len(ms), file=f, size=os.path.getsize(f), rec_nbytes=b["rec_nbytes"], n_kept=b["n_kept"])
         # --- timings (warm page cache for both: the MSes and the file were just written / read)
         load_all(ms[:2], ra, dec, nproc=1)                         # warm imports / casacore measures

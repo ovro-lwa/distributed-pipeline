@@ -55,11 +55,11 @@ for f in sorted(glob.glob(sys.argv[1] + "/*.gsiv")):
     if not os.path.exists(g):
         print("no reference for", f); continue
     _, _, ra = hs.read_records(f); _, _, rb = hs.read_records(g)
-    strip = lambda m: {k: v for k, v in m.items() if k != "path"}       # the MS path differs
+    strip = lambda m: {k: v for k, v in m.items() if k not in ("path", "written_ns")}   # MS path, write time differ
     same = len(ra) == len(rb) and all(
         strip(x.meta) == strip(y.meta) and x.arrays.keys() == y.arrays.keys()
         and all(x.arrays[k].tobytes() == y.arrays[k].tobytes() for k in x.arrays) for x, y in zip(ra, rb))
-    print(os.path.basename(f), "records", len(ra), "identical to the 2026-11-01 build (except MS path):", same)
+    print(os.path.basename(f), "records", len(ra), "identical to the 2026-11-01 build (except MS path, write time):", same)
 PY
 
 # 4. GPU: deterministic stages bitwise + products MSes x2 vs --archive x2

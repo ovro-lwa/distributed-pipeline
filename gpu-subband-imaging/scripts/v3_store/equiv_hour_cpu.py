@@ -15,7 +15,7 @@ def main():
     res = {}
     for band in sys.argv[4:]:
         b = build[band]
-        ms = sorted(str(p) for p in Path(os.environ.get("MS_ROOT", "/tmp/nk_v3_store/ms")) / f"{band}MHz".glob("*.ms"))
+        ms = sorted(str(p) for p in (Path(os.environ.get("MS_ROOT", "/tmp/nk_v3_store/ms")) / f"{band}MHz").glob("*.ms"))
         tmp = Path(tempfile.mkdtemp(prefix=f"hcpu{band}_", dir=os.environ.get("SCRATCH", "/tmp")))
         (tmp / "ms.txt").write_text("\n".join(ms) + "\n")
         stems = [Path(m).name[:-3] for m in ms]

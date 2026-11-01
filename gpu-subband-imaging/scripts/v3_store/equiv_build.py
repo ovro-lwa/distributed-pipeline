@@ -24,7 +24,8 @@ for band in sys.argv[4:]:
     for p in (out, hourstore.idx_path(out)):
         if p.exists():
             p.unlink()
-    hdr = hourstore.header_for(int(band), "2026-10-31", lst.label(hours[0]), pc, "Run_v3store_test", batch=0)
+    hdr = hourstore.header_for(int(band), "2026-10-31", lst.label(hours[0]), pc, "Run_v3store_test", batch=0,
+                              cal_bp="calibration_2026-10-31_21h.B.flagged", cal_xy="xyphase_delay_pos_3.8643ns.Xf")
     t0 = time.perf_counter()
     c = hourstore.ArchiveClient(py, out, pc, hdr, env=env)
     t_start = time.perf_counter() - t0
@@ -34,9 +35,9 @@ for band in sys.argv[4:]:
         r = c.add(m)
         r["rtt_s"] = time.perf_counter() - t1
         rows.append(r)
-    # the hook skips a stamp that is already in the file (rerun of a batch)
-    dup = c.add(ms[0])
     c.close()
+    dup = None      # (a re-added stem supersedes its record -- unit tests; its R would come from
+    #                another casacore call history, see hourstore docstring)
     sc = hourstore.scan(out, verify=True)
     res[band] = dict(file=str(out), phase_centre=pc, lst_hour=hours[0], start_s=t_start, rows=rows, dup=dup,
                      size=out.stat().st_size, records=len(sc.entries), clean=sc.clean,
