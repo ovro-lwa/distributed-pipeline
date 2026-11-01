@@ -353,6 +353,16 @@ def test_v3_archive_config_validation():
     V3Params(archive="iv", archive_root="/x", hour_source="archive", write_kept_ms=False)
 
 
+def test_archive_hour_source_needs_lst_layout(tmp_path):
+    from dataclasses import replace
+    from gpu_subband_imaging.config import Config
+    cfg = Config.load(Path(__file__).resolve().parents[1] / "examples" / "config")
+    v = V3Params(archive="iv", archive_root=str(tmp_path), hour_source="archive")
+    with pytest.raises(ConfigError, match="layout=lst"):
+        replace(cfg.pipeline, layout="utc", v3=v)
+    replace(cfg.pipeline, layout="lst", run_label="Run_T", v3=v)
+
+
 def _lst_cfg(tmp_path, ttcalx_image, **v3):
     v = V3Params(archive="iv", archive_root=str(tmp_path / "arch"), hour_source="archive", **v3)
     pl = SimpleNamespace(date="2026-10-31", output_root=str(tmp_path / "out"), layout="lst", run_label="Run_T",

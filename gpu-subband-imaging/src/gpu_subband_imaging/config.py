@@ -468,6 +468,8 @@ class PipelineConfig:
             raise ConfigError("v3.snapshot_io=shm needs imaging.imager=ttcalx")
         if self.v3.hour_source == "memory" and not (self.layout == "lst" and self.stream_hour_images):
             raise ConfigError("v3.hour_source=memory needs layout=lst and stream_hour_images")
+        if self.v3.hour_source == "archive" and self.layout != "lst":
+            raise ConfigError("v3.hour_source=archive needs layout=lst (hour_lst.run_band)")
 
     @property
     def run_key(self) -> str:
