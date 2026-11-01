@@ -9,6 +9,7 @@ import argparse
 import logging
 import shutil
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -62,6 +63,13 @@ class Worker:
         self._lst: dict = {}
         self._qa: List[dict] = []      # pilot V statistics of this batch (layout=lst)
         self._gpu_imager = None        # stages.gpu_image.SnapshotDaemon with imaging.imager=ttcalx
+        # gsi v3 in-memory prep (v3.prep_inmem): spawn process pool and the batch's
+        # mstransform template (v3.prep_inmem=on)
+        self._v3_pool = None
+        self._v3_lock = threading.Lock()
+        self._v3_tpl_lock = threading.Lock()
+        self._v3_template: Optional[Path] = None
+        self._v3_template_failed = False
 
     def _start_gpu_imager(self):
         from .stages import gpu_image
@@ -141,12 +149,15 @@ class Worker:
         if self._fits_path_for_stamp(stamp).exists():
             return None  # Already archived.
         d = self.work / stamp
+        udir = self._untar_dir(stamp)
         try:
             t0 = time.perf_counter()
-            ms = stage_ms.stage(tar, d)
+            ms = stage_ms.stage(tar, d, untar_to=udir)
             log.info("timing %sMHz batch%d stamp=%s phase=stage_ms elapsed=%.2f s",
                      self.band, self.batch, stamp, time.perf_counter() - t0)
 
+            stats = None            # set by the v3 in-memory prep (prep_inmem=on)
+            shadow = None           # v3 result to compare with v2 (prep_inmem=shadow)
             if getattr(self.cfg.pipeline, 'do_aoflag', True):
                 t0 = time.perf_counter()
                 if self._badants:
@@ -170,16 +181,23 @@ class Worker:
                 log.info("timing %sMHz batch%d stamp=%s phase=average elapsed=%.2f s",
                          self.band, self.batch, stamp, time.perf_counter() - t0)
             elif getattr(self.cfg.pipeline, "prep", "casa") == "numpy":
-                t0 = time.perf_counter()
-                fastcal.flag_calibrate(ms, self._bp, self._xy, self._badants)
-                t1 = time.perf_counter()
-                avg = fastcal.average(ms, d / f"{stamp}_avg.ms", self.cfg.pipeline.chanbin)
-                log.info("timing %sMHz batch%d stamp=%s phase=flag_cal elapsed=%.2f s",
-                         self.band, self.batch, stamp, t1 - t0)
-                log.info("timing %sMHz batch%d stamp=%s phase=average elapsed=%.2f s",
-                         self.band, self.batch, stamp, time.perf_counter() - t1)
-                log.info("timing %sMHz batch%d stamp=%s phase=flag_cal_avg elapsed=%.2f s",
-                         self.band, self.batch, stamp, time.perf_counter() - t0)
+                mode = self._prep_inmem()
+                done = self._v3_prep_on(stamp, ms, d) if mode == "on" else None
+                if done is not None:
+                    avg, stats = done
+                else:
+                    if mode == "shadow":    # before flag_calibrate rewrites the raw MS
+                        shadow = self._v3_prep_shadow(stamp, ms)
+                    t0 = time.perf_counter()
+                    fastcal.flag_calibrate(ms, self._bp, self._xy, self._badants)
+                    t1 = time.perf_counter()
+                    avg = fastcal.average(ms, d / f"{stamp}_avg.ms", self.cfg.pipeline.chanbin)
+                    log.info("timing %sMHz batch%d stamp=%s phase=flag_cal elapsed=%.2f s",
+                             self.band, self.batch, stamp, t1 - t0)
+                    log.info("timing %sMHz batch%d stamp=%s phase=average elapsed=%.2f s",
+                             self.band, self.batch, stamp, time.perf_counter() - t1)
+                    log.info("timing %sMHz batch%d stamp=%s phase=flag_cal_avg elapsed=%.2f s",
+                             self.band, self.batch, stamp, time.perf_counter() - t0)
             else:
                 t0 = time.perf_counter()
                 avg = calibrate.flag_cal_average(
@@ -188,12 +206,14 @@ class Worker:
                 log.info("timing %sMHz batch%d stamp=%s phase=flag_cal_avg elapsed=%.2f s",
                          self.band, self.batch, stamp, time.perf_counter() - t0)
 
-            self._fix_uvw(stamp, avg)
-
             peel = self.cfg.pipeline.peel_for_band(self.band)
-            stats = quality.visibility_stats(
-                avg, "DATA", peel.quality_sample_rows,
-                peel.min_visibility_amplitude)
+            if stats is None:
+                self._fix_uvw(stamp, avg)
+                stats = quality.visibility_stats(
+                    avg, "DATA", peel.quality_sample_rows,
+                    peel.min_visibility_amplitude)
+                if shadow is not None:
+                    self._v3_shadow_compare(stamp, shadow, avg, stats)
             log.info(
                 "input_quality %sMHz stamp=%s sampled=%d usable=%d "
                 "nonzero_fraction=%.6g median_abs=%.6g max_abs=%.6g",
@@ -215,6 +235,161 @@ class Worker:
             log.error("preprocess %s failed: %s", stamp, e)
             shutil.rmtree(d, ignore_errors=True)
             return None
+        finally:
+            if udir is not None:
+                shutil.rmtree(udir, ignore_errors=True)
+
+    # -- gsi v3 steps 1-2: tmpfs untar, in-memory prep (docs/v3_design.md) -------
+
+    def _untar_dir(self, stamp: str) -> Optional[Path]:
+        """v3.untar_to/<stamp> when the tar is to be streamed into tmpfs, else None."""
+        v3 = getattr(self.cfg.pipeline, "v3", None)
+        if v3 is None or not v3.untar_to:
+            return None
+        return Path(v3.untar_to) / stamp
+
+    def _prep_inmem(self) -> str:
+        pl = self.cfg.pipeline
+        v3 = getattr(pl, "v3", None)
+        if (v3 is None or getattr(pl, "prep", "casa") != "numpy"
+                or getattr(pl, "do_aoflag", True)):
+            return "off"
+        return v3.prep_inmem
+
+    def _v3_start_pool(self) -> None:
+        if self._prep_inmem() == "off":
+            return
+        import multiprocessing
+        from concurrent.futures import ProcessPoolExecutor
+        n = max(1, int(self.cfg.pipeline.v3.prep_procs))
+        # spawn, not fork: the parent has threads (feeders, archiver) and casacore state;
+        # processes, not threads: python-casacore holds the GIL while it reads
+        self._v3_pool = ProcessPoolExecutor(max_workers=n,
+                                            mp_context=multiprocessing.get_context("spawn"))
+        log.info("batch %sMHz/%d: v3 prep_inmem=%s in %d spawn processes",
+                 self.band, self.batch, self._prep_inmem(), n)
+
+    def _v3_stop_pool(self) -> None:
+        with self._v3_lock:
+            pool, self._v3_pool = self._v3_pool, None
+        if pool is not None:
+            pool.shutdown(wait=True)
+
+    def _v3_run(self, fn, *args):
+        """fn(*args) in the prep process pool; a broken pool is replaced (and re-raised)."""
+        from concurrent.futures.process import BrokenProcessPool
+        with self._v3_lock:
+            pool = self._v3_pool
+        if pool is None:
+            raise RuntimeError("v3 prep pool is not running")
+        try:
+            return pool.submit(fn, *args).result()
+        except BrokenProcessPool:
+            with self._v3_lock:
+                if self._v3_pool is pool:
+                    pool.shutdown(wait=False)
+                    self._v3_pool = None
+                    self._v3_start_pool()
+            raise
+
+    def _v3_prep_args(self, ms: Path) -> tuple:
+        peel = self.cfg.pipeline.peel_for_band(self.band)
+        return (str(ms), self._bp, self._xy, self._badants, self.cfg.pipeline.chanbin,
+                self.cfg.pipeline.fix_uvw, peel.quality_sample_rows,
+                peel.min_visibility_amplitude)
+
+    def _v3_template_for(self, ms: Path) -> Optional[Path]:
+        """The batch's mstransform template (made once, from the first raw MS)."""
+        from .v3 import fastprep
+        with self._v3_tpl_lock:
+            if self._v3_template is not None or self._v3_template_failed:
+                return self._v3_template
+            tpl = self.work / "_v3_template_avg.ms"
+            t0 = time.perf_counter()
+            try:
+                fastprep.make_template(str(ms), str(tpl), self.cfg.pipeline.chanbin)
+                self._v3_template = tpl
+            except Exception as e:
+                log.error("V3_TEMPLATE %sMHz batch%d: mstransform template failed, "
+                          "v2 prep for this batch: %s", self.band, self.batch, e)
+                self._v3_template_failed = True
+            log.info("timing %sMHz batch%d phase=inmem_template elapsed=%.2f s",
+                     self.band, self.batch, time.perf_counter() - t0)
+            return self._v3_template
+
+    def _log_v3_timings(self, stamp: str, meta: dict, elapsed: float) -> None:
+        for name, t in meta.get("timings", {}).items():
+            log.info("timing %sMHz batch%d stamp=%s phase=inmem_%s elapsed=%.2f s cpu=%.2f s",
+                     self.band, self.batch, stamp, name, t["wall"], t["cpu"])
+        log.info("timing %sMHz batch%d stamp=%s phase=inmem_prep elapsed=%.2f s",
+                 self.band, self.batch, stamp, elapsed)
+
+    def _v3_prep_on(self, stamp: str, ms: Path, d: Path):
+        """(avg MS written by write_ms_like, VisibilityStats), or None: use the v2 prep."""
+        from .v3 import fastprep
+        tpl = self._v3_template_for(ms)
+        if tpl is None:
+            return None
+        avg = d / f"{stamp}_avg.ms"
+        t0 = time.perf_counter()
+        try:
+            res = self._v3_run(fastprep.prep_task, *self._v3_prep_args(ms), str(tpl), str(avg))
+        except Exception as e:
+            log.warning("V3_FALLBACK %sMHz stamp=%s in-memory prep failed, v2 prep: %s",
+                        self.band, stamp, e)
+            shutil.rmtree(avg, ignore_errors=True)
+            return None
+        elapsed = time.perf_counter() - t0
+        meta = res["meta"]
+        self._log_v3_timings(stamp, meta, elapsed)
+        log.info("timing %sMHz batch%d stamp=%s phase=flag_cal_avg elapsed=%.2f s",
+                 self.band, self.batch, stamp, elapsed)
+        mode = self.cfg.pipeline.fix_uvw
+        if mode != "off":
+            if meta.get("fix_uvw_error"):
+                log.warning("fix_uvw %sMHz stamp=%s failed, stored UVW kept: %s",
+                            self.band, stamp, meta["fix_uvw_error"])
+            elif meta.get("fix_uvw"):
+                st = meta["fix_uvw"]
+                log.info("fix_uvw %sMHz stamp=%s epoch=%s rot_deg=%.4f rms_duv_m=%.3f "
+                         "max_dw_m=%.2e rephased=%s", self.band, stamp, mode, st["rot_deg"],
+                         st["rms_duv_m"], st["max_dw_m"], st["rephased"])
+        return avg, quality.VisibilityStats(**res["stats"])
+
+    def _v3_prep_shadow(self, stamp: str, ms: Path) -> Optional[dict]:
+        from .v3 import fastprep
+        t0 = time.perf_counter()
+        try:
+            res = self._v3_run(fastprep.prep_task, *self._v3_prep_args(ms))
+        except Exception as e:
+            log.warning("V3_SHADOW %sMHz stamp=%s in-memory prep failed: %s",
+                        self.band, stamp, e)
+            return None
+        self._log_v3_timings(stamp, res["meta"], time.perf_counter() - t0)
+        return res
+
+    def _v3_shadow_compare(self, stamp: str, shadow: dict, avg: Path,
+                           stats: "quality.VisibilityStats") -> None:
+        """Log how far the in-memory prep is from v2's averaged MS (one V3_SHADOW line)."""
+        from .v3 import fastprep
+        try:
+            c = fastprep.compare_snap_ms(shadow["snap"], str(avg))
+        except Exception as e:
+            log.warning("V3_SHADOW %sMHz stamp=%s compare failed: %s", self.band, stamp, e)
+            return
+        if "shape_mismatch" in c:
+            log.warning("V3_SHADOW %sMHz stamp=%s identical=False shape %s",
+                        self.band, stamp, c["shape_mismatch"])
+            return
+        tot = shadow["meta"].get("timings", {}).get("total", {})
+        log.info("V3_SHADOW %sMHz stamp=%s identical=%s data_max_abs=%.3g data_rel_rms=%.3g "
+                 "data_ndiff=%d flag_ndiff=%d flag_row_ndiff=%d weight_ndiff=%d "
+                 "sigma_ndiff=%d uvw_ndiff=%d uvw_max_abs=%.3g stats_equal=%s "
+                 "v3_wall=%.2f v3_cpu=%.2f", self.band, stamp, c["identical"],
+                 c["data_max_abs"], c["data_rel_rms"], c["data_ndiff"], c["flag_ndiff"],
+                 c["flag_row_ndiff"], c["weight_ndiff"], c["sigma_ndiff"], c["uvw_ndiff"],
+                 c.get("uvw_max_abs", 0.0), shadow["stats"] == stats.__dict__,
+                 tot.get("wall", 0.0), tot.get("cpu", 0.0))
 
     def _fix_uvw(self, stamp: str, ms: Path) -> None:
         """Replace the raw (rotated) UVW with J2000 UVW; keep the MS if it fails."""
@@ -373,6 +548,7 @@ class Worker:
             self._gpu_imager = self._start_gpu_imager()   # started at the first snapshot
         n_ok, n_fail = 0, 0
         try:
+            self._v3_start_pool()
             with ThreadPoolExecutor(max_workers=self.cfg.cluster.max_feeders) as pool, \
                  ThreadPoolExecutor(max_workers=max(1, self.cfg.cluster.archive_workers)) as archiver:
                 # test copy: GSI_PREP_LOOKAHEAD bounds how many files the feeders run ahead
@@ -420,7 +596,12 @@ class Worker:
             daemon.close()
             if self._gpu_imager is not None:
                 self._gpu_imager.close()
+            self._v3_stop_pool()
             shutil.rmtree(self.work, ignore_errors=True)
+            for t in todo:
+                udir = self._untar_dir(_stamp(t))
+                if udir is not None:
+                    shutil.rmtree(udir, ignore_errors=True)
             self._write_qa_stats()
         log.info("batch %sMHz/%d: total elapsed %.2f s for %d files (%d failed)",
                  self.band, self.batch, time.perf_counter() - batch_start, n_ok, n_fail)

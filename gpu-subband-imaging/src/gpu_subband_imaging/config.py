@@ -448,6 +448,8 @@ class PipelineConfig:
             raise ConfigError("prep must be 'casa' or 'numpy'")
         if self.v3.prep_inmem != "off" and self.prep != "numpy":
             raise ConfigError("v3.prep_inmem needs prep=numpy")
+        if self.v3.prep_inmem != "off" and self.do_aoflag:
+            raise ConfigError("v3.prep_inmem needs do_aoflag: false (the numpy prep path)")
         if self.v3.snapshot_io == "shm" and self.imaging.imager != "ttcalx":
             raise ConfigError("v3.snapshot_io=shm needs imaging.imager=ttcalx")
         if self.v3.hour_source == "memory" and not (self.layout == "lst" and self.stream_hour_images):
