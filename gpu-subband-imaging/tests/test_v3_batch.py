@@ -564,3 +564,180 @@ def test_hour_failure_is_retried_once_in_a_fresh_engine(env, caplog):
     h = json.loads((_bdir(env.tmp) / "provenance.json").read_text())["hour"]
     assert "V3_HOUR_RETRY" in caplog.text and h["status"] == "ok" and h["n_loaded"] == 5
     assert "non-uniform points" in h["first_hour_error"]
+
+
+# -- follow-up review: M1, M2, L1-L4, L6 ------------------------------------------------------------------
+
+@needs_v3_imager
+def test_input_failing_every_attempt_is_given_up_and_the_hour_made_without_it(env, caplog):
+    """M1: one permanently bad input must not block the band-hour forever (v2 imaged the rest)."""
+    cfg = _config(env.tmp)                         # examples config: max_retries 1 -> given up after 2 attempts
+    b = _bdir(env.tmp)
+    with pytest.raises(RuntimeError, match="V3_INCOMPLETE"):
+        _worker(cfg, FakeDaemon(fail=STAMPS[1])).run_batch(env.tars)
+    lines = (b / "QA" / ".v3_failed.jsonl").read_text().splitlines()
+    assert len(lines) == 1 and json.loads(lines[0])["stamp"] == STAMPS[1] and "peel" in json.loads(lines[0])["reason"]
+    d = FakeDaemon(fail=STAMPS[1])
+    with caplog.at_level(logging.INFO, logger="gsi"):
+        _worker(cfg, d).run_batch(env.tars)
+    assert d.calls == [STAMPS[1]] and "V3_HOUR_REDUCED" in caplog.text
+    h = json.loads((b / "provenance.json").read_text())["hour"]
+    assert h["status"] == "ok" and h["n_loaded"] == 4 and h["hour_reduced"]
+    assert h["failed_inputs"][STAMPS[1]]["attempts"] == 2
+    d = FakeDaemon()
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="gsi"):
+        _worker(cfg, d).run_batch(env.tars)
+    assert "nothing to do (hour products done)" in caplog.text and d.calls == []
+
+
+@needs_v3_imager
+def test_vanished_tar_is_given_up_at_once(env, monkeypatch, caplog):
+    cfg = _config(env.tmp)
+    real = Worker._stage
+
+    def stage(self, tar, d, stamp):
+        if not Path(tar).exists():
+            raise FileNotFoundError(tar)
+        return real(self, tar, d, stamp)
+    monkeypatch.setattr(Worker, "_stage", stage)
+    Path(env.tars[2]).unlink()                      # gone from the slow buffer
+    with caplog.at_level(logging.INFO, logger="gsi"):
+        _worker(cfg, FakeDaemon()).run_batch(env.tars)
+    h = json.loads((_bdir(env.tmp) / "provenance.json").read_text())["hour"]
+    assert h["status"] == "ok" and h["n_loaded"] == 4 and h["failed_inputs"][STAMPS[2]]["permanent"]
+
+
+@needs_v3_imager
+def test_hour_refuses_an_input_neither_imaged_nor_skipped_nor_given_up(env, monkeypatch):
+    cfg = _config(env.tmp)
+    real = hour_lst._fits_stems
+    monkeypatch.setattr(hour_lst, "_fits_stems", lambda *a: set(sorted(real(*a))[1:]))
+    with pytest.raises(RuntimeError, match="V3_UNACCOUNTED"):
+        _worker(cfg, FakeDaemon()).run_batch(env.tars)
+    assert not (_bdir(env.tmp) / "provenance.json").exists()
+
+
+@needs_v3_imager
+def test_tmpfs_untar_dirs_are_removed_even_when_untar_was_turned_off(env, monkeypatch):
+    """M2: _plan_shm turns tmpfs untar off; the sweep and the cleanups still use the configured root."""
+    from gpu_subband_imaging.v3 import worker_v3
+    cfg = _config(env.tmp, untar_to=str(env.tmp / "shm"))
+    w = _worker(cfg, FakeDaemon())
+    root = w._untar_root()
+    left = root / STAMPS[0] / f"{STAMPS[0]}.ms"
+    left.mkdir(parents=True)                       # e.g. a raw MS a feeder had staged before the switch
+    monkeypatch.setattr(worker_v3.V3Batch, "_plan_shm", lambda self: setattr(self.w, "_untar_disabled", True))
+    w.run_batch(env.tars)
+    assert w._untar_root() is None and w._untar_root(configured=True) == root
+    assert not root.exists()
+    # the sweep of a crashed worker's dir works with untar off, too
+    dead = root.parent / f".gsi3w_{os.getuid()}_{os.uname().nodename}_999999999"
+    dead.mkdir(parents=True)
+    w._v3_sweep_untar()
+    assert not dead.exists()
+
+
+def test_profile_no_image_needs_its_flag(monkeypatch):
+    monkeypatch.delenv("GSI_V3_ALLOW_PROFILE", raising=False)
+    base = dict(date="2026-10-31", hours="all", bands=[23], batch_size=90, max_retries=1, data_root="/d",
+                output_root="/o", chanbin=4, cal=None, peel=None, peel_overrides={},
+                imaging=config_mod.ImagingParams(mode="clean", imager="ttcalx"), movie=None, do_aoflag=False,
+                do_badants=True, env=None, layout="lst", lst_hours=[5], run_label="Run_x", stream_hour_images=True,
+                prep="numpy", batch_timeout_seconds=None)
+    v = V3Params(prep_inmem="on", peel_io="shm", snapshot_io="shm", hour_source="memory", profile_no_image=True)
+    with pytest.raises(ConfigError, match="GSI_V3_ALLOW_PROFILE"):
+        config_mod.PipelineConfig(**base, v3=v)
+    monkeypatch.setenv("GSI_V3_ALLOW_PROFILE", "1")
+    config_mod.PipelineConfig(**base, v3=v)
+    with pytest.raises(ConfigError, match="budget_margin_s"):
+        config_mod.PipelineConfig(**dict(base, batch_timeout_seconds=200), v3=V3Params(
+            prep_inmem="on", peel_io="shm", snapshot_io="shm", hour_source="memory", budget_margin_s=300))
+
+
+@needs_v3_imager
+def test_profile_batch_fails_and_never_looks_done(env, monkeypatch):
+    monkeypatch.setenv("GSI_V3_ALLOW_PROFILE", "1")
+    cfg = _config(env.tmp, profile_no_image=True)
+    with pytest.raises(RuntimeError, match="V3_PROFILE"):
+        _worker(cfg, FakeDaemon()).run_batch(env.tars)
+    assert not (_bdir(env.tmp) / "provenance.json").exists()
+
+
+@needs_v3_imager
+def test_hour_retry_rules(env, monkeypatch, caplog):
+    """L2: an engine death in the hour is retried in a fresh engine; the deterministic "no record"
+    refusal is not; with no restarts left the message says so."""
+    tmp = env.tmp
+    cfg = _config(tmp, delete_checkpoint=False)
+    cfg.pipeline.imaging.gpu_env["GSI_V3_FAKE_HOUR"] = f"die_once:{tmp / 'died'}"
+    with caplog.at_level(logging.INFO, logger="gsi"):
+        _worker(cfg, FakeDaemon()).run_batch(env.tars)
+    assert "V3_HOUR_RETRY" in caplog.text
+    assert json.loads((_bdir(tmp) / "provenance.json").read_text())["hour"]["status"] == "ok"
+    # "no record" for an expected stem: no retry
+    (_bdir(tmp) / "provenance.json").unlink()
+    cfg.pipeline.imaging.gpu_env["GSI_V3_FAKE_HOUR"] = "1"
+    real = hour_lst._fits_stems
+    monkeypatch.setattr(hour_lst, "_fits_stems", lambda *a: real(*a) | {"20261031_109999_23MHz"})
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="gsi"), pytest.raises(RuntimeError, match="no record"):
+        _worker(cfg, FakeDaemon()).run_batch(env.tars)
+    assert "V3_HOUR_RETRY" not in caplog.text
+    monkeypatch.setattr(hour_lst, "_fits_stems", real)
+    # no restarts left: a clear message, no retry
+    (tmp / "died").unlink()
+    cfg2 = _config(tmp, delete_checkpoint=False, engine_max_restarts=0)
+    cfg2.pipeline.imaging.gpu_env["GSI_V3_FAKE_HOUR"] = f"die_once:{tmp / 'died'}"
+    with pytest.raises(RuntimeError, match="cannot be restarted"):
+        _worker(cfg2, FakeDaemon()).run_batch(env.tars)
+
+
+@needs_v3_imager
+def test_reservation_is_the_records_part_only(env, monkeypatch):
+    from gpu_subband_imaging.v3 import memory, worker_v3
+    cfg = _config(env.tmp, store="auto")
+    vb = worker_v3.V3Batch(_worker(cfg, FakeDaemon()), env.tars)
+    monkeypatch.setattr(memory, "reserved_by_others", lambda *a: 0.0)
+    vb._plan_store(5)
+    try:
+        r = json.loads(memory.reservation_path().read_text())
+        assert vb.plan.backend == "ram" and r["bytes"] == pytest.approx(vb.plan.record_bytes)
+        assert r["bytes"] < vb.plan.need_bytes - memory.FIXED_BYTES + 1
+    finally:
+        memory.unreserve()
+
+
+@needs_v3_imager
+def test_old_run_key_checkpoint_is_migrated_and_done_checkpoints_deleted(env, caplog):
+    """L6: a checkpoint named with the run_key before "_v3mem" is moved and reused; once the hour is
+    done the local checkpoints (old and new names) are deleted."""
+    import shutil as sh
+    from gpu_subband_imaging.v3 import worker_v3
+    tmp = env.tmp
+    cfg = _config(tmp, delete_checkpoint=False)
+    _worker(cfg, FakeDaemon()).run_batch(env.tars)
+    vb = worker_v3.V3Batch(_worker(cfg, FakeDaemon()), env.tars)
+    new = vb._ck_name(cfg.pipeline.v3.spill_dirs[0])
+    old = vb._old_ck_names()[0]
+    old.parent.mkdir(parents=True, exist_ok=True)
+    for a, c in ((new, old), (hourstore.idx_path(new), hourstore.idx_path(old))):
+        sh.move(str(a), str(c))
+    (_bdir(tmp) / "provenance.json").unlink()
+    d = FakeDaemon()
+    with caplog.at_level(logging.INFO, logger="gsi"):
+        _worker(cfg, d).run_batch(env.tars)
+    assert "moved the checkpoint of the old run_key" in caplog.text and d.calls == [] and "V3_REPLAY" not in caplog.text
+    assert new.exists() and not old.exists()
+    old.write_bytes(b"stale")                       # a leftover of the old name
+    cfg2 = _config(tmp, delete_checkpoint=True)
+    _worker(cfg2, FakeDaemon()).run_batch(env.tars)  # hour done: nothing to do, checkpoints removed
+    assert not new.exists() and not old.exists()
+
+
+def test_read_stats_newest_row_wins_by_time(tmp_path):
+    d = tmp_path / ".snapshot_stats"
+    d.mkdir()
+    (d / "b0_z.jsonl").write_text(json.dumps(dict(ts="20261031_101007", rms=1.0, peak=1, file="f", t=100.0)) + "\n")
+    (d / "b0_a.jsonl").write_text(json.dumps(dict(ts="20261031_101007", rms=2.0, peak=1, file="f", t=200.0)) + "\n")
+    assert [r["rms"] for r in hour_lst.read_stats(tmp_path)] == [2.0]      # not the name order (z > a)
