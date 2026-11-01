@@ -114,10 +114,12 @@ def test_v3_config_rules(tmp_path):
 class FakeDaemon:
     """The Julia daemon's slot peel: data x 2, PEELED; optionally fails one stamp."""
 
-    def __init__(self, fail=None):
-        self.fail, self.calls, self.closed = fail, [], 0
+    def __init__(self, fail=None, sleep=0.0):
+        self.fail, self.calls, self.closed, self.sleep = fail, [], 0, sleep
 
     def zest_slot(self, slot, timeout=None):
+        import time
+        time.sleep(self.sleep)
         v = slots.view_slot(slot)
         self.calls.append(v.stem)
         if v.stem == self.fail:
@@ -319,15 +321,19 @@ def test_rerun_replays_missing_records_and_redoes_the_hour(env, caplog):
 
 
 @needs_v3_imager
-def test_failed_peel_is_left_out_of_the_hour(env, caplog):
+def test_failed_peel_fails_the_batch_then_the_retry_makes_the_hour(env, caplog):
+    """A snapshot that could have been imaged is missing -> no hour products, the batch fails; the
+    retry redoes only that snapshot and makes the hour (then the checkpoint is deleted)."""
     tmp = env.tmp
     cfg = _config(tmp)
-    with caplog.at_level(logging.INFO, logger="gsi"):
+    with caplog.at_level(logging.INFO, logger="gsi"), pytest.raises(RuntimeError, match="V3_INCOMPLETE"):
         _worker(cfg, FakeDaemon(fail=STAMPS[1])).run_batch(env.tars)
     b = _bdir(tmp)
+    assert not (b / "provenance.json").exists() and len(list((b / "snapshots_clean").iterdir())) == 4
+    d = FakeDaemon()
+    _worker(cfg, d).run_batch(env.tars)
     prov = json.loads((b / "provenance.json").read_text())
-    assert prov["hour"]["n_loaded"] == 4 and len(list((b / "snapshots_clean").iterdir())) == 4
-    assert "(1 failed)" in caplog.text
+    assert d.calls == [STAMPS[1]] and prov["hour"]["n_loaded"] == 5
     assert not Path(prov["v3"]["store_path"]).exists()          # checkpoint deleted after the hour
 
 
@@ -402,5 +408,114 @@ def test_rerun_with_only_skipped_inputs_still_makes_the_hour(env, monkeypatch, c
     w._lst["20261031_101057_23MHz"] = 5
     with caplog.at_level(logging.INFO, logger="gsi"):
         w.run_batch(tars)
-    assert "1 to image, 0 to replay" in caplog.text
+    # the input skipped before is not prepped again (finding 5)
+    assert "0 to image, 0 to replay" in caplog.text and "1 input(s) skipped before" in caplog.text
     assert json.loads((b / "provenance.json").read_text())["hour"]["status"] == "ok"
+    # and a done hour with an always-skipped input has nothing to do at all
+    caplog.clear()
+    d = FakeDaemon()
+    w = _worker(cfg, d)
+    with caplog.at_level(logging.INFO, logger="gsi"):
+        w.run_batch(tars)
+    assert "nothing to do (hour products done)" in caplog.text and d.calls == []
+
+
+@needs_v3_imager
+def test_engine_death_does_not_take_a_healthy_sibling_and_no_hour_is_made(env, caplog):
+    """Review finding 1: the engine dies on snapshot 4 of 5 while others are in flight.  The healthy
+    ones are retried alone and succeed, the culprit (dies again alone) fails, and the hour is NOT
+    made (one snapshot that could be imaged is missing); a rerun then completes the band-hour."""
+    tmp = env.tmp
+    cfg = _config(tmp, delete_checkpoint=False)
+    cfg.pipeline.imaging.gpu_env.update(GSI_V3_FAKE_DIE=STAMPS[3], GSI_V3_FAKE_SLEEP="0.3")
+    with caplog.at_level(logging.INFO, logger="gsi"), pytest.raises(RuntimeError, match="V3_INCOMPLETE"):
+        _worker(cfg, FakeDaemon()).run_batch(env.tars)
+    b = _bdir(tmp)
+    done = sorted(p.name for p in (b / "snapshots_clean").iterdir())
+    assert done == sorted(f"{lst.clean_name(23, lst.timestamp(s))}.fz" for s in STAMPS if s != STAMPS[3])
+    assert "V3_ENGINE_CULPRIT" in caplog.text and STAMPS[3] in caplog.text.split("V3_ENGINE_CULPRIT")[1][:200]
+    assert caplog.text.count("V3_ENGINE_CULPRIT") == 1
+    assert not (b / "provenance.json").exists()
+    # the pilot rows of the archived snapshots were persisted as they came
+    rows = [ln for f in (b / "QA" / ".snapshot_stats").glob("*.jsonl") for ln in f.read_text().splitlines()]
+    assert len(rows) == 4
+    del cfg.pipeline.imaging.gpu_env["GSI_V3_FAKE_DIE"]
+    caplog.clear()
+    d = FakeDaemon()
+    with caplog.at_level(logging.INFO, logger="gsi"):
+        _worker(cfg, d).run_batch(env.tars)
+    assert d.calls == [STAMPS[3]] and "1 to image, 0 to replay" in caplog.text
+    h = json.loads((b / "provenance.json").read_text())["hour"]
+    assert h["status"] == "ok" and h["n_loaded"] == 5
+
+
+@needs_v3_imager
+def test_exhausted_engine_restarts_abort_the_batch_at_once(env, caplog):
+    tmp = env.tmp
+    cfg = _config(tmp, engine_max_restarts=1)
+    cfg.pipeline.imaging.gpu_env.update(GSI_V3_FAKE_DIE=STAMPS[0])
+    d = FakeDaemon(sleep=0.5)
+    from gpu_subband_imaging.v3.worker_v3 import BatchAborted
+    with caplog.at_level(logging.INFO, logger="gsi"), pytest.raises(BatchAborted, match="engine failed"):
+        _worker(cfg, d).run_batch(env.tars)
+    assert "V3_ABORT" in caplog.text and len(d.calls) < len(STAMPS)
+    assert not list(Path("/dev/shm").glob(f"gsi3_{os.getpid()}_*"))
+
+
+def test_memory_mode_has_its_own_run_key_and_ledger(tmp_path):
+    """Review finding 2: a v2 ledger of the same run (hour-job rows, batch_size batches) is never
+    reused by hour_source=memory (INSERT OR IGNORE on (band, batch) would skip band-hours)."""
+    base = dict(date="2026-10-31", hours="all", bands=[23], batch_size=90, batch_timeout_seconds=None,
+                max_retries=1, data_root="/d", output_root="/o", chanbin=4, cal=None, peel=None, peel_overrides={},
+                imaging=config_mod.ImagingParams(mode="clean", imager="ttcalx"), movie=None, do_aoflag=False,
+                do_badants=True, env=None, layout="lst", lst_hours=[5], run_label="Run_x", stream_hour_images=True,
+                prep="numpy")
+    v2 = config_mod.PipelineConfig(**base)
+    mem = config_mod.PipelineConfig(**base, v3=V3Params(prep_inmem="on", peel_io="shm", snapshot_io="shm",
+                                                        hour_source="memory"))
+    assert v2.run_key == "2026-10-31_Run_x_lst05" and mem.run_key == "2026-10-31_Run_x_lst05_v3mem"
+    led = Ledger(tmp_path / f"ledger_{v2.run_key}.sqlite")
+    led.seed([Job(23, 0, 90), Job(23, 1, 90), Job(23, -1005, 2)])
+    for j in led.all():
+        led.mark_done(j)
+    led.close()
+    m = Ledger(tmp_path / f"ledger_{mem.run_key}.sqlite")
+    m.seed([Job(23, 0, 358)])
+    assert [(j.band, j.batch, j.n_files, j.status) for j in m.all()] == [(23, 0, 358, "queued")]
+    m.close()
+
+
+def test_memory_mode_config_rules():
+    v = V3Params(prep_inmem="on", peel_io="shm", snapshot_io="shm", hour_source="memory")
+    assert v.write_kept_ms is False and V3Params().write_kept_ms is True
+    assert V3Params(prep_inmem="on", peel_io="shm", snapshot_io="shm", hour_source="memory",
+                    write_kept_ms=True).write_kept_ms is True
+    with pytest.raises(ConfigError, match="checkpoint"):
+        V3Params(prep_inmem="on", peel_io="shm", snapshot_io="shm", hour_source="memory", checkpoint="none")
+    base = dict(date="2026-10-31", hours="all", bands=[23], batch_size=90, max_retries=1, data_root="/d",
+                output_root="/o", chanbin=4, cal=None, peel=None, peel_overrides={},
+                imaging=config_mod.ImagingParams(mode="clean", imager="ttcalx"), movie=None, do_aoflag=False,
+                do_badants=True, env=None, layout="lst", lst_hours=[5], run_label="Run_x", stream_hour_images=True,
+                prep="numpy", v3=v)
+    with pytest.raises(ConfigError, match="batch_timeout_seconds"):       # prod: 7200 / 7200
+        config_mod.PipelineConfig(**base, batch_timeout_seconds=7200,
+                                  hour_imaging=config_mod.HourImagingParams(timeout_seconds=7200))
+    config_mod.PipelineConfig(**base, batch_timeout_seconds=7200 + 1800 + 300,
+                              hour_imaging=config_mod.HourImagingParams(timeout_seconds=7200))
+
+
+@needs_v3_imager
+def test_rerun_plan_counts_existing_records(env, monkeypatch, caplog):
+    """Review finding 4: n_todo = 0 on a rerun but the checkpoint holds 12 GB, 1 GB free: spill."""
+    from gpu_subband_imaging.v3 import memory, worker_v3
+    cfg = _config(env.tmp, store="auto")
+    w = _worker(cfg, FakeDaemon())
+    vb = worker_v3.V3Batch(w, env.tars)
+    ck = vb._ck_name(cfg.pipeline.v3.spill_dirs[0])
+    monkeypatch.setattr(worker_v3.V3Batch, "_existing_store", lambda self: (ck, 350, 12e9))
+    monkeypatch.setattr(memory, "mem_available", lambda *a: (16 + 1) * 1e9)
+    monkeypatch.setattr(memory, "reserved_by_others", lambda *a: 0.0)
+    with caplog.at_level(logging.INFO, logger="gsi"):
+        vb._plan_store(0)
+    assert vb.plan.backend == "memmap" and vb.store_path == ck and "V3_MEM_SPILL" in caplog.text
+    memory.unreserve()

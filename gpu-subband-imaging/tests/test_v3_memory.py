@@ -25,7 +25,8 @@ def test_record_estimate_by_band():
 def test_auto_ram_when_it_fits(tmp_path):
     p = memory.plan_store("auto", 358, 23, 16.0, [str(tmp_path / "sp")], avail=100 * GB, others=0.0)
     assert p.backend == "ram" and p.spill_dir is None
-    assert p.need_bytes == pytest.approx(358 * memory.RECORD_BYTES * memory.NEED_FACTOR)
+    assert p.record_bytes == pytest.approx(358 * memory.RECORD_BYTES * memory.NEED_FACTOR)
+    assert p.need_bytes == pytest.approx(p.record_bytes + memory.FIXED_BYTES)
 
 
 def test_auto_spills_to_the_first_dir_with_room(tmp_path, monkeypatch):
@@ -39,8 +40,8 @@ def test_auto_spills_to_the_first_dir_with_room(tmp_path, monkeypatch):
     # the other process's reservation counts against this one
     p2 = memory.plan_store("auto", 100, 23, 16.0, [str(big)], avail=30 * GB, others=12 * GB)
     assert p2.backend == "memmap"
-    p3 = memory.plan_store("auto", 100, 23, 16.0, [str(big)], avail=30 * GB, others=0.0)
-    assert p3.backend == "ram"
+    p3 = memory.plan_store("auto", 100, 23, 16.0, [str(big)], avail=40 * GB, others=0.0)
+    assert p3.backend == "ram"                     # 4 GB records + 15 GB fixed <= 24 GB
     with pytest.raises(RuntimeError, match="no v3.spill_dirs entry"):
         memory.plan_store("auto", 358, 23, 16.0, [str(small)], avail=30 * GB, others=0.0)
 
@@ -72,11 +73,23 @@ def test_reservations_of_live_processes_only(tmp_path):
     assert not me.exists()
 
 
-def test_guard_fires_once_every_n(tmp_path):
+def test_guard_fires_every_n_while_below(tmp_path):
     g = memory.MemoryGuard(16.0, every=3)
     assert [g.check(avail=100 * GB) for _ in range(3)] == [False, False, False]
-    assert [g.check(avail=1 * GB) for _ in range(3)] == [False, False, True]
-    assert [g.check(avail=1 * GB) for _ in range(6)] == [False] * 6
+    assert [g.check(avail=1 * GB) for _ in range(6)] == [False, False, True, False, False, True]
+    assert g.fired == 2 and [g.check(avail=100 * GB) for _ in range(3)] == [False] * 3
+
+
+def test_rerun_plan_counts_the_checkpoint_and_the_fixed_term(tmp_path):
+    """n_todo = 0 on a rerun, but the checkpoint holds 12 GB of records and 1 GB is free: spill, in the
+    checkpoint's own dir (not RAM because "nothing is left to do")."""
+    ck = tmp_path / "ck"
+    p = memory.plan_store("auto", 350, 23, 16.0, [str(tmp_path / "other")], record_bytes=12e9 / 350,
+                          avail=17 * GB, others=0.0, want_file=True, prefer_dir=str(ck))
+    assert p.backend == "memmap" and p.spill_dir == str(ck)
+    assert p.record_bytes == pytest.approx(12e9 * memory.NEED_FACTOR)
+    small = memory.plan_store("auto", 1, 23, 16.0, [str(tmp_path / "sp")], avail=16 * GB + 10 * GB, others=0.0)
+    assert small.backend == "memmap"                # one record, but the processes themselves need 15 GB
 
 
 def _rec(seed, stem):

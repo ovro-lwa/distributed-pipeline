@@ -300,3 +300,67 @@ def test_hour_op_uses_the_newest_record_of_the_expected_stems(tmp_path):
         assert r["extra_records"] == [stems[2]] and r["n_loaded"] == 2
     finally:
         c.close()
+
+
+@needs_v3_imager
+def test_failed_store_reopen_fails_the_engine_for_good(tmp_path):
+    calls = []
+
+    def reopen(cl):
+        calls.append(1)
+        raise RuntimeError("store_open failed")
+    c = _client(on_restart=reopen)
+    try:
+        c.request("info")
+        c.restart("test")
+        with pytest.raises(engine_client.EngineFailed, match="restart failed"):
+            c.request("info")
+        with pytest.raises(engine_client.EngineFailed):          # no further restarts
+            c.request("info")
+        assert calls == [1] and not c.alive
+    finally:
+        c.close()
+
+
+@needs_v3_imager
+def test_engine_rotation_and_rephase_equal_chgcentre(tmp_path):
+    """The UVW, DATA and PHASE_DIR the engine hands the imager (prepare(): rotate.chgcentre_uvw,
+    rotate.rephase, chgcentre's parse; numpy in the fake backend, the same code on CuPy) against a
+    chgcentre'd copy of the same MS."""
+    import shutil
+    import subprocess
+    if not CASACORE or not os.path.exists("/opt/bin/chgcentre"):
+        pytest.skip("needs casacore measures and /opt/bin/chgcentre")
+    from casacore.tables import table
+    from gpu_subband_imaging.v3 import peel_shm
+    from v3_synth import make_raw_ms
+    ms = tmp_path / "20261031_101007_23MHz.ms"
+    make_raw_ms(ms, nant=12, nchan=8, f0=50e6, df=1e5)
+    pc = "05h30m00s 37d12m57.057s"
+    snap = peel_shm.snap_from_ms(ms)
+    slots.write_slot(tmp_path / "s", snap)
+    slots.set_state(tmp_path / "s", slots.PEELED)
+    c = _client(GSI_V3_FAKE_DUMP="1")
+    try:
+        c.request("store_open", path=None, backend="ram")
+        c.request("image_slot", **_req(tmp_path / "s", tmp_path / "img", "20261031_101007_23MHz", phase_centre=pc,
+                                       record_phase_centre=pc))
+    finally:
+        c.close()
+    got = np.load(tmp_path / "img-prep.npz")
+    ref = tmp_path / "chg.ms"
+    shutil.copytree(ms, ref)
+    r = subprocess.run(["/opt/bin/chgcentre", str(ref)] + pc.split(), capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    with table(str(ref), ack=False) as t:
+        uvw, data, a1, a2 = t.getcol("UVW"), t.getcol("DATA"), t.getcol("ANTENNA1"), t.getcol("ANTENNA2")
+    with table(str(ref) + "/FIELD", ack=False) as f:
+        pd = f.getcol("PHASE_DIR")[0, 0]
+    keep = a1 != a2
+    assert np.abs(got["uvw"][keep] - uvw[keep]).max() < 1e-6
+    rms = np.sqrt(np.mean(np.abs(data[keep]) ** 2))
+    assert np.abs(got["data"][keep] - data[keep]).max() / rms < 1e-5
+    assert np.array_equal(got["a1"], a1)
+    if np.finfo(np.longdouble).eps < np.finfo(np.float64).eps:      # x87: chgcentre's parse is exact
+        assert list(got["phase_dir"]) == list(pd)
+    assert np.abs(got["phase_dir"] - pd).max() < 1e-15
