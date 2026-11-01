@@ -818,6 +818,38 @@ class HourStore:
             self._writer.close()
             self._writer = None
 
+    def latest(self) -> Dict[str, Record]:
+        """The newest record of every stem (records are kept in append / file order)."""
+        out: Dict[str, Record] = {}
+        for r in self.records:
+            out[r.stem] = r
+        return out
+
+    def spill(self, path: Optional[PathLike] = None) -> Path:
+        """Switch a RAM store to memory-mapped records (gsi v3 memory policy, V3_MEM_SPILL).
+
+        A store with a file (checkpoint) already has every record there; a RAM-only store first
+        writes its records to ``path``.  Afterwards the RAM copies are dropped (the arrays are
+        views of the file, read from the page cache / disk when used) and later appends are
+        memory-mapped as well.  Returns the file."""
+        if self.backend == "memmap":
+            return self.path                     # type: ignore[return-value]
+        if self.path is None:
+            if path is None:
+                raise ValueError("HourStore.spill: a RAM-only store needs a path")
+            self.path = Path(path)
+            if self.path.exists() and self.path.stat().st_size > 0:
+                raise GSIVError(f"{self.path} exists: a RAM-only store does not spill into another file")
+            old, self.records = self.records, []
+            for r in old:
+                self.append(Record(r.meta, r.arrays))     # writes the file (first append makes it)
+            del old
+        if self._writer is not None:
+            self._writer._f.flush()
+        _, _, self.records = read_records(self.path, backend="memmap", verify=False)
+        self.backend = "memmap"
+        return self.path
+
 
 def _with_shared(arrays: Dict[str, np.ndarray], header_arrays: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
     out = dict(arrays)
@@ -878,16 +910,36 @@ def records_from_ms(ms_path: PathLike, ra: Optional[float] = None, dec: Optional
 
 
 def records_from_snap(snap, ra: Optional[float] = None, dec: Optional[float] = None, want_v: bool = True,
-                      peel: Optional[Dict[str, Any]] = None) -> Record:
+                      peel: Optional[Dict[str, Any]] = None, stem: Optional[str] = None,
+                      path: Optional[str] = None, R: Optional[np.ndarray] = None) -> Record:
     """Record of one in-memory snapshot (v3.snap.SnapArrays, all rows in MS order) with the
-    imager's own expressions (msio.msdata_from_arrays + samples_from_msdata)."""
+    imager's own expressions (msio.msdata_from_arrays + samples_from_msdata), i.e. what
+    ``records_from_ms`` gives for the MS written from ``snap``.
+
+    stem / path: the record's names (as records_from_ms; default ``snap.stem`` and
+    ``meta["path"]`` or ``<stem>.ms``).  R: the rotation to (ra, dec) if the caller computed it already with
+    ``rotate.snapshot_rotation(cross uvw, a1, a2, ant_pos, TIME[0], ra, dec)`` -- the call
+    samples_from_msdata makes (the engine keeps every casacore measures call on one thread).
+    The record never refers to ``snap``'s memory (a reused shm slot): every array is a copy."""
     from ttcalx_imager.msio import msdata_from_arrays, samples_from_msdata
     m = snap.meta
-    ms = msdata_from_arrays(m.get("path", f"{snap.stem}.ms"), snap.antenna1, snap.antenna2, snap.uvw,
-                            snap.data, snap.flag, snap.weight, snap.time, m["freqs"], m["chan_width"],
-                            m["phase_dir"], m["ant_pos"], telescope=m.get("telescope", "OVRO-LWA"),
+    path = str(path or m.get("path") or f"{stem or snap.stem}.ms")
+    ms = msdata_from_arrays(path, snap.antenna1, snap.antenna2, snap.uvw,
+                            snap.data, snap.flag, snap.weight, snap.time, np.array(m["freqs"], np.float64),
+                            np.array(m["chan_width"], np.float64), [float(x) for x in m["phase_dir"]],
+                            np.array(m["ant_pos"], np.float64), telescope=m.get("telescope", "OVRO-LWA"),
                             observer=m.get("observer", ""), field_name=m.get("field_name", ""), want_v=want_v)
-    return record_from_compact(samples_from_msdata(ms, ra, dec, want_v, compact=True), peel)
+    if R is not None and ra is not None:
+        c = samples_from_msdata(ms, None, None, want_v, compact=True)
+        c.update(R=np.asarray(R, np.float64), pd_new=(ra, dec))
+    else:
+        c = samples_from_msdata(ms, ra, dec, want_v, compact=True)
+    rec = record_from_compact(c, peel)
+    if stem:
+        rec.meta["stem"] = str(stem)
+    for k in ("freqs", "chan_width", "ant_pos", "a1", "a2", "R"):     # never a view of the slot
+        rec.arrays[k] = np.array(rec.arrays[k], copy=True)
+    return rec
 
 
 def header_for(band: int, date: str, group: str, phase_centre: Optional[str], run_label: str = "",
