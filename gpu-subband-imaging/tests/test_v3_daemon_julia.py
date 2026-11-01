@@ -111,3 +111,14 @@ def test_daemon_slot_io_matches_numpy(mode, tmp_path):
         assert d.restarts == 0
     finally:
         d.close()
+
+
+@pytest.mark.parametrize("key", ["ZEST_SMOOTH_BELOW_MHZ", "ZEST_SMOOTH_EXEMPT_FLUX",
+                                 "ZEST_RFI_SMOOTH_FLUX"])
+def test_daemon_rejects_negative_smoothing_switches(key):
+    env = dict(os.environ, CUDA_VISIBLE_DEVICES="")
+    with pytest.raises(RuntimeError, match=f"{key} must be >= 0"):
+        ZestDaemon(_julia(), os.environ["TTCALX_DIR"], str(DAEMON_JL), SOURCES, env=env,
+                   zest_env={"ZEST_DEVICE": "cpu", "ZEST_MODEL": "exact", "ZEST_COLUMN": "DATA",
+                             key: "-1", "JULIA_NUM_THREADS": "2"},
+                   start_timeout=900)

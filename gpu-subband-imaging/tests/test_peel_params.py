@@ -99,3 +99,58 @@ def test_shipped_config_has_no_rfi_model():
     cfg = Config.load(CONFIG)
     assert cfg.pipeline.cal.rfi_sources is None
     assert cfg.pipeline.peel.rfi is False
+
+
+# ---- smoothing switches (docs/peel_config.md) --------------------------------------------
+
+SMOOTH_KEYS = ("ZEST_SMOOTH_BELOW_MHZ", "ZEST_SMOOTH_EXEMPT_FLUX", "ZEST_RFI_SMOOTH_FLUX")
+
+
+def test_smoothing_switches_unset_by_default():
+    # the default environment is exactly the one before the switches existed
+    for p in (PeelParams(), PeelParams(engine="sky_rfi", smooth_flux=1000.0)):
+        env = p.daemon_env(rfi_sources=None)
+        assert not any(k in env for k in SMOOTH_KEYS)
+    assert PeelParams(smooth_flux=1000.0).daemon_env(None)["ZEST_SMOOTH_FLUX"] == "1000.0"
+
+
+def test_smoothing_switches_env_mapping():
+    env = PeelParams(engine="sky_rfi", smooth_flux=1000.0, smooth_below_mhz=65.0,
+                     smooth_exempt_flux=500.0, rfi_smooth_flux=0.0).daemon_env(None)
+    assert env["ZEST_SMOOTH_FLUX"] == "1000.0"
+    assert env["ZEST_SMOOTH_BELOW_MHZ"] == "65.0"
+    assert env["ZEST_SMOOTH_EXEMPT_FLUX"] == "500.0"
+    assert env["ZEST_RFI_SMOOTH_FLUX"] == "0.0"          # 0 is a value, not "unset"
+    only_gate = PeelParams(smooth_below_mhz=65).daemon_env(None)
+    assert only_gate["ZEST_SMOOTH_BELOW_MHZ"] == "65"
+    assert "ZEST_SMOOTH_EXEMPT_FLUX" not in only_gate and "ZEST_RFI_SMOOTH_FLUX" not in only_gate
+
+
+@pytest.mark.parametrize("field,value", [
+    ("smooth_flux", -1.0), ("smooth_below_mhz", -65.0), ("smooth_exempt_flux", -500.0),
+    ("rfi_smooth_flux", -1.0), ("smooth_exempt_flux", float("nan")), ("smooth_below_mhz", "65"),
+    ("smooth_flux", True),
+])
+def test_smoothing_switches_must_be_non_negative_numbers(field, value):
+    with pytest.raises(ConfigError, match=field):
+        PeelParams(**{field: value})
+
+
+def test_yaml_smoothing_gate_and_band_override(tmp_path):
+    for name in ("cluster.yaml", "subbands.yaml"):
+        (tmp_path / name).write_text((CONFIG / name).read_text())
+    d = yaml.safe_load((CONFIG / "pipeline.yaml").read_text())
+    d["peel"].update(CPU_MATCHED, device="cpu", engine="sky_rfi", smooth_flux=1000.0,
+                     smooth_exempt_flux=500.0, smooth_below_mhz=65.0)
+    d["peel_overrides"] = {82: {"smooth_flux": 0.0}}
+    (tmp_path / "pipeline.yaml").write_text(yaml.safe_dump(d))
+    cfg = Config.load(tmp_path)
+    low = cfg.pipeline.peel_for_band(23).daemon_env(None)
+    high = cfg.pipeline.peel_for_band(82).daemon_env(None)
+    assert low["ZEST_SMOOTH_FLUX"] == "1000.0" and low["ZEST_SMOOTH_BELOW_MHZ"] == "65.0"
+    assert low["ZEST_SMOOTH_EXEMPT_FLUX"] == "500.0"
+    assert high["ZEST_SMOOTH_FLUX"] == "0.0" and high["ZEST_SMOOTH_EXEMPT_FLUX"] == "500.0"
+    d["peel"]["smooth_below_mhz"] = -1
+    (tmp_path / "pipeline.yaml").write_text(yaml.safe_dump(d))
+    with pytest.raises(ConfigError, match="smooth_below_mhz"):
+        Config.load(tmp_path)

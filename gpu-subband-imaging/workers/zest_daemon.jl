@@ -30,7 +30,11 @@
 #                      feature/sponge-restore-fast-zest) with ZEST_SMOOTH_FLUX, ZEST_RESTORE,
 #                      ZEST_RESTORE_BELOW_MHZ, ZEST_RESTORE_OFFSET_DEG, ZEST_PRECISION,
 #                      ZEST_WARM_START (the exact model, geometric UVW, flagged models and the
-#                      residual guard are built in)
+#                      residual guard are built in), and the smoothing switches
+#                      ZEST_SMOOTH_BELOW_MHZ (> 0: smooth only subbands whose centre frequency
+#                      is below it), ZEST_SMOOTH_EXEMPT_FLUX (> 0: sky sources with catalog flux
+#                      >= it keep per-channel gains) and ZEST_RFI_SMOOTH_FLUX (unset: the
+#                      ZEST_SMOOTH_FLUX value), all unset by default
 # Anything but the defaults needs TTCalX with solve_gains!
 # (branch feature/cpu-matched-zest).
 #
@@ -86,6 +90,13 @@ reg_taper = envf("ZEST_REG_TAPER_DEG", 1.0)
 reg_lambda = envf("ZEST_REG_LAMBDA", 1.0)
 sky_rfi = envs("ZEST_ENGINE", "daemon", ("daemon", "sky_rfi")) == "sky_rfi"
 smooth_flux = envf("ZEST_SMOOTH_FLUX", 0.0)
+smooth_below_mhz = envf("ZEST_SMOOTH_BELOW_MHZ", 0.0)       # 0: smooth every subband
+smooth_exempt_flux = envf("ZEST_SMOOTH_EXEMPT_FLUX", 0.0)   # 0: no source exempt
+rfi_smooth_flux = envf("ZEST_RFI_SMOOTH_FLUX", smooth_flux)
+for (k, v) in (("ZEST_SMOOTH_FLUX", smooth_flux), ("ZEST_SMOOTH_BELOW_MHZ", smooth_below_mhz),
+               ("ZEST_SMOOTH_EXEMPT_FLUX", smooth_exempt_flux), ("ZEST_RFI_SMOOTH_FLUX", rfi_smooth_flux))
+    v >= 0 || (println("CONFIG_ERROR $k must be >= 0, got $v"); flush(stdout); exit(2))
+end
 restore_path = get(ENV, "ZEST_RESTORE", "")
 restore_below_mhz = envf("ZEST_RESTORE_BELOW_MHZ", Inf)
 restore_offset_deg = envf("ZEST_RESTORE_OFFSET_DEG", 0.0)
@@ -297,13 +308,23 @@ println(
 restore_sources = isempty(restore_path) ? GPUSource[] : read_gpu_sources(restore_path)
 any(s -> get_name(s) in ("Sun", "Moon", "Jupiter"), restore_sources) &&
     error("ZEST_RESTORE: a source named Sun/Moon/Jupiter is read as a placeholder; rename it")
-sky_rfi && println(@sprintf("SKY_RFI smooth_flux=%g restore=%d below_mhz=%g offset_deg=%g precision=%s warm_start=%s peeliter=%d",
+sky_rfi && println(@sprintf("SKY_RFI smooth_flux=%g restore=%d below_mhz=%g offset_deg=%g precision=%s warm_start=%s peeliter=%d smooth_below_mhz=%g smooth_exempt_flux=%g rfi_smooth_flux=%g",
                            smooth_flux, length(restore_sources), restore_below_mhz, restore_offset_deg,
-                           precision, warm_start, piter))
+                           precision, warm_start, piter, smooth_below_mhz, smooth_exempt_flux,
+                           rfi_smooth_flux))
 flush(stdout)
 
 # zest_sky_rfi! for one snapshot; returns the gains for a warm start of the next one
 function run_sky_rfi!(vis, meta, mjd, initial_gains)
+    # smoothing switches: the subband-centre gate and the bright-source exemption
+    sflux, rflux = smooth_flux, rfi_smooth_flux
+    if smooth_below_mhz > 0
+        centre_mhz = sum(Array(meta.channels)) / length(meta.channels) / 1e6
+        gated = centre_mhz >= smooth_below_mhz
+        gated && (sflux = rflux = 0.0)
+        @printf("PEEL_SMOOTH_GATE centre_mhz=%.3f below_mhz=%g smoothing=%s\n", centre_mhz,
+                smooth_below_mhz, gated ? "off" : "on")
+    end
     elev = Dict(get_name(s) => elevation_deg(s, meta) for s in vcat(sources, rfi_sources))
     rfi_names = Set(get_name.(rfi_sources))
     report = (name, it; converged, niters, finite, max_gain, p_with, p_old, p_new, action) -> @printf(
@@ -313,7 +334,8 @@ function run_sky_rfi!(vis, meta, mjd, initial_gains)
     r = zest_sky_rfi!(vis, meta, mjd, sources, rfi_sources;
                       rfi_mode=rfi_joint ? :joint : :after, solver=solver, maxiter=mi, tolerance=tol,
                       minuvw=muvw, peeliter=piter, max_gain=max_gain, min_elevation=min_elevation,
-                      flag_zeros=flag_zero, report=report, smooth_flux=smooth_flux,
+                      flag_zeros=flag_zero, report=report, smooth_flux=sflux, rfi_smooth_flux=rflux,
+                      smooth_exempt_flux=smooth_exempt_flux > 0 ? smooth_exempt_flux : Inf,
                       restore=restore_sources, restore_below_mhz=restore_below_mhz,
                       restore_offset_deg=restore_offset_deg, precision=precision,
                       initial_gains=initial_gains)
