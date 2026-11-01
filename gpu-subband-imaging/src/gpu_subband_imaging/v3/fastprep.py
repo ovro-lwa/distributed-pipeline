@@ -411,4 +411,6 @@ def prep_task(raw_ms: str, bp: str, xy: str, badants: str, chanbin: int, fix_uvw
     else:
         res["snap"] = snap
     res["meta"] = {k: v for k, v in snap.meta.items() if k not in ("ant_pos",)}
+    import resource
+    res["maxrss_mb"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
     return res
