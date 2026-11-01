@@ -468,3 +468,42 @@ def prep_task(raw_ms: str, bp: str, xy: str, badants: str, chanbin: int, fix_uvw
     res["maxrss_mb"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
     res["task_wall"] = time.perf_counter() - t_task
     return res
+
+
+def prep_slot_task(raw_ms: str, bp: str, xy: str, badants: str, chanbin: int, fix_uvw_mode: str,
+                   sample_rows: int, min_amplitude: float, slot: str,
+                   min_nonzero_fraction: float = 0.0) -> Dict[str, Any]:
+    """gsi v3 steps 2+4 (prep_inmem=on, peel_io=shm, snapshot_io=shm): prep_arrays in a pool
+    process and write the result straight into the shm slot ``slot`` (state PREPPED), no MS.
+
+    The slot is not written when the visibility statistics are below ``min_nonzero_fraction``
+    (the worker skips such a snapshot before peeling, as v2).  Returns {"meta" (without the
+    arrays), "stats", "slot_written", "slot_nbytes", "task_wall", "maxrss_mb", "pid"}."""
+    from . import slots
+    t_task = time.perf_counter()
+    snap = prep_arrays(raw_ms, bp, xy, badants, chanbin, fix_uvw_mode)
+    timings = snap.meta.pop("timings", {})       # the slot JSON stays small; the timings travel back here
+    st = quality.visibility_stats_arrays(snap.data, snap.flag, sample_rows, min_amplitude)
+    res: Dict[str, Any] = {"stats": st.__dict__.copy(), "pid": os.getpid(), "slot_written": False}
+    if st.nonzero_fraction >= min_nonzero_fraction:
+        t0 = _clock()
+        h = slots.write_slot(slot, snap)
+        _lap(timings, "slot_write", t0)
+        res["slot_written"], res["slot_nbytes"] = True, int(h["nbytes"])
+    res["meta"] = {k: v for k, v in snap.meta.items() if k not in ("ant_pos", "freqs", "chan_width")}
+    res["meta"]["timings"] = timings
+    import resource
+    res["maxrss_mb"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+    res["task_wall"] = time.perf_counter() - t_task
+    return res
+
+
+def kept_from_slot_task(template_avg_ms: str, raw_ms: str, slot: str, out: str) -> Dict[str, Any]:
+    """Write the (peeled) slot as the kept MS ``out`` (write_ms_like) in a pool process: the MS
+    v2 keeps for the same snapshot (the slot holds what the zest daemon's MS write would)."""
+    from . import slots
+    t0 = time.perf_counter()
+    snap = slots.view_slot(slot, writable=False)
+    write_ms_like(template_avg_ms, raw_ms, snap, out)
+    del snap
+    return {"wall": time.perf_counter() - t0, "pid": os.getpid()}
