@@ -34,10 +34,12 @@
 # Anything but the defaults needs TTCalX with solve_gains!
 # (branch feature/cpu-matched-zest).
 #
-# Commands (one per line): an MS path (peel it in place), "SHM <slot>" (gsi v3: peel a
+# Commands (one per line): an MS path (peel it in place), "SHM <slot> [<id>]" (gsi v3: peel a
 # /dev/shm slot written by src/gpu_subband_imaging/v3/slots.py in place, see read_slot /
-# write_slot! below; ZEST_COLUMN must be DATA), or QUIT.  Replies: the PEEL_* / ZEST_TIMING
-# lines, then "ZESTED <path> <seconds>" or "FAILED <path> <error>".
+# write_slot! below; ZEST_COLUMN must be DATA), "RESET_WARM [<id>]" (drop the warm-start
+# gains), or QUIT.  Replies: the PEEL_* / ZEST_TIMING lines, then "ZESTED <path> <seconds>"
+# or "FAILED <path> <error on one line>"; slot commands append " id=<id>" to ZESTED and put
+# "id=<id>" right after the path in FAILED; RESET_WARM answers "RESET_WARM_OK id=<id>".
 push!(LOAD_PATH, joinpath(ENV["TTCALX_DIR"], "src"))
 include(joinpath(ENV["TTCALX_DIR"], "src", "TTCalX.jl"))
 using .TTCalX
@@ -337,6 +339,8 @@ prev_gains = nothing
 const SLOT_MAGIC = Vector{UInt8}("GSISLOT1")
 const SLOT_JSON_OFFSET = 64
 const SLOT_STATE_FREE = UInt32(0)       # contents not valid
+const SLOT_STATE_PREPPED = UInt32(1)
+const SLOT_STATE_OFFSET = 12
 const SLOT_STATE_PEELED = UInt32(2)
 const SLOT_TYPES = Dict("<c8" => ComplexF32, "|b1" => Bool, "<i4" => Int32, "<f8" => Float64,
                         "<f4" => Float32)
@@ -345,8 +349,11 @@ function slot_header(io::IOStream)
     seekstart(io)
     read(io, 8) == SLOT_MAGIC || error("not a GSISLOT1 slot")
     n = ltoh(read(io, UInt32))
+    state = ltoh(read(io, UInt32))
     seek(io, SLOT_JSON_OFFSET)
-    JSON.parse(String(read(io, n)))
+    h = JSON.parse(String(read(io, n)))
+    h["state"] = Int(state)
+    h
 end
 
 """Mmap of one C-order slot array as Array{T,N}, dims reversed (numpy (nrow, nchan, 4) ->
@@ -409,18 +416,25 @@ baseline's row, identity calibration, ComplexF32 -> ComplexF64.
 function read_slot(path::String; gpu::Bool=true)
     open(path, "r") do io
         h = slot_header(io)
+        h["state"] == SLOT_STATE_PREPPED ||
+            error("slot state is $(h["state"]), expected PREPPED ($(Int(SLOT_STATE_PREPPED)))")
         Int(h["ncorr"]) == 4 || error("slot has $(h["ncorr"]) correlations, expected 4")
-        a1 = slot_array(io, h, "antenna1", Int32, Val(1))
-        a2 = slot_array(io, h, "antenna2", Int32, Val(1))
-        data = slot_array(io, h, "data", ComplexF32, Val(3))         # (4, Nf, Nrows)
-        flag = slot_array(io, h, "flag", Bool, Val(3))
-        uvw_rows = slot_array(io, h, "uvw", Float64, Val(2))         # (3, Nrows)
-        time_rows = slot_array(io, h, "time", Float64, Val(1))
-        freqs = slot_array(io, h, "meta.freqs", Float64, Val(1))
-        ant_pos = slot_array(io, h, "meta.ant_pos", Float64, Val(2))  # (3, Nant)
-        pd = slot_array(io, h, "meta.phase_dir", Float64, Val(1))
+        maps = Any[]           # every mapping is unmapped below, also when a later one fails
         try
+            m(name, T, n) = (A = slot_array(io, h, name, T, Val(n)); push!(maps, A); A)
+            a1, a2 = m("antenna1", Int32, 1), m("antenna2", Int32, 1)
+            data, flag = m("data", ComplexF32, 3), m("flag", Bool, 3)        # (4, Nf, Nrows)
+            uvw_rows, time_rows = m("uvw", Float64, 2), m("time", Float64, 1)
+            freqs, ant_pos = m("meta.freqs", Float64, 1), m("meta.ant_pos", Float64, 2)
+            pd = m("meta.phase_dir", Float64, 1)
             Nrows = length(a1)
+            size(data, 1) == 4 && size(data, 3) == Nrows && length(a2) == Nrows &&
+                size(flag) == size(data) && size(uvw_rows) == (3, Nrows) &&
+                length(time_rows) == Nrows ||
+                error("slot arrays disagree: antenna1 $(length(a1)), antenna2 $(length(a2)), " *
+                      "data $(size(data)), flag $(size(flag)), uvw $(size(uvw_rows)), time $(length(time_rows))")
+            size(ant_pos, 1) == 3 || error("slot ant_pos must be (nant, 3)")
+            length(pd) >= 2 || error("slot phase_dir must be (2,)")
             cross, lo0, hi0 = slot_cross_rows(a1, a2)
             lo, hi = lo0 .+ 1, hi0 .+ 1
             Nbase, Nf = length(cross), size(data, 2)
@@ -430,11 +444,11 @@ function read_slot(path::String; gpu::Bool=true)
             uvw = Float64.(uvw_rows[:, cross])
             channels = Float64.(vec(freqs))
             length(channels) == Nf || error("slot has $(length(channels)) freqs for $Nf channels")
-            size(ant_pos, 1) == 3 || error("slot ant_pos must be (nant, 3)")
             antenna_positions = Float64.(ant_pos)
             ra, dec = Float64(pd[1]), Float64(pd[2])
             mjd = (minimum(time_rows) + maximum(time_rows)) / 2 / 86400      # ms_mjd
             Na = size(antenna_positions, 2)
+            maximum(hi) <= Na || error("slot antenna index $(maximum(hi)) > $Na antennas")
             baselines = Int32.(permutedims(hcat(lo, hi)))
             baseline_dict = Dict{Tuple{Int,Int}, Int}((lo[α], hi[α]) => α for α in 1:Nbase)
             up = gpu && CUDA.functional() ? CuArray : identity
@@ -446,7 +460,7 @@ function read_slot(path::String; gpu::Bool=true)
                                  up(falses(Na, Nf)), true)
             vis, cal, meta, baseline_dict, Nrows, mjd
         finally
-            unmap!(a1, a2, data, flag, uvw_rows, time_rows, freqs, ant_pos, pd)
+            unmap!(maps...)
         end
     end
 end
@@ -465,13 +479,16 @@ function write_slot!(path::String, vis::GPUVisibilities, baseline_dict::Dict, Nr
     open(path, "r+") do io
         h = slot_header(io)
         state_offset = Int(h["state_offset"])
-        a1 = slot_array(io, h, "antenna1", Int32, Val(1))
-        a2 = slot_array(io, h, "antenna2", Int32, Val(1))
-        data = slot_array(io, h, "data", ComplexF32, Val(3))
-        flag = slot_array(io, h, "flag", Bool, Val(3))
-        seek(io, state_offset); write(io, htol(SLOT_STATE_FREE)); flush(io)
+        maps = Any[]
         try
-            length(a1) == Nrows || error("slot has $(length(a1)) rows, read had $Nrows")
+            m(name, T, n) = (A = slot_array(io, h, name, T, Val(n)); push!(maps, A); A)
+            a1, a2 = m("antenna1", Int32, 1), m("antenna2", Int32, 1)
+            data, flag = m("data", ComplexF32, 3), m("flag", Bool, 3)
+            length(a1) == Nrows && length(a2) == Nrows && size(data, 3) == Nrows &&
+                size(flag) == size(data) && size(data, 1) == 4 &&
+                size(data, 2) == size(xx, 2) ||
+                error("slot has $(length(a1)) rows / data $(size(data)); the read had $Nrows rows, $(size(xx, 2)) channels")
+            seek(io, state_offset); write(io, htol(SLOT_STATE_FREE)); flush(io)
             Na = maximum(maximum(k) for k in keys(baseline_dict))
             n = max(Int(maximum(a1)), Int(maximum(a2))) + 1
             index = zeros(Int, max(Na, n), max(Na, n))   # [a1, a2] (1-based) -> baseline
@@ -480,7 +497,7 @@ function write_slot!(path::String, vis::GPUVisibilities, baseline_dict::Dict, Nr
             end
             slot_scatter!(data, flag, a1, a2, index, xx, xy, yx, yy, fl)
         finally
-            unmap!(a1, a2, data, flag)
+            unmap!(maps...)
         end
         seek(io, state_offset)
         write(io, htol(SLOT_STATE_PEELED))
@@ -538,8 +555,15 @@ for line in eachline(stdin)
     cmd = String(strip(line))
     isempty(cmd) && continue
     cmd == "QUIT" && break
+    if cmd == "RESET_WARM" || startswith(cmd, "RESET_WARM ")
+        global prev_gains = nothing
+        println("RESET_WARM_OK id=", strip(cmd[11:end])); flush(stdout)
+        continue
+    end
     shm = startswith(cmd, "SHM ")
-    ms = shm ? String(strip(cmd[5:end])) : cmd
+    parts = split(cmd)
+    ms = shm ? String(parts[2]) : cmd
+    rid = shm && length(parts) >= 3 ? " id=" * parts[3] : ""
     t0 = time()
     try
         if shm
@@ -555,10 +579,13 @@ for line in eachline(stdin)
         t_write = @elapsed (shm ? write_slot!(ms, vis, bl, nrows) :
                                   write_ms!(ms, vis, bl, nrows; column=col))
         @printf("ZEST_TIMING read=%.2f peel=%.2f write=%.2f\n", t_read, t_peel, t_write)
-        @printf("ZESTED %s %.2f\n", ms, time() - t0)
+        @printf("ZESTED %s %.2f%s\n", ms, time() - t0, rid)
     catch e
         global prev_gains = nothing
-        println("FAILED $ms $(sprint(showerror, e))")
+        # one line, so a multi-line message (e.g. a PyCall traceback) cannot be read as the
+        # next command's reply
+        msg = replace(sprint(showerror, e), r"\s*\n\s*" => " | ")
+        println("FAILED $ms$rid $msg")
     end
     flush(stdout)
     use_gpu && CUDA.reclaim()
