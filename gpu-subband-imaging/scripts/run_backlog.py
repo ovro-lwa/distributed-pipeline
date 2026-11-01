@@ -66,6 +66,18 @@ def load_badants(json_dir: str) -> Dict[str, Counter]:
     return out
 
 
+def date_badants(badants: Dict[str, Counter], date: str, hour: int) -> Optional[str]:
+    """Most common bad-antenna list exopipe logged on the date: in this LST hour, else any hour."""
+    for prefix in (f"{hour:02d}h/{date}/", None):
+        c = Counter()
+        for key, lists in badants.items():
+            if (prefix and key.startswith(prefix)) or (prefix is None and f"/{date}/" in key):
+                c.update(lists)
+        if c:
+            return c.most_common(1)[0][0]
+    return None
+
+
 def write_backlog_config(template: Path, out_dir: Path, date: str, hours, run_label: str,
                          bp: str, bands: List[int], badants: Optional[Dict], note: str) -> Path:
     """hours: one LST hour or a list; badants keyed by band or "<LST>h/<band>"."""
@@ -188,10 +200,19 @@ def main(argv=None) -> int:
         for h in hours:
             if h in done:
                 continue
-            bands, ba, runs, missing, multi = [], {}, {}, [], []
+            bands, ba, runs, missing, multi, fallback = [], {}, {}, [], [], []
             for band in tpl["bands"]:
                 run = exopipe_run(a.exopipe_root, date, h, band)
                 if run is None:
+                    if a.badants_dir:
+                        # no exopipe run for this band-hour: the date's own list (same LST hour
+                        # if exopipe logged one there, else the date's most common one)
+                        csv = date_badants(badants, date, h)
+                        if csv:
+                            ba[band] = csv
+                            bands.append(band)
+                            fallback.append(band)
+                            continue
                     missing.append(f"{band}(no exopipe run)")
                     continue
                 if a.badants_dir:
@@ -211,8 +232,12 @@ def main(argv=None) -> int:
                 f"{h:02d}h/{date}/{r} ({','.join(map(str, b))} MHz)" for r, b in runs.items()) + ".")
             if a.badants_dir:
                 note += " Bad antennas per band: the list exopipe logged for that band-hour's run."
+            if fallback:
+                note += (f" No exopipe run for {','.join(map(str, fallback))} MHz in {h:02d}h: those use the "
+                         f"date's own list (same LST hour where available).")
             print(f"  {h:02d}h: {len(bands)} bands, exopipe runs {sorted(runs)}"
                   + (f"; left out {missing}" if missing else "")
+                  + (f"; date list for {fallback} (no exopipe run)" if fallback else "")
                   + (f"; several logged lists (most common used) for {multi}" if multi else ""),
                   flush=True)
             plan.append((date, h, bp, bands, ba if a.badants_dir else None, note))
