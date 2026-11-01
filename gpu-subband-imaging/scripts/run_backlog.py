@@ -34,10 +34,14 @@ DEFAULT_EXOPIPE = "/lustre/pipeline/exopipe/phase1"
 
 
 def exopipe_bandpass(cal_root: str, date: str) -> Optional[str]:
-    """The date's 02h bandpass (newest successful solve), as the exopipe phase1 runs used."""
-    found = sorted(Path(cal_root, date, "02h", "successful").glob(
-        f"*/tables/calibration_{date}_02h.B.flagged"))
-    return str(found[-1]) if found else None
+    """The date's 02h bandpass (newest successful solve), as the exopipe phase1 runs used; a date
+    without one (2024-12-18 has only 01h) falls back to its other LST calibrations, nearest first."""
+    for lst_label in ["02h"] + [f"{h:02d}h" for h in (1, 3, 0, 4, 23, 5, 22)]:
+        found = sorted(Path(cal_root, date, lst_label, "successful").glob(
+            f"*/tables/calibration_{date}_{lst_label}.B.flagged"))
+        if found:
+            return str(found[-1])
+    return None
 
 
 def exopipe_hours(root: str, date: str) -> List[int]:
