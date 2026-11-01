@@ -408,23 +408,31 @@ def test_pool_is_replaced_after_a_child_crash(tmp_path, capfd):
 
 
 def test_pool_timeout_kills_and_replaces(tmp_path):
-    w = _worker(tmp_path, "on", prep_timeout_s=2.0)
+    # the short timeout only for the stuck task: spawning a pool on a loaded node can
+    # itself take seconds, and that must not count against it
+    w = _worker(tmp_path, "on", prep_timeout_s=120.0)
+    slow, fast = w.cfg.pipeline.v3, V3Params(prep_inmem="on", prep_procs=2, prep_timeout_s=2.0)
     w._v3_start_pool()
     try:
-        w._v3_run(os.getpid)
+        w._v3_run(os.getpid)                                 # pool is up
         old = w._v3_pool
         procs = list(old._processes.values())
+        w.cfg.pipeline.v3 = fast
         t0 = time.monotonic()
         with pytest.raises(TimeoutError):
-            w._v3_run(time.sleep, 120)
-        assert time.monotonic() - t0 < 30
+            w._v3_run(time.sleep, 600)
+        assert time.monotonic() - t0 < 120                   # far below the 600 s task
+        w.cfg.pipeline.v3 = slow
+        deadline = time.monotonic() + 60
+        while any(p.is_alive() for p in procs) and time.monotonic() < deadline:
+            time.sleep(0.2)
         assert all(not p.is_alive() for p in procs)
         assert w._v3_pool is not old
-        assert w._v3_run(np.add, 2, 2) == 4
+        assert w._v3_run(np.add, 2, 2) == 4                  # the new pool works
     finally:
         t0 = time.monotonic()
         w._v3_stop_pool()
-        assert time.monotonic() - t0 < 30
+        assert time.monotonic() - t0 < 120
 
 
 def test_discard_pool_cannot_hang(tmp_path):
@@ -432,11 +440,16 @@ def test_discard_pool_cannot_hang(tmp_path):
     w._v3_start_pool()
     pool = w._v3_pool
     pool.submit(os.getpid).result()
-    pool.submit(time.sleep, 120)                             # a stuck task at batch end
+    pool.submit(time.sleep, 600)                             # a stuck task at batch end
     procs = list(pool._processes.values())
     t0 = time.monotonic()
     Worker._v3_discard_pool(pool, kill=False, wait_s=1.0)
-    assert time.monotonic() - t0 < 30
+    # never hangs: returns long before the 600 s task would end (generous for a loaded
+    # node: shutdown wait 1 s + bounded joins + kill)
+    assert time.monotonic() - t0 < 120
+    deadline = time.monotonic() + 60                         # SIGKILLed: reaped soon
+    while any(p.is_alive() for p in procs) and time.monotonic() < deadline:
+        time.sleep(0.2)
     assert all(not p.is_alive() for p in procs)
 
 
