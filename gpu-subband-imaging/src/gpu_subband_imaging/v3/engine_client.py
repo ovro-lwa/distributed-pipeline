@@ -44,6 +44,10 @@ class EngineDied(RuntimeError):
     """The engine exited (or was killed after a fatal error) while the request was in flight."""
 
 
+class EngineFailed(EngineDied):
+    """No more restarts (exhausted, or a restart / on_restart failed): every later request fails."""
+
+
 class EngineTimeout(RuntimeError):
     """No reply within the deadline: the engine was killed (and is restarted on next use)."""
 
@@ -78,6 +82,7 @@ class EngineClient:
         self.abandoned: List[int] = []
         self.info: dict = {}
         self.closed = False
+        self.failed = ""                              # set when restarts are exhausted / a restart failed
         with self._gate:
             self._start()
 
@@ -186,17 +191,27 @@ class EngineClient:
     def _ensure(self) -> None:
         """A running engine for the next request; a restart runs on_restart first."""
         with self._gate:
+            if self.failed:
+                raise EngineFailed(f"gsi v3 engine failed for good: {self.failed}")
             if self.alive:
                 return
             if self.closed:
                 raise EngineDied("gsi v3 engine client is closed")
             if self.restarts >= self.max_restarts:
-                raise EngineDied(f"gsi v3 engine died {self.restarts + 1} times; giving up")
+                self.failed = f"died {self.restarts + 1} times"
+                log.critical("V3_ENGINE_FAILED: died %d times; giving up", self.restarts + 1)
+                raise EngineFailed(f"gsi v3 engine died {self.restarts + 1} times; giving up")
             self.restarts += 1
             log.error("V3_ENGINE_RESTART #%d", self.restarts)
-            self._start()
-            if self.on_restart is not None:
-                self.on_restart(self)               # re-entrant: its requests pass the gate
+            try:
+                self._start()
+                if self.on_restart is not None:
+                    self.on_restart(self)           # re-entrant: its requests pass the gate
+            except BaseException as e:              # a restarted engine that cannot serve is no engine
+                self.failed = f"restart #{self.restarts} failed: {e}"
+                log.critical("V3_ENGINE_FAILED: restart #%d failed: %s", self.restarts, e)
+                self._kill(f"restart failed: {e}")
+                raise EngineFailed(f"gsi v3 engine restart failed: {e}") from e
 
     # -- requests -----------------------------------------------------------------------------------
     def submit(self, op: str, **kw) -> "_Request":

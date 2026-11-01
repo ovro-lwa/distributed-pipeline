@@ -120,6 +120,18 @@ def small_of(snap, req, rot):
                 path=str(req.get("path") or req.get("slot")), stem=str(req.get("stem") or snap.stem), column="DATA")
 
 
+def prepare(snap, req, rot, xp=np):
+    """(small, DATA) of a slot snapshot as the imager would read them from v2's chgcentre'd MS copy:
+    the rotated UVW of every row in ``small`` and DATA re-phased with rotate.rephase (on ``xp``:
+    CuPy in the GPU backend, numpy in the fake one -- the same code)."""
+    from ttcalx_imager import rotate
+    small = small_of(snap, req, rot)
+    d = xp.asarray(snap.data)
+    if rot is not None and rot["uvw_new"] is not None:
+        d = rotate.rephase(d, np.asarray(snap.uvw)[:, 2], rot["uvw_new"][:, 2], small["freqs"], xp=xp)
+    return small, d
+
+
 # ----------------------------------------------------------------------------- backends
 class GpuBackend:
     name = "gpu"
@@ -145,11 +157,8 @@ class GpuBackend:
         cp, snapshot = self.cp, self.snapshot
         t0 = time.perf_counter()
         T = {}
-        small = small_of(snap, req, rot)
         t1 = time.perf_counter()
-        d = cp.asarray(snap.data)
-        if rot is not None and rot["uvw_new"] is not None:
-            d = snapshot.rephase(d, np.asarray(snap.uvw)[:, 2], rot["uvw_new"][:, 2], small["freqs"], xp=cp)
+        small, d = prepare(snap, req, rot, xp=cp)
         cp.cuda.Device().synchronize()
         T["H2D + rephase"] = time.perf_counter() - t1
         N, sc = bands.wsclean_size(int(req["pixels"])), float(req["scale"])
@@ -218,10 +227,12 @@ class FakeBackend:
             raise RuntimeError(f"fake failure for {stem}")
         if os.environ.get("GSI_V3_FAKE_FATAL") == stem:
             raise RuntimeError("CUDARuntimeError: cudaErrorIllegalAddress: an illegal memory access")
-        small = small_of(snap, req, rot)
+        small, d = prepare(snap, req, rot, xp=np)
+        if os.environ.get("GSI_V3_FAKE_DUMP"):            # tests: what the GPU imager would get
+            np.savez(f"{req['prefix']}-prep.npz", uvw=small["uvw"], data=d, phase_dir=np.array(small["phase_dir"]),
+                     a1=small["a1"], a2=small["a2"])
         f = np.asarray(snap.flag)
         ok = ~(f[:, :, 0] | f[:, :, 3]) & (small["a1"] != small["a2"])[:, None]
-        d = np.asarray(snap.data)
         i_img = np.full((8, 8), float(np.abs(0.5 * (d[:, :, 0] + d[:, :, 3]))[ok].sum()), np.float32)
         v_img = np.full((8, 8), float(np.abs(0.5j * (d[:, :, 2] - d[:, :, 1]))[ok].sum()), np.float32)
         info = dict(ms=small["path"], stem=small["stem"], status="ok", timing={"fake": 0.0},
@@ -377,6 +388,8 @@ class Engine:
                 self.store.close()
                 self.store = None
             verify = True
+            if path:
+                _break_abandoned_lock(path, q.get("abandoned") or [])
             if path and Path(path).exists() and Path(path).stat().st_size > 0:
                 # a killed engine may have left a torn tail / a dropped index line: truncate it
                 # (the records before it are kept; the snapshot in flight is redone by the caller)
@@ -533,6 +546,24 @@ class Engine:
         with self.store_lock:
             if self.store is not None:
                 self.store.close()
+
+
+def _break_abandoned_lock(path, pids):
+    """The writer lock of an earlier engine of this worker that did not exit after SIGKILL (D state,
+    'abandoned' by the client): it can never append again, so its lock must not block this one for
+    the 30 min stale time.  Only locks of this host whose pid the client abandoned."""
+    lk = Path(f"{path}.lock")
+    try:
+        other = json.loads(lk.read_text() or "{}")
+    except (OSError, ValueError):
+        return
+    if other.get("host") == os.uname().nodename and int(other.get("pid", -1)) in {int(p) for p in pids}:
+        print(f"V3_STORE {path}: removing the lock of abandoned engine pid {other.get('pid')}", file=sys.stderr,
+              flush=True)
+        try:
+            lk.unlink()
+        except OSError:
+            pass
 
 
 def _image_summary(info):
