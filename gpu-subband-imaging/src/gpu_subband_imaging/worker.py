@@ -7,15 +7,17 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import shutil
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 from . import lst
-from .config import Config
+from .config import Config, v3_params
 from .stages import (average, calibrate, compress, fastcal, flag, image, movie, quality,
                      stage_ms, uvw)
 from .stages.peel import ZestDaemon
@@ -62,6 +64,8 @@ class Worker:
         self._lst: dict = {}
         self._qa: List[dict] = []      # pilot V statistics of this batch (layout=lst)
         self._gpu_imager = None        # stages.gpu_image.SnapshotDaemon with imaging.imager=ttcalx
+        self._archives: dict = {}      # v3.archive: group -> hourstore.ArchiveClient
+        self._archive_lock = threading.Lock()
 
     def _start_gpu_imager(self):
         from .stages import gpu_image
@@ -234,6 +238,59 @@ class Worker:
         log.info("timing %sMHz batch%d stamp=%s phase=fix_uvw elapsed=%.2f s",
                  self.band, self.batch, stamp, time.perf_counter() - t0)
 
+    # -- v3 step 5: one GSIV record file per band-hour (v3.archive) ----------------
+
+    def _archive_client(self, stamp: str):
+        """The archive writer of this stamp's band-hour (started on first use): an
+        ``hourstore serve`` process in the imager venv, appending to one file per batch."""
+        from . import hour_image
+        from .v3 import hourstore
+        pl = self.cfg.pipeline
+        group = self.group(stamp)
+        with self._archive_lock:
+            c = self._archives.get(group)
+            if c is None:
+                python = (v3_params(pl).archive_python or pl.imaging.gpu_python or
+                          str(Path(pl.hour_imaging.ttcalx_image).parent / "python"))
+                env = hour_image.imager_env(self.cfg)
+                env["CUDA_VISIBLE_DEVICES"] = ""          # the writer never touches the GPU
+                src = str(Path(__file__).resolve().parents[1])
+                env["PYTHONPATH"] = src + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+                pc = lst.phase_centre(self.lst_hour(stamp)) if self.lst_layout else None
+                out = hourstore.archive_path(self.cfg, self.band, group, self.batch)
+                hdr = hourstore.header_for(self.band, pl.date, group, pc, pl.run_label, batch=self.batch,
+                                           layout=getattr(pl, "layout", "utc"))
+                c = hourstore.ArchiveClient(python, out, pc, hdr, env=env)
+                log.info("archive %sMHz batch%d group=%s: %s (writer pid %s, %s records)",
+                         self.band, self.batch, group, out, c.info.get("pid"), c.info.get("n"))
+                self._archives[group] = c
+        return c
+
+    def _archive_record(self, stamp: str, avg: Path) -> None:
+        """Append the compact record of the peeled MS to the band-hour archive.  With
+        hour_source=archive a failure fails the snapshot (its FITS are not archived yet, so a
+        rerun redoes it); otherwise it is only logged."""
+        t0 = time.perf_counter()
+        try:
+            r = self._archive_client(stamp).add(avg)
+        except Exception as e:
+            if v3_params(self.cfg.pipeline).hour_source == "archive":
+                raise
+            log.error("archive record %sMHz stamp=%s failed: %s", self.band, stamp, e)
+            return
+        log.info("timing %sMHz batch%d stamp=%s phase=archive_record elapsed=%.2f s nbytes=%s n_kept=%s%s",
+                 self.band, self.batch, stamp, time.perf_counter() - t0, r.get("nbytes"), r.get("n_kept"),
+                 " (already archived)" if r.get("skipped") else "")
+
+    def _close_archives(self) -> None:
+        with self._archive_lock:
+            for c in self._archives.values():
+                try:
+                    c.close()
+                except Exception as e:
+                    log.warning("archive writer close: %s", e)
+            self._archives.clear()
+
     # -- image + archive (background thread; GPU moves on to the next zest) --
 
     def _image_archive(self, stamp: str, avg: Path) -> None:
@@ -294,6 +351,8 @@ class Worker:
             self._qa.append(dict(stamp=stamp, ts=lst.timestamp(stamp),
                                  file=self._archive_paths(stamp)[1].name,
                                  **image.v_stats(fits_files[1])))
+        if v3_params(self.cfg.pipeline).archive != "none":
+            self._archive_record(stamp, avg)       # before the FITS: a failed record is redone
         for f, target in zip(fits_files, self._archive_paths(stamp)):
             t0 = time.perf_counter()
             f = f.rename(f.parent / target.name)
@@ -302,7 +361,8 @@ class Worker:
                      self.band, self.batch, stamp, f.name, time.perf_counter() - t0)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(fz), str(target.parent / fz.name))
-        if self.cfg.pipeline.keep_ms_root or getattr(self.cfg.pipeline, "keep_ms_local", None):
+        if (self.cfg.pipeline.keep_ms_root or getattr(self.cfg.pipeline, "keep_ms_local", None)) and \
+                v3_params(self.cfg.pipeline).write_kept_ms:
             t0 = time.perf_counter()
             kept = self.keep_ms(stamp, avg)
             log.info("timing %sMHz batch%d stamp=%s phase=keep_ms elapsed=%.2f s dst=%s",
@@ -420,6 +480,7 @@ class Worker:
             daemon.close()
             if self._gpu_imager is not None:
                 self._gpu_imager.close()
+            self._close_archives()
             shutil.rmtree(self.work, ignore_errors=True)
             self._write_qa_stats()
         log.info("batch %sMHz/%d: total elapsed %.2f s for %d files (%d failed)",

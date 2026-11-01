@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from . import lst
-from .config import Config
+from .config import Config, v3_params
 
 log = logging.getLogger("gsi.hour_lst")
 
@@ -177,11 +177,22 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
     bdir = _band_dir(cfg, band, lst_hour)
     qa_dir = bdir / "QA"
     qa_dir.mkdir(parents=True, exist_ok=True)
-    ms = hour_image.list_kept(cfg, band, group)
-    stamps = [Path(p).name[:-3] for p in ms]
+    use_archive = v3_params(pl).hour_source == "archive"
+    archives: List[Path] = []
+    if use_archive:              # gsi v3 step 5: the band-hour's GSIV record file(s), not MSes
+        from .v3 import hourstore
+        archives = hourstore.archive_files(cfg, band, group)
+        ms: List[str] = []
+        stamps = hourstore.archive_stems(archives)
+    else:
+        ms = hour_image.list_kept(cfg, band, group)
+        stamps = [Path(p).name[:-3] for p in ms]
     rec: Dict = dict(band=band, date=pl.date, lst_label=group, run_label=pl.run_label,
                      n_ms=len(ms), host=os.uname().nodename, gpu=gpu,
                      products=list(h.products), start_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    if use_archive:
+        rec.update(hour_source="archive", archive=[str(a) for a in archives], n_records=len(stamps),
+                   archive_bytes=sum(a.stat().st_size for a in archives))
     t_all = time.perf_counter()
 
     # 1. QA
@@ -191,22 +202,35 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
     exclude = [i for i, s in enumerate(stamps) if lst.timestamp(s) in bad_ts]
     rec["qa"]["excluded_from_hour"] = len(exclude)
     rec["timing_s"] = {"qa": time.perf_counter() - t0}
-    log.info("hour %sMHz %s: %d kept MSes, QA %s", band, group, len(ms), rec["qa"])
+    log.info("hour %sMHz %s: %d %s, QA %s", band, group, len(stamps),
+             f"records in {len(archives)} archive file(s)" if use_archive else "kept MSes", rec["qa"])
 
     rc = 0
-    if not ms:
+    if not stamps:
         rec["status"] = "no-data"
     else:
         # 2. imager
         work = bdir / ".hour_work"
         shutil.rmtree(work, ignore_errors=True)
         work.mkdir(parents=True)
-        list_file = work / "ms-list.txt"
-        list_file.write_text("\n".join(ms) + "\n")
-        cmd = ([h.ttcalx_image, "hour", f"@{list_file}", "--band", str(band),
+        if use_archive:
+            # QA rejections by stem: the record order of the archive need not be the MS order
+            xs = [s for s in stamps if lst.timestamp(s) in bad_ts]
+            list_file = work / "archive-list.txt"
+            list_file.write_text("\n".join(map(str, archives)) + "\n")
+            src = ["--archive", f"@{list_file}"]
+            if xs:
+                (work / "exclude-stems.txt").write_text("\n".join(xs) + "\n")
+            excl = ["--exclude-stems", f"@{work / 'exclude-stems.txt'}"] if xs else []
+        else:
+            list_file = work / "ms-list.txt"
+            list_file.write_text("\n".join(ms) + "\n")
+            src = [f"@{list_file}"]
+            excl = ["--exclude", ",".join(map(str, exclude))] if exclude else []
+        cmd = ([h.ttcalx_image, "hour"] + src + ["--band", str(band),
                 "--out", str(work / f"{band}MHz"), "--products", ",".join(h.products),
                 "--lst-hour", str(lst_hour), "--qa", "none", "--nproc", str(h.nproc), "-v"]
-               + (["--exclude", ",".join(map(str, exclude))] if exclude else []) + list(h.extra_args))
+               + excl + list(h.extra_args))
         rec["cmd"] = cmd
         log.info("hour %sMHz %s: %s", band, group, " ".join(cmd))
         t0 = time.perf_counter()
@@ -266,13 +290,17 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
         "software": software_versions(cfg),
         "sun_cut": pl.sun_cut, "n_snapshots_clean": len(snaps), "hour": rec,
     }
+    if use_archive:
+        prov["v3"] = {"hour_source": "archive", "archive": v3_params(pl).archive,
+                      "files": [{"path": str(a), "bytes": a.stat().st_size} for a in archives if a.exists()],
+                      "n_records": len(stamps)}
     (bdir / "provenance.json").write_text(json.dumps(prov, indent=1, default=str))
     (qa_dir / f"{band}MHz-hour-timing.json").write_text(json.dumps(rec, indent=1, default=str))
     log.info("timing %sMHz lst=%s phase=hour_total elapsed=%.2f s rc=%s n_ms=%d",
              band, group, rec["timing_s"]["total"], rc, len(ms))
     if rc != 0:
         raise RuntimeError(f"ttcalx-image hour failed for {band}MHz {group} (rc={rc})")
-    if ms and h.delete_kept_ms:
+    if (ms or use_archive) and h.delete_kept_ms:
         for kd in hour_image.kept_dirs(cfg, band, group):
             if kd.is_dir():
                 shutil.rmtree(kd, ignore_errors=True)
