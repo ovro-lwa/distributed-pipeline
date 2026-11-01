@@ -817,6 +817,7 @@ class V3Batch:
     # -- hour stage (v3.hour_source: memory) ----------------------------------------------------------------
     def _hour_stage(self) -> None:
         from .. import hour_lst
+        from . import engine_client
         w, pl, h = self.w, self.pl, self.pl.hour_imaging
         group = self.group()
         lst_hour = int(group.rstrip("h"))
@@ -867,8 +868,20 @@ class V3Batch:
                 hto = left if hto is None else min(float(hto), left)
                 if hto <= 0:
                     raise RuntimeError("no batch budget left for the hour stage")
-            r = self.engine.request("hour", timeout=hto, argv=argv, expected=expected,
-                                    log=str(qa_dir / f"{self.band}MHz-ttcalx-image.log"))
+            hq = dict(argv=argv, expected=expected, log=str(qa_dir / f"{self.band}MHz-ttcalx-image.log"))
+            try:
+                r = self.engine.request("hour", timeout=hto, **hq)
+            except engine_client.EngineError as e:
+                # e.g. a GPU allocation failure in a long-lived engine: once more in a fresh one (the
+                # records are reloaded from the checkpoint), as v2's separate hour job would start
+                if self.store_path is None:
+                    raise
+                log.error("V3_HOUR_RETRY %sMHz %s: %s; again in a fresh engine", self.band, group, e)
+                rec["first_hour_error"] = str(e)
+                self.engine.restart("fresh engine for the hour stage")
+                if self.deadline is not None:
+                    hto = min(hto, self.deadline - time.perf_counter() - 30.0)
+                r = self.engine.request("hour", timeout=hto, **hq)
             imaged = set(r.get("qa_stems") or [])
             rec["imager_timing_s"] = r.get("timing", {})
             rec["n_loaded"] = r.get("n_loaded")

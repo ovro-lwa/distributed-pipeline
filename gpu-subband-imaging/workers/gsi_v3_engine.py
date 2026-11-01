@@ -181,9 +181,13 @@ class GpuBackend:
         self.cp.get_default_pinned_memory_pool().free_all_blocks()
 
     def before_hour(self):
-        """The snapshot imager's caches go; the hour stage gets the whole GPU (no pool limit)."""
-        self.gridder._SVD_CACHE.clear()
+        """The snapshot imager's caches go (cuFINUFFT plans, w-term tables / factors / geometry, cuFFT
+        plans); the hour stage gets the whole GPU (no pool limit), as v2's separate hour job.  At 82 MHz
+        the cached snapshot plans left cuFINUFFT too little memory for the hour's setpts."""
+        import gc
+        self.gridder.clear_caches()
         self.cp.fft.config.get_plan_cache().clear()
+        gc.collect()
         self.free()
         self.pool.set_limit(size=0)
 
@@ -279,8 +283,14 @@ def _fake_hour_module():
     def image_hour_snaps(snaps, band, out_prefix, ra, dec, products=(), exclude_stems=(), timing=None, t0=None,
                          **kw):
         from astropy.io import fits
-        if os.environ.get("GSI_V3_FAKE_HOUR") == "fail":
+        mode = os.environ.get("GSI_V3_FAKE_HOUR")
+        if mode == "fail":
             raise RuntimeError("fake hour failure")
+        if mode.startswith("fail_once:"):                 # tests: fails in the first engine only
+            marker = Path(mode.split(":", 1)[1])
+            if not marker.exists():
+                marker.write_text(str(os.getpid()))
+                raise RuntimeError("Error setting non-uniform points. (fake, first engine)")
         snaps.sort(key=lambda x: x["time"])
         xs = set(exclude_stems)
         drop = [i for i, x in enumerate(snaps) if x["stem"] in xs]

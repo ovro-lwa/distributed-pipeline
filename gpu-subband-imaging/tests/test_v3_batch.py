@@ -551,3 +551,16 @@ def test_image_overlap_false_serialises_the_engine_behind_the_peel(env, caplog):
         _worker(cfg, FakeDaemon()).run_batch(env.tars)
     assert caplog.text.count("phase=image_gate_wait") == len(STAMPS) - 1
     assert json.loads((_bdir(env.tmp) / "provenance.json").read_text())["hour"]["status"] == "ok"
+
+
+@needs_v3_imager
+def test_hour_failure_is_retried_once_in_a_fresh_engine(env, caplog):
+    """Seen at 82 MHz: cuFINUFFT setpts failed in the long-lived engine's hour stage; the hour is
+    tried again in a fresh engine (records reloaded from the checkpoint) before the batch fails."""
+    cfg = _config(env.tmp)
+    cfg.pipeline.imaging.gpu_env["GSI_V3_FAKE_HOUR"] = f"fail_once:{env.tmp / 'hour_failed_once'}"
+    with caplog.at_level(logging.INFO, logger="gsi"):
+        _worker(cfg, FakeDaemon()).run_batch(env.tars)
+    h = json.loads((_bdir(env.tmp) / "provenance.json").read_text())["hour"]
+    assert "V3_HOUR_RETRY" in caplog.text and h["status"] == "ok" and h["n_loaded"] == 5
+    assert "non-uniform points" in h["first_hour_error"]
