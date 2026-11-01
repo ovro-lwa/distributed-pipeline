@@ -54,6 +54,8 @@ def _validate_lustre_write_roots(cluster: "ClusterConfig",
     _validate_lustre_write_path("cluster.work_root", cluster.work_root)
     if pipeline.keep_ms_root:
         _validate_lustre_write_path("pipeline.keep_ms_root", pipeline.keep_ms_root)
+    if pipeline.v3.archive_root:
+        _validate_lustre_write_path("pipeline.v3.archive_root", pipeline.v3.archive_root)
 
 
 # ---- cluster ---------------------------------------------------------------
@@ -310,6 +312,8 @@ class V3Params:
     write_kept_ms: bool = True        # keep writing kept MSes (v2 hour job / comparisons)
     archive: str = "none"             # none | iv | full
     archive_root: str = ""            # Lustre directory for the per-band-hour archive files
+    archive_python: str = ""          # imager-venv python of the archive writer (default: imaging.gpu_python,
+    #                                   else the python beside hour_imaging.ttcalx_image)
     store: str = "auto"               # ram | spill | auto
     spill_dirs: List[str] = field(default_factory=lambda: ["/fast/pipeline/gsi3_spill", "/tmp/gsi3_spill"])
     ram_reserve_gb: float = 16.0
@@ -338,8 +342,20 @@ class V3Params:
             raise ConfigError("v3.hour_source=memory needs v3.snapshot_io=shm")
         if self.archive != "none" and not self.archive_root:
             raise ConfigError("v3.archive needs v3.archive_root")
+        if self.archive == "full":
+            raise ConfigError("v3.archive=full is not implemented yet (use iv)")
+        if self.hour_source == "archive" and self.archive == "none":
+            raise ConfigError("v3.hour_source=archive needs v3.archive (iv)")
+        if self.hour_source == "kept_ms" and not self.write_kept_ms:
+            raise ConfigError("v3.hour_source=kept_ms needs v3.write_kept_ms")
         if self.lookahead < 1 or self.prep_procs < 1:
             raise ConfigError("v3.lookahead and v3.prep_procs must be >= 1")
+
+
+def v3_params(pipeline) -> V3Params:
+    """pipeline.v3, or the v2 defaults for a pipeline object without it (tests, old pickles)."""
+    v = getattr(pipeline, "v3", None)
+    return v if v is not None else V3Params()
 
 
 @dataclass(frozen=True)
