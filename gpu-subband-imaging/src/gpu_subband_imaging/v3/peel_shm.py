@@ -67,6 +67,14 @@ def write_peeled(ms: PathLike, snap: SnapArrays, column: str = "DATA") -> None:
         t.flush()
 
 
+class SlotUnavailable(RuntimeError):
+    """The snapshot could not be put into a slot (e.g. /dev/shm full: ENOSPC).
+
+    Raised before the daemon saw the snapshot, with the MS untouched, so the caller can
+    peel it through the MS instead (v2 path).
+    """
+
+
 def peel_ms_via_slot(daemon, ms: PathLike, ring: "_slots.SlotRing",
                      timeout: Optional[float] = 600.0,
                      timings: Optional[Dict[str, float]] = None) -> float:
@@ -75,23 +83,39 @@ def peel_ms_via_slot(daemon, ms: PathLike, ring: "_slots.SlotRing",
     `timings` (optional) receives the python side of the hand-off in seconds: ms_read
     (snap_from_ms), slot_write (write_slot), ms_write (slot -> MS write-back).  In the full
     v3 path the prep writes the slot from memory, so only slot_write remains of these.
+
+    Raises SlotUnavailable when the slot cannot be written (MS untouched).  When something
+    fails on this side after the daemon peeled the slot (state check, MS write-back), the
+    daemon's warm-start gains are reset, as the daemon itself does after FAILED.
     """
     slot = ring.acquire()
     try:
         t0 = time.perf_counter()
         snap = snap_from_ms(ms)
         t1 = time.perf_counter()
-        _slots.write_slot(slot, snap)
+        try:
+            _slots.write_slot(slot, snap)
+        except OSError as e:
+            raise SlotUnavailable(f"cannot write slot {slot}: {e}") from e
         del snap
         t2 = time.perf_counter()
         elapsed = daemon.zest_slot(slot, timeout=timeout)
-        state = _slots.get_state(slot)
-        if state != _slots.PEELED:
-            raise RuntimeError(f"slot {slot} is {_slots.STATE_NAMES.get(state, state)} after ZESTED")
-        t3 = time.perf_counter()
-        peeled = _slots.view_slot(slot, writable=False)
-        write_peeled(ms, peeled)
-        del peeled
+        try:
+            state = _slots.get_state(slot)
+            if state != _slots.PEELED:
+                raise RuntimeError(f"slot {slot} is {_slots.STATE_NAMES.get(state, state)} "
+                                   f"after ZESTED")
+            t3 = time.perf_counter()
+            peeled = _slots.view_slot(slot, writable=False)
+            write_peeled(ms, peeled)
+            del peeled
+        except BaseException:
+            try:
+                daemon.reset_warm()
+            except Exception as e:                    # the original error matters more
+                import logging
+                logging.getLogger("gsi.peel").error("RESET_WARM failed: %s", e)
+            raise
         if timings is not None:
             timings.update(ms_read=t1 - t0, slot_write=t2 - t1,
                            ms_write=time.perf_counter() - t3)

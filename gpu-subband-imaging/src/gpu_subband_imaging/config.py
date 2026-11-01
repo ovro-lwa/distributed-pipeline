@@ -317,6 +317,7 @@ class V3Params:
     delete_checkpoint: bool = True
     lookahead: int = 8
     peel_timeout_s: float = 600.0     # peel_io=shm: kill + restart the zest daemon after this
+    peel_start_timeout_s: float = 600.0   # peel_io=shm: deadline for the daemon's DAEMON_READY
     prep_procs: int = 4
     peel_backend: str = "daemon"      # daemon | juliacall
 
@@ -341,8 +342,8 @@ class V3Params:
             raise ConfigError("v3.archive needs v3.archive_root")
         if self.lookahead < 1 or self.prep_procs < 1:
             raise ConfigError("v3.lookahead and v3.prep_procs must be >= 1")
-        if self.peel_timeout_s <= 0:
-            raise ConfigError("v3.peel_timeout_s must be > 0")
+        if self.peel_timeout_s <= 0 or self.peel_start_timeout_s <= 0:
+            raise ConfigError("v3.peel_timeout_s and v3.peel_start_timeout_s must be > 0")
 
 
 @dataclass(frozen=True)

@@ -440,11 +440,20 @@ class Worker:
             daemon.zest(avg)
             return
         from .v3 import peel_shm, slots
-        if self._slots is None:
-            self._slots = slots.SlotRing(1)
         steps: dict = {}
-        peel_shm.peel_ms_via_slot(daemon, avg, self._slots, timeout=v3.peel_timeout_s,
-                                  timings=steps)
+        try:
+            if self._slots is None:
+                try:
+                    self._slots = slots.SlotRing(1)
+                except OSError as e:
+                    raise peel_shm.SlotUnavailable(f"cannot create the slot ring: {e}") from e
+            peel_shm.peel_ms_via_slot(daemon, avg, self._slots, timeout=v3.peel_timeout_s,
+                                      timings=steps)
+        except peel_shm.SlotUnavailable as e:     # MS untouched: peel it the v2 way
+            log.warning("V3_FALLBACK %sMHz stamp=%s peel through the MS: %s",
+                        self.band, stamp, e)
+            daemon.zest(avg)
+            return
         for name, dt in steps.items():
             log.info("timing %sMHz batch%d stamp=%s phase=%s elapsed=%.2f s",
                      self.band, self.batch, stamp, name, dt)
@@ -473,7 +482,10 @@ class Worker:
     def _start_daemon(self) -> ZestDaemon:
         import os
         workers_dir = os.environ["GSI_WORKERS"]
+        v3 = getattr(self.cfg.pipeline, "v3", None)
+        shm = v3 is not None and v3.peel_io == "shm"
         return ZestDaemon(
+            start_timeout=v3.peel_start_timeout_s if shm else None,
             julia=f"{self.cfg.pipeline.env.julia_bin}/julia",
             project=self.cfg.pipeline.env.ttcalx,
             daemon_jl=str(Path(workers_dir) / "zest_daemon.jl"),
