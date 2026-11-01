@@ -95,3 +95,35 @@ def test_transient_read_error_is_retried(tmp_path, monkeypatch, caplog):
     out = stage_ms.stream_untar(tar, tmp_path / "shm")
     assert len(calls) == 2 and "STAGE_RETRY" in caplog.text
     assert _tree(out) == _tree(ms)                             # the partial file is gone
+
+
+def test_full_tmpfs_is_not_retried(tmp_path, monkeypatch, caplog):
+    import errno
+    tar, _ = _tar(tmp_path)
+    calls = []
+
+    def full(source, dest, name):
+        calls.append(1)
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(stage_ms, "_extract_stream", full)
+    with pytest.raises(OSError):
+        stage_ms.stream_untar(tar, tmp_path / "shm")
+    assert calls == [1] and "STAGE_RETRY" not in caplog.text
+
+
+@pytest.mark.parametrize("where", ["dest", "ms"])
+def test_symlink_destination_is_refused(tmp_path, where):
+    tar, _ = _tar(tmp_path)
+    target = tmp_path / "victim"
+    target.mkdir()
+    (target / "keep").write_text("x")
+    dest = tmp_path / "shm"
+    if where == "dest":
+        dest.symlink_to(target)
+    else:
+        dest.mkdir()
+        (dest / f"{STAMP}.ms").symlink_to(target)
+    with pytest.raises(FileExistsError, match="symlink"):
+        stage_ms.stream_untar(tar, dest)
+    assert sorted(p.name for p in target.iterdir()) == ["keep"]

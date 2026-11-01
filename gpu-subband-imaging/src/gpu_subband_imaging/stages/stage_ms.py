@@ -1,6 +1,7 @@
 """Copy one measurement set to worker scratch, extracting archives."""
 from __future__ import annotations
 
+import errno
 import logging
 import os
 import shutil
@@ -99,6 +100,17 @@ def _extract_stream(source: Path, dest: Path, ms_name: str) -> int:
     return n_files
 
 
+# a full tmpfs or a permission problem does not go away on a retry
+NO_RETRY_ERRNOS = (errno.ENOSPC, errno.EDQUOT, errno.EACCES, errno.EPERM, errno.EROFS)
+
+
+def _remove(p: Path) -> None:
+    if p.is_symlink():
+        p.unlink()
+    elif p.exists():
+        shutil.rmtree(p, ignore_errors=True)
+
+
 def stream_untar(source: Path, dest: Path) -> Path:
     """Stream-extract ``<stamp>.ms.tar`` into ``dest``; return ``dest/<stamp>.ms``.
 
@@ -111,18 +123,21 @@ def stream_untar(source: Path, dest: Path) -> Path:
         raise FileNotFoundError(f"no such tar: {source}")
     ms_name = name[:-4]
     ms = dest / ms_name
+    for p in (dest, ms):                    # never follow a planted link
+        if p.is_symlink():
+            raise FileExistsError(f"refusing to extract through symlink {p}")
     for attempt in range(3):
-        shutil.rmtree(ms, ignore_errors=True)
+        _remove(ms)
         dest.mkdir(parents=True, exist_ok=True)
         try:
             _extract_stream(source, dest, ms_name)
             break
         except (tarfile.TarError, OSError) as e:
-            shutil.rmtree(ms, ignore_errors=True)
-            if attempt == 2:
+            _remove(ms)
+            if attempt == 2 or getattr(e, "errno", None) in NO_RETRY_ERRNOS:
                 raise
             log.warning("STAGE_RETRY %s: %s", name, e)
     if not (ms / "table.dat").is_file():
-        shutil.rmtree(ms, ignore_errors=True)
+        _remove(ms)
         raise FileNotFoundError(f"expected {ms}/table.dat after untar of {source}")
     return ms
