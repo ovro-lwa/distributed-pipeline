@@ -16,9 +16,21 @@ def stage(input_lustre: str, work_dir: Path) -> Path:
         return destination
 
     local_tar = work_dir / source.name
-    shutil.copy(input_lustre, local_tar)
-    with tarfile.open(local_tar) as t:
-        t.extractall(work_dir)
+    # test copy: copies from Lustre to /tmp were seen short or unreadable under load: retry
+    for attempt in range(3):
+        shutil.copy(input_lustre, local_tar)
+        try:
+            if local_tar.stat().st_size != source.stat().st_size:
+                raise tarfile.ReadError("short copy")
+            with tarfile.open(local_tar) as t:
+                t.extractall(work_dir)
+            break
+        except tarfile.ReadError as e:
+            if attempt == 2:
+                raise
+            import logging
+            logging.getLogger("gsi.stage_ms").warning("STAGE_RETRY %s: %s", source.name, e)
+            shutil.rmtree(work_dir / local_tar.name[:-4], ignore_errors=True)
     local_tar.unlink()
     ms = work_dir / local_tar.name[:-4]
     if not ms.is_dir():

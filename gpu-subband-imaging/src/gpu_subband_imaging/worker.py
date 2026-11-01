@@ -375,10 +375,17 @@ class Worker:
         try:
             with ThreadPoolExecutor(max_workers=self.cfg.cluster.max_feeders) as pool, \
                  ThreadPoolExecutor(max_workers=max(1, self.cfg.cluster.archive_workers)) as archiver:
-                futs = [pool.submit(self._preprocess, t) for t in todo]
+                # test copy: GSI_PREP_LOOKAHEAD bounds how many files the feeders run ahead
+                # of zest (0 = all at once, as production)
+                import os
+                ahead = int(os.environ.get("GSI_PREP_LOOKAHEAD", "0")) or len(todo)
+                futs = [pool.submit(self._preprocess, t) for t in todo[:ahead]]
                 archive_futs = []
                 n_zested = 0
-                for fut in futs:
+                for i in range(len(todo)):
+                    fut = futs[i]
+                    if i + ahead < len(todo):
+                        futs.append(pool.submit(self._preprocess, todo[i + ahead]))
                     r = fut.result()
                     if not r:
                         continue

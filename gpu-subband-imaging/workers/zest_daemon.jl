@@ -23,6 +23,11 @@
 #   ZEST_DEVICE        gpu | cpu (TTCalX on Julia threads; needs ZEST_MODEL=exact)
 #   ZEST_REG_MAX_OFFSET_DEG, ZEST_REG_TAPER_DEG, ZEST_REG_LAMBDA
 #                      Tukey phase prior on the gains (off when the offset is 0)
+#   ZEST_ENGINE        daemon (the loop below) | sky_rfi (TTCalX.zest_sky_rfi!, branch
+#                      feature/sponge-restore-fast-zest) with ZEST_SMOOTH_FLUX, ZEST_RESTORE,
+#                      ZEST_RESTORE_BELOW_MHZ, ZEST_RESTORE_OFFSET_DEG, ZEST_PRECISION,
+#                      ZEST_WARM_START (the exact model, geometric UVW, flagged models and the
+#                      residual guard are built in)
 # Anything but the defaults needs TTCalX with solve_gains!
 # (branch feature/cpu-matched-zest).
 push!(LOAD_PATH, joinpath(ENV["TTCALX_DIR"], "src"))
@@ -67,6 +72,17 @@ use_gpu = envs("ZEST_DEVICE", "gpu", ("gpu", "cpu")) == "gpu"
 reg_offset = envf("ZEST_REG_MAX_OFFSET_DEG", 0.0)
 reg_taper = envf("ZEST_REG_TAPER_DEG", 1.0)
 reg_lambda = envf("ZEST_REG_LAMBDA", 1.0)
+sky_rfi = envs("ZEST_ENGINE", "daemon", ("daemon", "sky_rfi")) == "sky_rfi"
+smooth_flux = envf("ZEST_SMOOTH_FLUX", 0.0)
+restore_path = get(ENV, "ZEST_RESTORE", "")
+restore_below_mhz = envf("ZEST_RESTORE_BELOW_MHZ", Inf)
+restore_offset_deg = envf("ZEST_RESTORE_OFFSET_DEG", 0.0)
+precision = Symbol(envs("ZEST_PRECISION", "double", ("double", "mixed")))
+warm_start = envb("ZEST_WARM_START", false)
+sky_rfi && !isdefined(TTCalX, :zest_sky_rfi!) && error("ZEST_ENGINE=sky_rfi needs TTCalX with zest_sky_rfi!")
+sky_rfi && !(use_gpu && fast_io && exact_model && geometric && residual_guard && flag_model) &&
+    error("ZEST_ENGINE=sky_rfi is the exact-model, geometric-UVW, guarded GPU zest: " *
+                      "set model=exact uvw=geometric residual_guard flag_model fast_io device=gpu")
 
 # The original code path (gpu_stefcal!, kernel model, MS UVW, GPU) needs no new
 # TTCalX API, so the defaults also run with older TTCalX versions.
@@ -264,7 +280,41 @@ println(
     "uvw=$(geometric ? "geometric" : "ms") rfi_sources=$(length(rfi_sources)) " *
     "rfi_mode=$(rfi_joint ? "joint" : "after")"
 )
+restore_sources = isempty(restore_path) ? GPUSource[] : read_gpu_sources(restore_path)
+any(s -> get_name(s) in ("Sun", "Moon", "Jupiter"), restore_sources) &&
+    error("ZEST_RESTORE: a source named Sun/Moon/Jupiter is read as a placeholder; rename it")
+sky_rfi && println(@sprintf("SKY_RFI smooth_flux=%g restore=%d below_mhz=%g offset_deg=%g precision=%s warm_start=%s peeliter=%d",
+                           smooth_flux, length(restore_sources), restore_below_mhz, restore_offset_deg,
+                           precision, warm_start, piter))
 flush(stdout)
+
+# zest_sky_rfi! for one snapshot; returns the gains for a warm start of the next one
+function run_sky_rfi!(vis, meta, mjd, initial_gains)
+    elev = Dict(get_name(s) => elevation_deg(s, meta) for s in vcat(sources, rfi_sources))
+    rfi_names = Set(get_name.(rfi_sources))
+    report = (name, it; converged, niters, finite, max_gain, p_with, p_old, p_new, action) -> @printf(
+        "PEEL_SOLVE pass=%s name=\"%s\" elevation_deg=%.2f iteration=%d/%d converged=%s niters=%d finite=%s max_gain=%.6g accepted=%s action=%s p_ratio_new=%.4g p_ratio_old=%.4g\n",
+        name in rfi_names ? "rfi" : "sky", name, elev[name], it, piter, converged, niters, finite,
+        max_gain, action == :accept, action, p_new / p_with, p_old / p_with)
+    r = zest_sky_rfi!(vis, meta, mjd, sources, rfi_sources;
+                      rfi_mode=rfi_joint ? :joint : :after, solver=solver, maxiter=mi, tolerance=tol,
+                      minuvw=muvw, peeliter=piter, max_gain=max_gain, min_elevation=min_elevation,
+                      flag_zeros=flag_zero, report=report, smooth_flux=smooth_flux,
+                      restore=restore_sources, restore_below_mhz=restore_below_mhz,
+                      restore_offset_deg=restore_offset_deg, precision=precision,
+                      initial_gains=initial_gains)
+    @printf("PEEL_SUMMARY pass=all selected=%d accepted=%d skipped=%d flagged_zeros=%d action=sky_rfi\n",
+            length(sources) - length(r.skipped) + length(rfi_sources), length(r.peeled),
+            length(r.skipped), r.flagged_zeros)
+    for (name, (C, d)) in r.restored
+        @printf("PEEL_RESTORE name=\"%s\" I_jy=%.2f V_jy=%.2f offset_l_arcmin=%.2f offset_m_arcmin=%.2f\n",
+                name, real(sum(C[1]) + sum(C[4])) / length(C[1]),
+                real(-1im * (sum(C[2]) - sum(C[3]))) / length(C[1]),
+                rad2deg(d[1]) * 60, rad2deg(d[2]) * 60)
+    end
+    warm_start ? r.gains : nothing
+end
+prev_gains = nothing
 
 read_ms = fast_io ? read_ms_fast : read_ms_to_gpu
 write_ms! = fast_io ? write_ms_fast! : write_gpu_to_ms!
@@ -282,6 +332,9 @@ for line in eachline(stdin)
                 rms_w, offset = geometric_uvw!(meta, mjd)
                 @printf("UVW_GEOMETRIC rms_w_vs_ms=%.4f phase_centre_offset_deg=%.4f\n", rms_w, offset)
             end
+            if sky_rfi
+                global prev_gains = run_sky_rfi!(vis, meta, mjd, prev_gains)
+            else
             flag_zero && @printf("FLAG_ZERO flagged=%d\n", flag_zero_visibilities!(vis))
             function run_pass(catalog, name)
                 before = backstop ? deepcopy_gpu(vis) : nothing
@@ -298,11 +351,13 @@ for line in eachline(stdin)
                 run_pass(sources, "sky")
                 isempty(rfi_sources) || run_pass(rfi_sources, "rfi")
             end
+            end
         end
         t_write = @elapsed write_ms!(ms, vis, bl, nrows; column=col)
         @printf("ZEST_TIMING read=%.2f peel=%.2f write=%.2f\n", t_read, t_peel, t_write)
         @printf("ZESTED %s %.2f\n", ms, time() - t0)
     catch e
+        global prev_gains = nothing
         println("FAILED $ms $(sprint(showerror, e))")
     end
     flush(stdout)

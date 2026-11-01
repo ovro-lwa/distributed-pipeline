@@ -186,11 +186,22 @@ class PeelParams:
     flag_zero: bool = False           # flag XX == YY == 0 samples before peeling
     residual_guard: bool = False      # TTCalX guarded_zest!: keep an update only if it lowers the residual
     backstop: bool = False            # undo a whole sky/RFI pass that raises the residual
+    # engine=sky_rfi: TTCalX.zest_sky_rfi! (branch feature/sponge-restore-fast-zest, v0.3.0)
+    # with the options below; the settings above that it shares (solver, maxiter, tolerance,
+    # minuvw, peeliter, max_gain_amplitude, min_source_elevation_deg, rfi_mode, flag_zero) apply
+    engine: str = "daemon"            # daemon (the daemon's own guarded_zest! loop) | sky_rfi
+    smooth_flux: float = 0.0          # Jy; > 0 ties faint directions' per-channel gains to a band gain
+    restore: str = ""                 # point sources given back after peeling (TTCal JSON, e.g. Jupiter)
+    restore_below_mhz: float = 41.0
+    restore_offset_deg: float = 0.0   # Stokes V position search radius (0.5 for Jupiter)
+    precision: str = "double"         # double | mixed (normal equations in single precision)
+    warm_start: bool = False          # start from the previous snapshot's gains (same channels, <= 60 s)
 
     def __post_init__(self) -> None:
         choices = {"solver": ("damped", "rk4"), "model": ("kernels", "exact"),
                    "uvw": ("ms", "geometric"), "rfi_mode": ("after", "joint"),
-                   "device": ("gpu", "cpu")}
+                   "device": ("gpu", "cpu"), "engine": ("daemon", "sky_rfi"),
+                   "precision": ("double", "mixed")}
         for name, allowed in choices.items():
             if getattr(self, name) not in allowed:
                 raise ConfigError(f"peel.{name} must be one of {allowed}, "
