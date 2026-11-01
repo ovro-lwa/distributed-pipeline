@@ -365,6 +365,12 @@ Validation in `__post_init__`:
 - `ttcalx_imager/gsiv.py` (TTCalX repo, python): `load_archive(path, ra, dec) -> list[LazySnap]`, plus `hour.image_hour_snaps` (3.4) and the CLI `ttcalx-image hour --archive <file>[,<file>]`.
 - `hour_lst.run_band` builds that command when `hour_source == archive`; the archive lands under `QA/`.
 - **Test:** run with `write_kept_ms: true` and the archive. The hour job on the archive against the hour job on the kept MSes of the **same** run must give bitwise-identical sample arrays (unit test: `load_samples(ms)` vs `load_archive` for every snapshot), and products within the floor.
+- **As implemented (exp/gsi-v3-store, exp/imager-v3-store):**
+  - one file per worker batch, `<archive_root>/<band>MHz/<date>/<run_label>/<LST>h/<band>MHz-<date>-<LST>h-peeled-bNNN.gsiv`, so two batches of one band-hour never append to the same file. The hour job reads every `*.gsiv` of the band-hour.
+  - The worker hook (`Worker._archive_record`, before the FITS move) sends each peeled MS to `python -m gpu_subband_imaging.v3.hourstore serve` running in the imager venv (`v3.archive_python`, default `imaging.gpu_python` or the python beside `hour_imaging.ttcalx_image`). Records, their R and the hour job's own MS reading therefore use the same msio, casacore and numpy. A stamp that is already in the file is skipped.
+  - QA rejections go to the imager by stem (`--exclude-stems`), not by index.
+  - `hour_source: archive` needs `archive: iv`, and `hour_source: kept_ms` needs `write_kept_ms`. `archive: full` is rejected (not implemented).
+  - With `--archive`, `TTCALX_CHUNK_CACHE` defaults to `store`. A `LazySnap` expands u, v, w, nw on the GPU in `HourGrid` in every mode.
 - **Speedup:**
   - keep_ms 2.6 / 7.3 s of Lustre writes per file → about 0.05 s append;
   - hour load + rotation 46 → about 8 s (c00) and 171 → about 20 s (calim07);
