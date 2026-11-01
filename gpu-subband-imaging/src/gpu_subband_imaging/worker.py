@@ -152,7 +152,7 @@ class Worker:
         udir = self._untar_dir(stamp)
         try:
             t0 = time.perf_counter()
-            ms = stage_ms.stage(tar, d, untar_to=udir)
+            ms = self._stage(tar, d, stamp)
             log.info("timing %sMHz batch%d stamp=%s phase=stage_ms elapsed=%.2f s",
                      self.band, self.batch, stamp, time.perf_counter() - t0)
 
@@ -241,12 +241,88 @@ class Worker:
 
     # -- gsi v3 steps 1-2: tmpfs untar, in-memory prep (docs/v3_design.md) -------
 
-    def _untar_dir(self, stamp: str) -> Optional[Path]:
-        """v3.untar_to/<stamp> when the tar is to be streamed into tmpfs, else None."""
+    UNTAR_SPACE_MARGIN = 1.5   # free space wanted in untar_to, in units of the tar size
+
+    def _untar_root(self) -> Optional[Path]:
+        """This process's directory under v3.untar_to: <untar_to>/.gsi3w_<uid>_<host>_<pid>.
+
+        Named so that a later batch can tell a crashed worker's leftovers (same user and
+        host, dead pid) from everything else (_v3_sweep_untar).
+        """
+        import os
         v3 = getattr(self.cfg.pipeline, "v3", None)
         if v3 is None or not v3.untar_to:
             return None
-        return Path(v3.untar_to) / stamp
+        return Path(v3.untar_to) / f".gsi3w_{os.getuid()}_{os.uname().nodename}_{os.getpid()}"
+
+    def _untar_dir(self, stamp: str) -> Optional[Path]:
+        """<untar root>/<stamp> when the tar is to be streamed into tmpfs, else None."""
+        root = self._untar_root()
+        return None if root is None else root / stamp
+
+    def _v3_sweep_untar(self) -> None:
+        """Remove untar dirs of crashed workers: ours (uid, host) and their pid is dead."""
+        import os
+        import re
+        import stat
+        root = self._untar_root()
+        if root is None:
+            return
+        base, uid, host = root.parent, os.getuid(), os.uname().nodename
+        pat = re.compile(r"\.gsi3w_(\d+)_(.+)_(\d+)")
+        try:
+            entries = list(base.iterdir())
+        except OSError:
+            return
+        for e in entries:
+            m = pat.fullmatch(e.name)
+            if not m or int(m.group(1)) != uid or m.group(2) != host:
+                continue
+            pid = int(m.group(3))
+            try:
+                st = os.lstat(e)
+            except OSError:
+                continue
+            if not stat.S_ISDIR(st.st_mode) or st.st_uid != uid or pid == os.getpid():
+                continue
+            try:
+                os.kill(pid, 0)
+                continue                # alive (ours or a reused pid): keep
+            except ProcessLookupError:
+                pass
+            except OSError:
+                continue                # e.g. EPERM: a live process of another user
+            shutil.rmtree(e, ignore_errors=True)
+            log.warning("V3_SWEEP removed %s (pid %d is gone)", e, pid)
+
+    def _stage(self, tar: str, d: Path, stamp: str) -> Path:
+        """Stage the raw MS: streamed into tmpfs (v3.untar_to) when it fits and works,
+        else the v2 way into work_root (logged V3_FALLBACK)."""
+        udir = self._untar_dir(stamp)
+        if udir is None:
+            return stage_ms.stage(tar, d)
+        try:
+            need = Path(tar).stat().st_size * self.UNTAR_SPACE_MARGIN
+            udir.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if udir.parent.is_symlink():
+                raise FileExistsError(f"{udir.parent} is a symlink")
+            free = shutil.disk_usage(str(udir.parent)).free
+            if free < need:
+                raise OSError(f"{udir.parent}: {free / 1e9:.2f} GB free, want {need / 1e9:.2f} GB")
+            return stage_ms.stage(tar, d, untar_to=udir)
+        except FileNotFoundError:
+            if not Path(tar).exists():
+                raise                   # the input is gone: v2 would fail as well
+            err = "untar dir vanished"
+        except Exception as e:
+            err = str(e)
+        if udir.is_symlink():
+            udir.unlink()
+        else:
+            shutil.rmtree(udir, ignore_errors=True)
+        log.warning("V3_FALLBACK %sMHz stamp=%s untar to tmpfs failed, staging in work_root: %s",
+                    self.band, stamp, err)
+        return stage_ms.stage(tar, d)
 
     def _prep_inmem(self) -> str:
         pl = self.cfg.pipeline
@@ -269,27 +345,76 @@ class Worker:
         log.info("batch %sMHz/%d: v3 prep_inmem=%s in %d spawn processes",
                  self.band, self.batch, self._prep_inmem(), n)
 
+    @staticmethod
+    def _v3_discard_pool(pool, kill: bool, wait_s: float = 30.0) -> None:
+        """Shut a pool down without ever hanging: optionally kill its processes first
+        (a broken or timed-out pool), give shutdown ``wait_s``, then kill what is left."""
+        procs = list((getattr(pool, "_processes", None) or {}).values())
+        if kill:
+            for p in procs:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+        # with the workers dead the management thread winds down by itself; shutdown in a
+        # daemon thread so a stuck queue cannot block the batch
+        t = threading.Thread(target=pool.shutdown, kwargs={"wait": True}, daemon=True)
+        t.start()
+        t.join(wait_s)
+        for p in procs:
+            try:
+                p.join(5)
+            except Exception:
+                pass
+        for p in procs:                 # still running (a stuck task): kill
+            try:
+                if p.exitcode is None:
+                    p.kill()
+                    p.join(5)
+            except Exception:
+                pass
+
     def _v3_stop_pool(self) -> None:
         with self._v3_lock:
             pool, self._v3_pool = self._v3_pool, None
         if pool is not None:
-            pool.shutdown(wait=True)
+            self._v3_discard_pool(pool, kill=False)
+
+    def _v3_replace_pool(self, pool) -> None:
+        """Kill a broken / timed-out pool and start a fresh one (once per bad pool)."""
+        with self._v3_lock:
+            if self._v3_pool is not pool:
+                return                  # another feeder already replaced it
+            self._v3_pool = None
+            self._v3_start_pool()
+        log.warning("batch %sMHz/%d: v3 prep pool replaced", self.band, self.batch)
+        self._v3_discard_pool(pool, kill=True)
 
     def _v3_run(self, fn, *args):
-        """fn(*args) in the prep process pool; a broken pool is replaced (and re-raised)."""
+        """fn(*args) in the prep process pool, at most v3.prep_timeout_s.
+
+        A broken pool (a child died) or a timeout kills and replaces the pool and
+        re-raises, so the caller falls back to the v2 prep for that file.
+        """
+        from concurrent.futures import TimeoutError as FutureTimeout
         from concurrent.futures.process import BrokenProcessPool
         with self._v3_lock:
             pool = self._v3_pool
         if pool is None:
             raise RuntimeError("v3 prep pool is not running")
+        timeout = float(getattr(self.cfg.pipeline.v3, "prep_timeout_s", 900.0))
         try:
-            return pool.submit(fn, *args).result()
+            fut = pool.submit(fn, *args)
+        except (BrokenProcessPool, RuntimeError):
+            self._v3_replace_pool(pool)
+            raise
+        try:
+            return fut.result(timeout=timeout)
+        except FutureTimeout:
+            self._v3_replace_pool(pool)
+            raise TimeoutError(f"v3 prep task exceeded {timeout:.0f} s") from None
         except BrokenProcessPool:
-            with self._v3_lock:
-                if self._v3_pool is pool:
-                    pool.shutdown(wait=False)
-                    self._v3_pool = None
-                    self._v3_start_pool()
+            self._v3_replace_pool(pool)
             raise
 
     def _v3_prep_args(self, ms: Path) -> tuple:
@@ -307,6 +432,7 @@ class Worker:
             tpl = self.work / "_v3_template_avg.ms"
             t0 = time.perf_counter()
             try:
+                self.work.mkdir(parents=True, exist_ok=True)
                 fastprep.make_template(str(ms), str(tpl), self.cfg.pipeline.chanbin)
                 self._v3_template = tpl
             except Exception as e:
@@ -331,6 +457,12 @@ class Worker:
         if tpl is None:
             return None
         avg = d / f"{stamp}_avg.ms"
+        try:        # a wrong template (rows, channels, frequencies): before any work
+            fastprep.check_template(str(tpl), str(ms), self.cfg.pipeline.chanbin)
+        except Exception as e:
+            log.warning("V3_FALLBACK %sMHz stamp=%s template does not fit, v2 prep: %s",
+                        self.band, stamp, e)
+            return None
         t0 = time.perf_counter()
         try:
             res = self._v3_run(fastprep.prep_task, *self._v3_prep_args(ms), str(tpl), str(avg))
@@ -342,8 +474,16 @@ class Worker:
         elapsed = time.perf_counter() - t0
         meta = res["meta"]
         self._log_v3_timings(stamp, meta, elapsed)
-        log.info("timing %sMHz batch%d stamp=%s phase=flag_cal_avg elapsed=%.2f s",
-                 self.band, self.batch, stamp, elapsed)
+        # the v2 phase names, from the child's own clocks (queue wait excluded)
+        tm = meta.get("timings", {})
+        wall = lambda *names: sum(tm.get(n, {}).get("wall", 0.0) for n in names)  # noqa: E731
+        task = float(res.get("task_wall", elapsed))
+        for phase, value in (("flag_cal", wall("read", "cal")),
+                             ("average", wall("average", "write")),
+                             ("flag_cal_avg", task),
+                             ("inmem_wait", max(0.0, elapsed - task))):
+            log.info("timing %sMHz batch%d stamp=%s phase=%s elapsed=%.2f s",
+                     self.band, self.batch, stamp, phase, value)
         mode = self.cfg.pipeline.fix_uvw
         if mode != "off":
             if meta.get("fix_uvw_error"):
@@ -354,6 +494,8 @@ class Worker:
                 log.info("fix_uvw %sMHz stamp=%s epoch=%s rot_deg=%.4f rms_duv_m=%.3f "
                          "max_dw_m=%.2e rephased=%s", self.band, stamp, mode, st["rot_deg"],
                          st["rms_duv_m"], st["max_dw_m"], st["rephased"])
+                log.info("timing %sMHz batch%d stamp=%s phase=fix_uvw elapsed=%.2f s",
+                         self.band, self.batch, stamp, wall("uvw"))
         return avg, quality.VisibilityStats(**res["stats"])
 
     def _v3_prep_shadow(self, stamp: str, ms: Path) -> Optional[dict]:
@@ -548,6 +690,7 @@ class Worker:
             self._gpu_imager = self._start_gpu_imager()   # started at the first snapshot
         n_ok, n_fail = 0, 0
         try:
+            self._v3_sweep_untar()
             self._v3_start_pool()
             with ThreadPoolExecutor(max_workers=self.cfg.cluster.max_feeders) as pool, \
                  ThreadPoolExecutor(max_workers=max(1, self.cfg.cluster.archive_workers)) as archiver:
@@ -598,10 +741,9 @@ class Worker:
                 self._gpu_imager.close()
             self._v3_stop_pool()
             shutil.rmtree(self.work, ignore_errors=True)
-            for t in todo:
-                udir = self._untar_dir(_stamp(t))
-                if udir is not None:
-                    shutil.rmtree(udir, ignore_errors=True)
+            root = self._untar_root()
+            if root is not None and not root.is_symlink():
+                shutil.rmtree(root, ignore_errors=True)
             self._write_qa_stats()
         log.info("batch %sMHz/%d: total elapsed %.2f s for %d files (%d failed)",
                  self.band, self.batch, time.perf_counter() - batch_start, n_ok, n_fail)
