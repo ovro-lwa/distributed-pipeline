@@ -212,7 +212,11 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
              f"records in {len(archives)} archive file(s)" if source == "archive" else "kept MSes", rec["qa"])
 
     rc = 0
-    imaged: set = set()          # stems the imager loaded in this job (the only kept MSes deleted)
+    # hour_source=archive: the stricter rules (the job must load exactly the given stems; only those
+    # kept MSes are deleted).  Defaults (kept_ms): exactly 13405ce -- no such check, and on success
+    # the whole kept dirs are removed (QA-rejected MSes and leftovers included).
+    strict = v3_params(pl).hour_source == "archive"
+    imaged: set = set()          # stems the imager loaded in this job
     if source == "failed":
         rec["status"] = "failed"
         rc = -2
@@ -265,7 +269,7 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
                 shutil.move(str(summary), str(qa_dir / summary.name))
             except (ValueError, KeyError, TypeError) as e:
                 log.warning("cannot parse %s: %s", summary, e)
-        if rc == 0 and imaged != set(stamps):
+        if strict and rc == 0 and imaged != set(stamps):
             # the job did not load exactly the snapshots it was given: fail, delete nothing
             rec["imaged_mismatch"] = dict(missing=sorted(set(stamps) - imaged), extra=sorted(imaged - set(stamps)))
             log.error("hour %sMHz %s: the imager loaded %d snapshots, expected %d: %s", band, group,
@@ -322,8 +326,14 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
                            f"MSes to fall back to: {rec.get('archive_problems')}")
     if rc != 0:
         raise RuntimeError(f"ttcalx-image hour failed for {band}MHz {group} (rc={rc})")
-    if imaged and h.delete_kept_ms:
-        _delete_kept(cfg, band, group, imaged)
+    if strict:
+        if imaged and h.delete_kept_ms:
+            _delete_kept(cfg, band, group, imaged)
+    elif ms and h.delete_kept_ms:            # v2 (13405ce), unchanged
+        for kd in hour_image.kept_dirs(cfg, band, group):
+            if kd.is_dir():
+                shutil.rmtree(kd, ignore_errors=True)
+                log.info("deleted kept MSes %s", kd)
     return rec
 
 

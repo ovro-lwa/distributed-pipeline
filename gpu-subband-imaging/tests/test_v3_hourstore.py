@@ -750,17 +750,62 @@ def test_run_band_imager_loading_fewer_deletes_nothing(tmp_path, monkeypatch):
     assert sorted(p.name[:-3] for p in kd.iterdir()) == stems
 
 
-def test_run_band_v2_kept_ms_deletes_only_imaged(tmp_path, monkeypatch):
-    cfg, stems, f, kd, log = _hour_setup(tmp_path, monkeypatch, archive=False, expected=False,
-                                         env={"FAKE_LOAD_ONLY": "5"})
-    cfg.pipeline.v3 = V3Params()                               # v2: hour from the kept MSes
-    with pytest.raises(RuntimeError, match="rc=-3"):
+def _old_hour_lst():
+    """hour_lst.py of 13405ce (tests/data/hour_lst_13405ce.py, verbatim) as a module of the package."""
+    import importlib.util
+    path = Path(__file__).parent / "data" / "hour_lst_13405ce.py"
+    spec = importlib.util.spec_from_file_location("gpu_subband_imaging._hour_lst_13405ce", path)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def _tree(root):
+    return sorted(str(p.relative_to(root)) for p in Path(root).rglob("*")) if Path(root).exists() else []
+
+
+@pytest.mark.parametrize("case", ["qa_rejection", "no_data", "no_summary", "load_fewer"])
+def test_defaults_delete_exactly_what_13405ce_deleted(tmp_path, monkeypatch, case):
+    """Defaults (hour_source=kept_ms): new and old run_band on identical fixtures leave identical
+    kept trees -- QA-rejected MSes, MSes the imager did not load, hidden leftovers included."""
+    old = _old_hour_lst()
+    left = {}
+    for tag, mod in (("old", old), ("new", hour_lst)):
+        root = tmp_path / tag
+        root.mkdir()
+        env = {"FAKE_LOAD_ONLY": "5"} if case == "load_fewer" else None
+        cfg, stems, f, kd, log = _hour_setup(root, monkeypatch, archive=False, expected=False,
+                                             kept=case != "no_data", env=env)
+        cfg.pipeline.v3 = V3Params()                             # defaults
+        kd.mkdir(parents=True, exist_ok=True)
+        (kd / f".{stems[0]}.ms.tmp123").mkdir()                  # a leftover of an interrupted keep_ms
+        (kd.parent / "05h" / "x.ms").mkdir(parents=True)         # another hour: untouched
+        if case == "no_summary":                                 # rc 0 but no summary JSON
+            fake = Path(cfg.pipeline.hour_imaging.ttcalx_image)
+            fake.write_text(fake.read_text().replace('open(out + "-summary.json", "w"))', 'open(os.devnull, "w"))'))
+        bdir = hour_lst._band_dir(cfg, 55, 4)
+        st = bdir / "QA" / ".snapshot_stats"
+        st.mkdir(parents=True)
+        rows = [dict(ts=s[:15], rms=1.0, peak=1.0, file="x") for s in stems] + \
+               [dict(ts=f"20261031_1{k:05d}", rms=1.0, peak=1.0, file="x") for k in range(4)]
+        rows[2]["rms"] = 50.0                                    # stems[2] is QA-rejected (excluded)
+        (st / "b0.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+        rec = mod.run_band(cfg, 55, "04h", gpu=0)
+        if case == "qa_rejection":
+            assert rec["qa"]["excluded_from_hour"] == 1
+        left[tag] = (_tree(Path(cfg.pipeline.keep_ms_root)), rec["status"])
+    assert left["new"] == left["old"]
+    if case == "no_data":
+        assert left["new"][1] == "no-data" and any(".ms.tmp123" in p for p in left["new"][0])
+    else:
+        assert left["new"][0] == ["55MHz", "55MHz/2026-10-31", "55MHz/2026-10-31/05h", "55MHz/2026-10-31/05h/x.ms"]
+
+
+def test_archive_mode_imager_loading_fewer_deletes_nothing_it_did_not_image(tmp_path, monkeypatch):
+    cfg, stems, f, kd, log = _hour_setup(tmp_path, monkeypatch, archive=False, env={"FAKE_LOAD_ONLY": "5"})
+    with pytest.raises(RuntimeError, match="rc=-3"):          # archive mode, fallback to MSes, fewer loaded
         hour_lst.run_band(cfg, 55, "04h", gpu=0)
     assert len(list(kd.iterdir())) == 8
-    cfg.pipeline.hour_imaging = HourImagingParams(ttcalx_image=cfg.pipeline.hour_imaging.ttcalx_image,
-                                                  nproc=2, delete_kept_ms=True)
-    rec = hour_lst.run_band(cfg, 55, "04h", gpu=0)
-    assert rec["status"] == "ok" and not kd.exists() and _calls(log)[-1][2].startswith("@")
 
 
 def test_worker_image_archive_order_and_record(tmp_path, monkeypatch):
