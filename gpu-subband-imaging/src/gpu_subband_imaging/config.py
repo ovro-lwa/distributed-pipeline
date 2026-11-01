@@ -297,6 +297,52 @@ class MovieParams:
 
 
 @dataclass(frozen=True)
+class V3Params:
+    """gsi v3 (in-memory band-hour pipeline, design: docs/v3_design.md).
+
+    Every default reproduces v2; each switch turns on one step of the plan.
+    """
+    untar_to: str = ""                # "" = work_root as v2; e.g. /dev/shm/gsi3 (tar streamed from Lustre)
+    prep_inmem: str = "off"           # off | shadow (compute both, log diffs, use v2) | on
+    peel_io: str = "ms"               # ms | shm
+    snapshot_io: str = "ms"           # ms | shm
+    hour_source: str = "kept_ms"      # kept_ms | archive | memory
+    write_kept_ms: bool = True        # keep writing kept MSes (v2 hour job / comparisons)
+    archive: str = "none"             # none | iv | full
+    archive_root: str = ""            # Lustre directory for the per-band-hour archive files
+    store: str = "auto"               # ram | spill | auto
+    spill_dirs: List[str] = field(default_factory=lambda: ["/fast/pipeline/gsi3_spill", "/tmp/gsi3_spill"])
+    ram_reserve_gb: float = 16.0
+    checkpoint: str = "local"         # none | local | archive (only when hour_source != kept_ms)
+    delete_checkpoint: bool = True
+    lookahead: int = 8
+    prep_procs: int = 4
+    peel_backend: str = "daemon"      # daemon | juliacall
+
+    def __post_init__(self) -> None:
+        for name, allowed in (("prep_inmem", ("off", "shadow", "on")), ("peel_io", ("ms", "shm")),
+                              ("snapshot_io", ("ms", "shm")),
+                              ("hour_source", ("kept_ms", "archive", "memory")),
+                              ("archive", ("none", "iv", "full")), ("store", ("ram", "spill", "auto")),
+                              ("checkpoint", ("none", "local", "archive")),
+                              ("peel_backend", ("daemon", "juliacall"))):
+            if getattr(self, name) not in allowed:
+                raise ConfigError(f"v3.{name} must be one of {allowed}, got {getattr(self, name)!r}")
+        if self.untar_to and Path(self.untar_to).parts[:2] == ("/", "lustre"):
+            raise ConfigError("v3.untar_to must be node-local (tmpfs or NVMe), not Lustre")
+        if self.peel_io == "shm" and self.prep_inmem != "on":
+            raise ConfigError("v3.peel_io=shm needs v3.prep_inmem=on")
+        if self.snapshot_io == "shm" and self.peel_io != "shm":
+            raise ConfigError("v3.snapshot_io=shm needs v3.peel_io=shm")
+        if self.hour_source == "memory" and self.snapshot_io != "shm":
+            raise ConfigError("v3.hour_source=memory needs v3.snapshot_io=shm")
+        if self.archive != "none" and not self.archive_root:
+            raise ConfigError("v3.archive needs v3.archive_root")
+        if self.lookahead < 1 or self.prep_procs < 1:
+            raise ConfigError("v3.lookahead and v3.prep_procs must be >= 1")
+
+
+@dataclass(frozen=True)
 class CalTables:
     bp: str
     xy: str
@@ -376,6 +422,7 @@ class PipelineConfig:
     # (stages/fastcal.py), without writing CORRECTED_DATA.
     prep: str = "casa"
     max_files_per_hour: Optional[int] = None    # testing: first N snapshots of each hour
+    v3: V3Params = field(default_factory=V3Params)
 
     def __post_init__(self) -> None:
         if self.fix_uvw not in FIX_UVW_MODES:
@@ -399,6 +446,12 @@ class PipelineConfig:
             raise ConfigError("calcache_cleanup must be 'run' or 'none'")
         if self.prep not in ("casa", "numpy"):
             raise ConfigError("prep must be 'casa' or 'numpy'")
+        if self.v3.prep_inmem != "off" and self.prep != "numpy":
+            raise ConfigError("v3.prep_inmem needs prep=numpy")
+        if self.v3.snapshot_io == "shm" and self.imaging.imager != "ttcalx":
+            raise ConfigError("v3.snapshot_io=shm needs imaging.imager=ttcalx")
+        if self.v3.hour_source == "memory" and not (self.layout == "lst" and self.stream_hour_images):
+            raise ConfigError("v3.hour_source=memory needs layout=lst and stream_hour_images")
 
     @property
     def run_key(self) -> str:
@@ -459,6 +512,7 @@ def load_pipeline(path: Union[str, Path]) -> PipelineConfig:
         prep=str(d.get("prep", "casa")),
         max_files_per_hour=(int(d["max_files_per_hour"])
                             if d.get("max_files_per_hour") else None),
+        v3=V3Params(**d.get("v3", {})),
     )
 
 
