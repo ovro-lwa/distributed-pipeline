@@ -257,33 +257,82 @@ def make_template(raw_ms: str, out: str, chanbin: int) -> Path:
 
 
 def _copy_column(src, dst, col: str) -> None:
+    """Every cell of ``src``'s column into ``dst`` (same row count); a cell undefined in
+    ``src`` must be undefined in ``dst`` too, so no template value survives."""
     n = src.nrows()
     if n == 0:
         return
     try:
-        defined = all(src.iscelldefined(col, r) for r in range(n))
-        if defined:
-            dst.putcol(col, src.getcol(col))
-            return
+        dst.putcol(col, src.getcol(col))        # all cells defined, fixed shape
+        return
     except Exception:
         pass
     for r in range(n):
         if src.iscelldefined(col, r):
             dst.putcell(col, r, src.getcell(col, r))
+        elif dst.iscelldefined(col, r):
+            raise ValueError(f"{col} row {r}: undefined in the raw MS, defined in the template")
 
 
 def _fill_subtable(src_path: str, dst_path: str) -> None:
     """Values of ``src_path`` into the (template-structured) ``dst_path``."""
     from casacore.tables import table
     with table(src_path, ack=False) as s, table(dst_path, readonly=False, ack=False) as d:
+        missing = sorted(set(d.colnames()) - set(s.colnames()))
+        if missing:
+            raise ValueError(f"{src_path} lacks template column(s) {missing}")
         ns, nd = s.nrows(), d.nrows()
         if nd > ns:
             d.removerows(list(range(ns, nd)))
         elif ns > nd:
             d.addrows(ns - nd)
         for col in d.colnames():
-            if col in s.colnames():
-                _copy_column(s, d, col)
+            _copy_column(s, d, col)
+
+
+# SPECTRAL_WINDOW columns mstransform recomputes; every other one it copies
+_SW_SUMMED = ("CHAN_WIDTH", "EFFECTIVE_BW", "RESOLUTION")
+
+
+def check_template(template_avg_ms: str, raw_ms: str, chanbin: int) -> None:
+    """Raise ValueError unless the template is what mstransform makes of ``raw_ms``.
+
+    Cheap (small subtables only): main-table row count; SPECTRAL_WINDOW (every column:
+    averaged CHAN_FREQ, summed widths, NUM_CHAN, REF_FREQUENCY = first output channel,
+    the others as in the raw MS); POLARIZATION and DATA_DESCRIPTION values; and the
+    column keywords (frames, units) of those three subtables.
+    """
+    from casacore.tables import table
+    from .mscompare import _column_values, _eq
+    tpl, raw = str(template_avg_ms), str(raw_ms)
+    with table(tpl, ack=False) as t, table(raw, ack=False) as r:
+        if t.nrows() != r.nrows():
+            raise ValueError(f"template has {t.nrows()} rows, {raw} {r.nrows()}")
+    for sub in TEMPLATE_SUBTABLES:
+        with table(f"{tpl}/{sub}", ack=False) as t, table(f"{raw}/{sub}", ack=False) as r:
+            if t.nrows() != r.nrows():
+                raise ValueError(f"{sub}: template {t.nrows()} rows, raw {r.nrows()}")
+            missing = sorted(set(t.colnames()) - set(r.colnames()))
+            if missing:
+                raise ValueError(f"{sub}: raw MS lacks {missing}")
+            want = {c: _column_values(r, c) for c in t.colnames()}
+            if sub == "SPECTRAL_WINDOW":
+                if r.nrows() != 1:
+                    raise ValueError(f"{raw}: {r.nrows()} spectral windows")
+                f, w = r.getcell("CHAN_FREQ", 0), r.getcell("CHAN_WIDTH", 0)
+                if f.size % chanbin:
+                    raise ValueError(f"{f.size} channels are not a multiple of chanbin {chanbin}")
+                freqs, _ = average_channels(f, w, chanbin)
+                want["CHAN_FREQ"] = freqs[None, :]
+                for c in _SW_SUMMED:
+                    want[c] = average_channels(f, r.getcell(c, 0), chanbin)[1][None, :]
+                want["NUM_CHAN"] = np.array([freqs.size], want["NUM_CHAN"].dtype)
+                want["REF_FREQUENCY"] = np.array([freqs[0]])
+            for c in t.colnames():
+                if not _eq(_column_values(t, c), want[c]):
+                    raise ValueError(f"template {sub}/{c} does not match {raw}")
+                if not _eq(t.getcolkeywords(c), r.getcolkeywords(c)):
+                    raise ValueError(f"template {sub}/{c} keywords differ from {raw}")
 
 
 def write_ms_like(template_avg_ms: str, raw_ms: str, snap: SnapArrays, out: str) -> Path:
@@ -299,6 +348,7 @@ def write_ms_like(template_avg_ms: str, raw_ms: str, snap: SnapArrays, out: str)
     from casacore.tables import table
     out_p, tpl, raw = Path(out), str(template_avg_ms), str(raw_ms)
     shutil.rmtree(str(out_p), ignore_errors=True)
+    check_template(tpl, raw, int(snap.meta.get("chanbin", 0)) or 1)
     with table(tpl + "/SPECTRAL_WINDOW", ack=False) as s:
         tf = s.getcol("CHAN_FREQ")
     want = np.asarray(snap.meta.get("freqs"))
@@ -401,6 +451,9 @@ def prep_task(raw_ms: str, bp: str, xy: str, badants: str, chanbin: int, fix_uvw
     Returns {"meta", "stats" (quality.VisibilityStats as dict), "snap" (only without
     out_ms, i.e. shadow mode: the arrays travel back to the caller)}.
     """
+    t_task = time.perf_counter()
+    if out_ms is not None:                  # a wrong template: fail before the work
+        check_template(template, raw_ms, chanbin)
     snap = prep_arrays(raw_ms, bp, xy, badants, chanbin, fix_uvw_mode)
     st = quality.visibility_stats_arrays(snap.data, snap.flag, sample_rows, min_amplitude)
     res: Dict[str, Any] = {"stats": st.__dict__.copy(), "pid": os.getpid()}
@@ -413,4 +466,5 @@ def prep_task(raw_ms: str, bp: str, xy: str, badants: str, chanbin: int, fix_uvw
     res["meta"] = {k: v for k, v in snap.meta.items() if k not in ("ant_pos",)}
     import resource
     res["maxrss_mb"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+    res["task_wall"] = time.perf_counter() - t_task
     return res

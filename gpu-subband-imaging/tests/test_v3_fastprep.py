@@ -94,14 +94,21 @@ def test_average_by_hand():
 
 
 def test_average_divides_real_and_imaginary_parts():
-    # numpy complex64 / float multiplies by the reciprocal, mstransform divides each part
-    data = np.zeros((1, 3, 1), np.complex64)
-    data[0, :, 0] = [0.1 + 0.7j, 0.2 + 0.3j, 0.4 + 0.1j]
-    d, *_ = fastprep.average_like_mstransform(data, np.zeros((1, 3, 1), bool),
-                                              np.ones((1, 1), np.float32), 3)
-    s = data[0, 0, 0] + data[0, 1, 0] + data[0, 2, 0]
-    assert d[0, 0, 0].real == np.float32(s.real) / np.float32(3)
-    assert d[0, 0, 0].imag == np.float32(s.imag) / np.float32(3)
+    # numpy complex64 / float32 multiplies by the reciprocal; mstransform divides each part.
+    # Use bins of 3 (count 3: inexact reciprocal) over many values, so the two differ.
+    rng = np.random.default_rng(0)
+    n = 4000
+    data = (rng.normal(size=(n, 3, 1)) + 1j * rng.normal(size=(n, 3, 1))).astype(np.complex64)
+    d, *_ = fastprep.average_like_mstransform(data, np.zeros((n, 3, 1), bool),
+                                              np.ones((n, 1), np.float32), 3)
+    s = data[:, 0, 0] + data[:, 1, 0] + data[:, 2, 0]           # float32 sums, CASA order
+    re = s.real.astype(np.float32) / np.float32(3)
+    im = s.imag.astype(np.float32) / np.float32(3)
+    assert np.array_equal(d[:, 0, 0].real, re) and np.array_equal(d[:, 0, 0].imag, im)
+    numpy_way = (s / np.float32(3)).astype(np.complex64)
+    if np.array_equal(numpy_way, d[:, 0, 0]):
+        pytest.skip("this numpy divides complex by real part-wise; nothing to discriminate")
+    assert not np.array_equal(numpy_way, d[:, 0, 0])
 
 
 def test_average_rejects_unsupported_input():
@@ -260,3 +267,41 @@ def test_prep_arrays_keeps_stored_uvw_when_fix_fails(tmp_path, monkeypatch):
     snap = fastprep.prep_arrays(str(raw), "bp", "xy", "", 4, "centroid")
     assert "disagree" in snap.meta["fix_uvw_error"]
     np.testing.assert_array_equal(snap.uvw, stored)
+
+
+@needs_casa
+def test_check_template_catches_other_mismatches(tmp_path, monkeypatch):
+    from casacore.tables import table
+    from v3_synth import make_raw_ms
+    raw, other = tmp_path / "raw.ms", tmp_path / "other.ms"
+    make_raw_ms(raw)
+    make_raw_ms(other, seed=8)
+    tpl = fastprep.make_template(str(other), str(tmp_path / "tpl.ms"), 4)
+    fastprep.check_template(str(tpl), str(raw), 4)                 # same band: fits
+    with table(str(raw / "POLARIZATION"), readonly=False, ack=False) as p:
+        p.putcol("CORR_TYPE", np.array([[5, 6, 7, 8]], np.int32))    # circular feeds
+    with pytest.raises(ValueError, match="POLARIZATION/CORR_TYPE"):
+        fastprep.check_template(str(tpl), str(raw), 4)
+    make_raw_ms(tmp_path / "few.ms", nant=9)                        # other row count
+    with pytest.raises(ValueError, match="rows"):
+        fastprep.check_template(str(tpl), str(tmp_path / "few.ms"), 4)
+    with pytest.raises(ValueError, match="multiple"):
+        fastprep.check_template(str(tpl), str(other), 5)
+
+
+@needs_casa
+def test_write_ms_like_lets_no_template_value_survive(tmp_path, monkeypatch):
+    from casacore.tables import table
+    from v3_synth import make_raw_ms
+    raw, other = tmp_path / "raw.ms", tmp_path / "other.ms"
+    make_raw_ms(raw)
+    make_raw_ms(other, seed=8)
+    _patch_jones(monkeypatch, 10, 16)
+    snap = fastprep.prep_arrays(str(raw), "bp", "xy", "", 4, "centroid")
+    tpl = fastprep.make_template(str(other), str(tmp_path / "tpl.ms"), 4)
+    # a template subtable column the raw MS lacks
+    with table(str(raw / "OBSERVATION"), readonly=False, ack=False) as o:
+        o.removecols(["SCHEDULE"])
+    with pytest.raises(ValueError, match="lacks template column"):
+        fastprep.write_ms_like(str(tpl), str(raw), snap, str(tmp_path / "out.ms"))
+    assert not (tmp_path / "out.ms").exists()
