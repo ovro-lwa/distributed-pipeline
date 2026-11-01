@@ -410,8 +410,13 @@ class V3Batch:
                 self.ring.close()
                 self.ring = None
             if self.memory:
-                from ..worker import _require_batch_outputs
-                _require_batch_outputs(self.band, self.batch, len(work), self.n_ok)
+                # the batch's output is the band-hour: snapshots done in earlier runs count (a rerun
+                # whose only remaining inputs are skipped snapshots still makes the hour products)
+                from .. import hour_lst
+                if work and not self.n_ok and not hour_lst._fits_stems(
+                        self.cfg, self.band, int(self.group().rstrip("h"))):
+                    raise RuntimeError(f"batch {self.band}MHz/{self.batch} produced no outputs from "
+                                       f"{len(work)} inputs")
                 self._hour_stage()
                 hour_ok = True
         finally:

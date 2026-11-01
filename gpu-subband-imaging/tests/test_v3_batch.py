@@ -374,3 +374,33 @@ def test_write_kept_ms_from_the_slot(env, monkeypatch):
         p = _snap_of(s)
         assert np.load(k / "data.npy").tobytes() == (p.data * 2).tobytes()
     assert deleted == [STAMPS]
+
+
+@needs_v3_imager
+def test_rerun_with_only_skipped_inputs_still_makes_the_hour(env, monkeypatch, caplog):
+    """Found on the real band-hour: two snapshots are always skipped (no data); the hour rerun
+    must not fail with "no outputs" because nothing is left to image."""
+    tmp = env.tmp
+    cfg = _config(tmp, delete_checkpoint=False)
+    extra = tmp / "in" / "20261031_101057_23MHz.ms.tar"
+    extra.write_bytes(b"x")
+    tars = env.tars + [str(extra)]
+
+    def prep(raw_ms, *a, **k):
+        if Path(raw_ms).name.startswith("20261031_101057"):
+            return dict(stats=dict(sampled_values=100, usable_values=0, nonzero_count=0, nonzero_fraction=0.0,
+                                   median_amplitude=0.0, max_amplitude=0.0), slot_written=False,
+                        meta=dict(timings={}), task_wall=0.1, maxrss_mb=1.0, pid=os.getpid())
+        return fake_prep_slot_task(raw_ms, *a, **k)
+    monkeypatch.setattr(fastprep, "prep_slot_task", prep)
+    w = _worker(cfg, FakeDaemon())
+    w._lst["20261031_101057_23MHz"] = 5
+    w.run_batch(tars)
+    b = _bdir(tmp)
+    (b / "provenance.json").unlink()
+    w = _worker(cfg, FakeDaemon())
+    w._lst["20261031_101057_23MHz"] = 5
+    with caplog.at_level(logging.INFO, logger="gsi"):
+        w.run_batch(tars)
+    assert "1 to image, 0 to replay" in caplog.text
+    assert json.loads((b / "provenance.json").read_text())["hour"]["status"] == "ok"
