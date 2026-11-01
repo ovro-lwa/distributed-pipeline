@@ -33,8 +33,9 @@
 #                      residual guard are built in), and the smoothing switches
 #                      ZEST_SMOOTH_BELOW_MHZ (> 0: smooth only subbands whose centre frequency
 #                      is below it), ZEST_SMOOTH_EXEMPT_FLUX (> 0: sky sources with catalog flux
-#                      >= it keep per-channel gains) and ZEST_RFI_SMOOTH_FLUX (unset: the
-#                      ZEST_SMOOTH_FLUX value), all unset by default
+#                      >= it keep per-channel gains), ZEST_SMOOTH_EXEMPT_BELOW_EL_DEG (> 0: sky
+#                      sources below this elevation keep them) and ZEST_RFI_SMOOTH_FLUX (unset:
+#                      the ZEST_SMOOTH_FLUX value), all unset by default
 # Anything but the defaults needs TTCalX with solve_gains!
 # (branch feature/cpu-matched-zest).
 #
@@ -93,10 +94,19 @@ smooth_flux = envf("ZEST_SMOOTH_FLUX", 0.0)
 smooth_below_mhz = envf("ZEST_SMOOTH_BELOW_MHZ", 0.0)       # 0: smooth every subband
 smooth_exempt_flux = envf("ZEST_SMOOTH_EXEMPT_FLUX", 0.0)   # 0: no source exempt
 rfi_smooth_flux = envf("ZEST_RFI_SMOOTH_FLUX", smooth_flux)
+# ZEST_SMOOTH_EXEMPT_BELOW_EL_DEG > 0: sky sources below this elevation (in this snapshot) keep
+# per-channel gains under smoothing (low-elevation models need them; robust across LST, see
+# docs/peel_config.md); needs TTCalX zest_sky_rfi!(...; smooth_exempt_names)
+smooth_exempt_below_el = envf("ZEST_SMOOTH_EXEMPT_BELOW_EL_DEG", 0.0)
 for (k, v) in (("ZEST_SMOOTH_FLUX", smooth_flux), ("ZEST_SMOOTH_BELOW_MHZ", smooth_below_mhz),
-               ("ZEST_SMOOTH_EXEMPT_FLUX", smooth_exempt_flux), ("ZEST_RFI_SMOOTH_FLUX", rfi_smooth_flux))
+               ("ZEST_SMOOTH_EXEMPT_FLUX", smooth_exempt_flux), ("ZEST_RFI_SMOOTH_FLUX", rfi_smooth_flux),
+               ("ZEST_SMOOTH_EXEMPT_BELOW_EL_DEG", smooth_exempt_below_el))
     v >= 0 || (println("CONFIG_ERROR $k must be >= 0, got $v"); flush(stdout); exit(2))
 end
+smooth_exempt_below_el == 0 ||
+    any(m -> :smooth_exempt_names in Base.kwarg_decl(m), methods(TTCalX.zest_sky_rfi!)) ||
+    (println("CONFIG_ERROR ZEST_SMOOTH_EXEMPT_BELOW_EL_DEG needs TTCalX zest_sky_rfi!(...; smooth_exempt_names)");
+     flush(stdout); exit(2))
 restore_path = get(ENV, "ZEST_RESTORE", "")
 restore_below_mhz = envf("ZEST_RESTORE_BELOW_MHZ", Inf)
 restore_offset_deg = envf("ZEST_RESTORE_OFFSET_DEG", 0.0)
@@ -327,6 +337,13 @@ function run_sky_rfi!(vis, meta, mjd, initial_gains)
     end
     elev = Dict(get_name(s) => elevation_deg(s, meta) for s in vcat(sources, rfi_sources))
     rfi_names = Set(get_name.(rfi_sources))
+    exempt_kw = (;)
+    if smooth_exempt_below_el > 0 && sflux > 0
+        exempt = [get_name(s) for s in sources
+                  if min_elevation <= elev[get_name(s)] < smooth_exempt_below_el]
+        exempt_kw = (; smooth_exempt_names=exempt)
+        @printf("PEEL_SMOOTH_EXEMPT below_el_deg=%g names=\"%s\"\n", smooth_exempt_below_el, join(exempt, ","))
+    end
     report = (name, it; converged, niters, finite, max_gain, p_with, p_old, p_new, action) -> @printf(
         "PEEL_SOLVE pass=%s name=\"%s\" elevation_deg=%.2f iteration=%d/%d converged=%s niters=%d finite=%s max_gain=%.6g accepted=%s action=%s p_ratio_new=%.4g p_ratio_old=%.4g\n",
         name in rfi_names ? "rfi" : "sky", name, elev[name], it, piter, converged, niters, finite,
@@ -338,7 +355,7 @@ function run_sky_rfi!(vis, meta, mjd, initial_gains)
                       smooth_exempt_flux=smooth_exempt_flux > 0 ? smooth_exempt_flux : Inf,
                       restore=restore_sources, restore_below_mhz=restore_below_mhz,
                       restore_offset_deg=restore_offset_deg, precision=precision,
-                      initial_gains=initial_gains)
+                      initial_gains=initial_gains, exempt_kw...)
     @printf("PEEL_SUMMARY pass=all selected=%d accepted=%d skipped=%d flagged_zeros=%d action=sky_rfi\n",
             length(sources) - length(r.skipped) + length(rfi_sources), length(r.peeled),
             length(r.skipped), r.flagged_zeros)

@@ -1,5 +1,9 @@
 # Peel configuration (sky_rfi engine): recommended settings and the ablation behind them
 
+> **Requirement:** `smooth_exempt_below_el_deg` needs TTCalX `zest_sky_rfi!(...; smooth_exempt_names)`.
+> That is TTCalX branch `exp/sponge-exempt-apparent` (ef89a9a, local, on top of `feature/sponge-restore-fast-zest`).
+> The daemon refuses to start with `CONFIG_ERROR` on an older TTCalX.
+
 This note is for the `peel:` section of `pipeline.yaml` with `engine: sky_rfi`
 (TTCalX `zest_sky_rfi!`, branch `feature/sponge-restore-fast-zest`).
 
@@ -33,9 +37,8 @@ peel:
   warm_start: false            # drifts over long snapshot chains (see below)
   # band-gain smoothing only where it helps (below 65 MHz)
   smooth_flux: 1000.0
-  smooth_exempt_flux: 500.0    # sources >= 500 Jy (catalog, band centre) keep per-channel gains;
-                               # helps Tau A when it is high, hurts it at low elevation (see the Jupiter check)
-  smooth_below_mhz: 65.0       # subband centre frequency; 64 MHz band (centre ~66.4 MHz) and up: off
+  smooth_exempt_below_el_deg: 30.0   # sources below 30 deg (this snapshot) keep per-channel gains
+  smooth_below_mhz: 65.0             # subband centre frequency; 64 MHz band (centre ~66.4 MHz) and up: off
   # Jupiter restore below 41 MHz (one JSON per night, position from the ephemeris)
   restore: /path/to/jupiter_<date>.json
   restore_below_mhz: 41.0
@@ -55,16 +58,19 @@ All three are sent to the daemon only when set, so the defaults leave the daemon
 | `smooth_below_mhz` | 0 (off) | apply `smooth_flux` and `rfi_smooth_flux` only when the subband centre (the mean channel frequency) is below this value |
 | `smooth_exempt_flux` | 0 (off) | sky sources whose catalog Stokes I at the band centre is at least this value keep per-channel gains. This is TTCalX `smooth_exempt_flux`, where 0 maps to `Inf` |
 | `rfi_smooth_flux` | unset (= `smooth_flux`) | smoothing flux for the RFI emitters (TTCalX `rfi_smooth_flux`) |
+| `smooth_exempt_below_el_deg` | 0 (off) | sky sources below this elevation in the snapshot keep per-channel gains. The daemon builds the name list per snapshot from the same elevations it uses for `min_source_elevation_deg`, passes it as TTCalX `smooth_exempt_names`, and logs it as `PEEL_SMOOTH_EXEMPT below_el_deg=... names="..."` |
 
 - Every value must be at least 0. A negative value raises `ConfigError`, and the daemon exits with `CONFIG_ERROR`.
 - The `SKY_RFI` settings line shows all of them and now reaches the `gsi.peel` log.
 - In the 7-source model, catalog flux at about 25 MHz is: Cas A and Cyg A above 10 kJy, Vir A about 7 kJy, Tau A about 3.2 kJy, Hya A and Her A about 600 Jy, Per B (3C123) 400 Jy.
-- Exempt 500 therefore leaves only Per B and the RFI emitters band-tied.
+- Exempt 500 therefore leaves only Per B and the RFI emitters band-tied. That rule is LST-dependent; the elevation rule below replaces it.
 
 Checks, on CPU through the real daemon (lwacalim10):
 - 82 MHz with `smooth_below_mhz: 65` is bitwise equal to `smooth_flux: 0` (DATA and FLAG, 2 snapshots).
 - The default settings give bitwise the same output as the previous daemon (82 MHz new config; 23 MHz production).
 - 23 MHz with `smooth_exempt_flux: 500` reproduces the ablation run E8 to 3e-8 Jy.
+- `smooth_exempt_below_el_deg: 30` through `PeelParams` reproduces the study's rule L30 exactly: 0.0 Jy difference over 2 × 2016 values (10-31 23 MHz × 12; 12-20 × 12).
+- With the new code and its defaults, both the conservative and the production configs are bitwise equal to the previous commit's daemon.
 
 ## How the ablation measured
 
@@ -138,6 +144,75 @@ Production chains are hundreds of snapshots long, so leave warm start off.
 
 **"Per B" in the image comparison was Per A (3C84),** an unpeeled check source: the new config keeps it better. The catalogue "Per B" is 3C123, and it is removed better by the new config.
 
+## Choosing the exemption rule: elevation, not catalog flux (robust across LST)
+
+### Data and variants
+
+- 36 snapshots on CPU, all cold:
+  - 2026-10-31 LST 05h: 23 MHz × 12 and 55 MHz × 6.
+  - 2024-12-20: 03, 08 and 12h at 18, 23, 27 and 55 MHz.
+  - 2024-12-27: 03 and 12h at 18, 23 and 27 MHz.
+- All variants use the sky_rfi engine (except production) with mixed precision, peeliter 2, warm start off, restore below 41 MHz and the 65 MHz gate:
+
+| variant | rule |
+|---|---|
+| **P** | production |
+| **C** | conservative: smooth 1000, nothing exempt |
+| **R500** | catalog flux ≥ 500 Jy exempt |
+| **A1000** | apparent flux ≥ 1000 Jy exempt (catalog × sin(el)^1.6) |
+| **L20, L30, L35** | sources below 20 / 30 / 35° elevation exempt |
+
+- The sin(el)^1.6 for A1000 is a fit to the OVRO-LWA Stokes I beam (`OVRO-LWA_MROsoil_updatedheight.h5`, via orca): exponent 1.6 at 20–25 MHz, 1.5 at 55 MHz, 1.2 at 84 MHz.
+- Results are in `/lustre/nkosogor/peel_exp/ablate/results/exempt/`: `table.txt` and `ratios.csv`.
+- Per source, band and hour, P / C / recommended (L30) are in [`peel_config_ratios.csv`](peel_config_ratios.csv), for figures.
+
+### Medians over the 14 band/hour groups without a Jupiter burst
+
+| | Tau A res 60 λ (median / worst) | groups with Tau A worse than prod by > 0.03 | Hya A res | 3C134 | 3C196 | Per A | blank V / prod | Jupiter V kept (min, 8 detections) |
+|---|---|---|---|---|---|---|---|---|
+| P | 0.029 / 0.115 | – | 0.16 | 0.852 | 0.933 | 0.32 | 1.000 | −0.00 |
+| C | 0.060 / 0.451 | 6 | 0.02 | 0.872 | 0.964 | 0.68 | 1.056 | 0.969 |
+| R500 | 0.075 / 0.390 | 6 | 0.22 | 0.858 | 0.952 | 0.46 | 1.048 | 0.969 |
+| A1000 | 0.079 / 0.451 | 8 | 0.02 | 0.870 | 0.964 | 0.67 | 1.055 | 0.969 |
+| L20 | 0.022 / 0.451 | 3 | 0.02 | 0.865 | 0.954 | 0.65 | 1.035 | 0.969 |
+| **L30** | **0.012 / 0.451** | **2** | 0.02 | 0.863 | 0.950 | 0.47 | **1.023** | **0.969** |
+| L35 | 0.021 / 0.390 | 2 | 0.02 | 0.862 | 0.950 | 0.47 | 1.023 | 0.969 |
+
+Over all 36 snapshots, L30 gives:
+- Tau A |res| median 0.004 at 10 λ (production 0.008, C 0.045);
+- 3C134 0.818 (production 0.657), Per A 0.685 (production 0.593);
+- 17.4 s per snapshot (production 18.4 s).
+
+### Tau A residual at 60 λ, P / C / R500 / L30
+
+| group | P | C | R500 | L30 |
+|---|---|---|---|---|
+| 10-31 23 MHz 05h | 0.021 | 0.068 | 0.022 | 0.025 |
+| 10-31 55 MHz 05h | 0.001 | 0.009 | 0.000 | 0.001 |
+| 12-20 23 MHz 08h | 0.062 | 0.090 | 0.064 | 0.064 |
+| 12-20 23 MHz 12h | 0.036 | 0.051 | 0.258 | 0.011 |
+| 12-20 27 MHz 12h | 0.037 | 0.130 | 0.192 | 0.017 |
+| 12-20 55 MHz 12h | 0.014 | 0.127 | 0.225 | 0.013 |
+| 12-27 23 MHz 12h | 0.064 | 0.224 | 0.323 | 0.020 |
+| 12-27 27 MHz 12h | 0.067 | 0.192 | 0.323 | 0.102 |
+
+### Why elevation works
+
+- What lowers Tau A's residual is per-channel freedom for the poorly modelled directions, and those are the low-elevation ones:
+  - Hya A at 12–22° at 10-31 05h;
+  - Per B (24°) and Cas A (8°) at 12-20 12h.
+- Exempting them by elevation follows them across LST.
+- Catalog or apparent flux picks the bright, high sources instead (Tau A and Hya A at 12h, Tau A and Cas A at 05h). That is wrong in one LST or the other.
+- 20° misses Per B at 24°. 35° also exempts Tau A at 30–31°: that helps 55 MHz 03h a little (0.45 → 0.39) and costs 12-20 12h (0.011 → 0.035 at 23 MHz). 30° it is.
+
+### Open case
+
+**12-20 55 MHz 03h**, with Tau A at 30° elevation (on the threshold):
+- every smoothing rule leaves Tau A at 0.39–0.45, against 0.07 in production;
+- the rule makes no difference there.
+
+If this matters, lower `smooth_below_mhz` to about 50 MHz. That loses the 55 MHz faint-source gain (10-31: 3C134 0.83 → 0.73).
+
 ## Jupiter check (2024-12-20 / 12-27 burst snapshots)
 
 Data: the earlier sponge study's prepped snapshots (`/lustre/nkosogor/peel_exp/runs/big1220|big1227/prep`).
@@ -186,6 +261,6 @@ The 60 λ values are the same within ±0.02. Jupiter Stokes I kept is 0.84–0.9
 - **18 MHz 12h Cas A (8° elevation):** −0.10 with exemption, against −0.20 without and −0.06 in production.
 - **Trade-off:** at 10-31 05h (Tau A at 73°, Hya A at 12–22°) the exemption is what fixes Tau A (0.043 → −0.008). Catalog-flux exemption cannot tell these cases apart.
 - **Possible improvement (not implemented):** an exemption by *apparent* (beam-weighted) flux or elevation in TTCalX, or an explicit source list.
-- **Until then:** use exempt 500 when Tau A is high and Hya A is low, as in the hours the ablation covers. Otherwise smooth 1000 without exemption (or `smooth_exempt_flux: 4000`, which here is the same) is the more conservative choice below 65 MHz.
+- **Resolved by the elevation rule** in the section above (`smooth_exempt_below_el_deg: 30`). It keeps Jupiter V ≥ 0.969 on all 8 detections, the same as every restore configuration.
 
 **Note on the 10-31 ablation:** Jupiter's position there was computed from the astropy ephemeris converted to barycentric ICRS *with* its distance. That is about 3° off (parallax). The ablation's Jupiter column is therefore not valid; Jupiter was weak that hour anyway (the restore fitted 3.5–6.5 Jy). The estimator now uses the direction only, plus the V-peak search above.

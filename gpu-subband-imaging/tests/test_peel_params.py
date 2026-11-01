@@ -103,7 +103,8 @@ def test_shipped_config_has_no_rfi_model():
 
 # ---- smoothing switches (docs/peel_config.md) --------------------------------------------
 
-SMOOTH_KEYS = ("ZEST_SMOOTH_BELOW_MHZ", "ZEST_SMOOTH_EXEMPT_FLUX", "ZEST_RFI_SMOOTH_FLUX")
+SMOOTH_KEYS = ("ZEST_SMOOTH_BELOW_MHZ", "ZEST_SMOOTH_EXEMPT_FLUX", "ZEST_RFI_SMOOTH_FLUX",
+               "ZEST_SMOOTH_EXEMPT_BELOW_EL_DEG")
 
 
 def test_smoothing_switches_unset_by_default():
@@ -124,12 +125,14 @@ def test_smoothing_switches_env_mapping():
     only_gate = PeelParams(smooth_below_mhz=65).daemon_env(None)
     assert only_gate["ZEST_SMOOTH_BELOW_MHZ"] == "65"
     assert "ZEST_SMOOTH_EXEMPT_FLUX" not in only_gate and "ZEST_RFI_SMOOTH_FLUX" not in only_gate
+    el = PeelParams(smooth_exempt_below_el_deg=30.0).daemon_env(None)
+    assert el["ZEST_SMOOTH_EXEMPT_BELOW_EL_DEG"] == "30.0"
 
 
 @pytest.mark.parametrize("field,value", [
     ("smooth_flux", -1.0), ("smooth_below_mhz", -65.0), ("smooth_exempt_flux", -500.0),
     ("rfi_smooth_flux", -1.0), ("smooth_exempt_flux", float("nan")), ("smooth_below_mhz", "65"),
-    ("smooth_flux", True),
+    ("smooth_flux", True), ("smooth_exempt_below_el_deg", -30.0),
 ])
 def test_smoothing_switches_must_be_non_negative_numbers(field, value):
     with pytest.raises(ConfigError, match=field):

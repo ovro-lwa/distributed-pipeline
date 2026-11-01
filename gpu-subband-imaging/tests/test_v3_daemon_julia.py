@@ -114,7 +114,7 @@ def test_daemon_slot_io_matches_numpy(mode, tmp_path):
 
 
 @pytest.mark.parametrize("key", ["ZEST_SMOOTH_BELOW_MHZ", "ZEST_SMOOTH_EXEMPT_FLUX",
-                                 "ZEST_RFI_SMOOTH_FLUX"])
+                                 "ZEST_RFI_SMOOTH_FLUX", "ZEST_SMOOTH_EXEMPT_BELOW_EL_DEG"])
 def test_daemon_rejects_negative_smoothing_switches(key):
     env = dict(os.environ, CUDA_VISIBLE_DEVICES="")
     with pytest.raises(RuntimeError, match=f"{key} must be >= 0"):

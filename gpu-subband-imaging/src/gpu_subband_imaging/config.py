@@ -197,10 +197,14 @@ class PeelParams:
     # smooth_flux (and rfi_smooth_flux) only when the subband centre frequency is below it;
     # smooth_exempt_flux > 0 keeps per-channel gains for sky sources whose catalog flux at the
     # subband centre is >= it (TTCalX smooth_exempt_flux); rfi_smooth_flux (None = smooth_flux)
-    # is the RFI emitters' value.  The defaults (0, 0, None) leave smoothing as before.
+    # is the RFI emitters' value; smooth_exempt_below_el_deg > 0 keeps per-channel gains for sky
+    # sources below that elevation in each snapshot (robust across LST; needs TTCalX with
+    # zest_sky_rfi!(...; smooth_exempt_names), branch exp/sponge-exempt-apparent).
+    # The defaults (0, 0, None, 0) leave smoothing as before.
     smooth_below_mhz: float = 0.0
     smooth_exempt_flux: float = 0.0
     rfi_smooth_flux: Optional[float] = None
+    smooth_exempt_below_el_deg: float = 0.0
     restore: str = ""                 # point sources given back after peeling (TTCal JSON, e.g. Jupiter)
     restore_below_mhz: float = 41.0
     restore_offset_deg: float = 0.0   # Stokes V position search radius (0.5 for Jupiter)
@@ -220,7 +224,8 @@ class PeelParams:
             raise ConfigError("peel.device=cpu needs peel.model=exact")
         if self.maxiter < 1 or self.peeliter < 1:
             raise ConfigError("peel.maxiter and peel.peeliter must be >= 1")
-        for name in ("smooth_flux", "smooth_below_mhz", "smooth_exempt_flux", "rfi_smooth_flux"):
+        for name in ("smooth_flux", "smooth_below_mhz", "smooth_exempt_flux", "rfi_smooth_flux",
+                     "smooth_exempt_below_el_deg"):
             value = getattr(self, name)
             if value is None and name == "rfi_smooth_flux":
                 continue
@@ -228,7 +233,8 @@ class PeelParams:
                 raise ConfigError(f"peel.{name} must be >= 0, got {value!r}")
 
     # ZEST_* variables sent only when set, so the default environment stays as before
-    _UNSET = {"smooth_below_mhz": 0.0, "smooth_exempt_flux": 0.0, "rfi_smooth_flux": None}
+    _UNSET = {"smooth_below_mhz": 0.0, "smooth_exempt_flux": 0.0, "rfi_smooth_flux": None,
+              "smooth_exempt_below_el_deg": 0.0}
 
     def daemon_env(self, rfi_sources: Optional[str]) -> Dict[str, str]:
         """ZEST_* environment for the zest daemon."""
