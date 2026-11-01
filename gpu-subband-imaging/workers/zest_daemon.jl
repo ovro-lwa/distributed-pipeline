@@ -414,6 +414,9 @@ const slot_device_vis = Ref{Any}(nothing)
 function reused_device_vis(xx, xy, yx, yy, flags)
     v = slot_device_vis[]
     if v === nothing || size(v.xx) != size(xx)
+        # forget the old arrays before freeing them: if the allocation below fails, the next
+        # slot of the old shape must not copy into freed arrays
+        slot_device_vis[] = nothing
         v === nothing || foreach(f -> CUDA.unsafe_free!(getfield(v, f)), (:xx, :xy, :yx, :yy, :flags))
         v = slot_device_vis[] = GPUVisibilities(CuArray(xx), CuArray(xy), CuArray(yx), CuArray(yy), CuArray(flags))
     else
