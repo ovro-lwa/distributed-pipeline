@@ -39,6 +39,11 @@ def _chunk(items: List[str], n: int) -> List[List[str]]:
     return [items[i:i + n] for i in range(0, len(items), n)]
 
 
+def _one_batch_per_hour(pl) -> bool:
+    from .config import v3_params
+    return v3_params(pl).hour_source == "memory"
+
+
 @dataclass
 class Batch:
     band: int
@@ -69,9 +74,11 @@ def build(pl: PipelineConfig, list_via_node: str, manifest_dir: Path
             cap = getattr(pl, "max_files_per_hour", None)
             if cap:
                 groups = {h: v[:cap] for h, v in groups.items()}
-            # batches never span two LST hours
+            # batches never span two LST hours; gsi v3 hour_source=memory: one batch per band-hour
+            # (the batch makes the hour products from its in-memory records)
+            size = max(len(v) for v in groups.values()) if (groups and _one_batch_per_hour(pl)) else pl.batch_size
             chunks = [(lst.label(h), c) for h in sorted(groups)
-                      for c in _chunk(groups[h], pl.batch_size)]
+                      for c in _chunk(groups[h], max(1, size))]
         else:
             chunks = [("", c) for c in _chunk(tars, pl.batch_size)]
         for i, (group, chunk) in enumerate(chunks):

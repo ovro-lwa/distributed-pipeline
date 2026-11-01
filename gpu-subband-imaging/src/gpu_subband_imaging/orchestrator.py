@@ -67,7 +67,8 @@ class Orchestrator:
         }
         for key in ("GSI_CONDA_SH", "GSI_ALLOWED_LUSTRE_WRITE_ROOT",
                     "GSI_TASKSET_CPUS", "GSI_NICE", "GSI_IONICE",
-                    "NUMPY_MADVISE_HUGEPAGE", "CASARCFILES", "GSI_PREP_LOOKAHEAD", "XDG_CACHE_HOME"):
+                    "NUMPY_MADVISE_HUGEPAGE", "CASARCFILES", "GSI_PREP_LOOKAHEAD", "XDG_CACHE_HOME",
+                    "GSI_V3_ALLOW_PROFILE"):
             if key in os.environ:
                 self.worker_env[key] = os.environ[key]
         self.group_of: Dict[Tuple[int, int], str] = {}   # (band, batch) -> LST hour label
@@ -80,6 +81,13 @@ class Orchestrator:
         return (getattr(pl, "stream_hour_images", False) and
                 getattr(pl, "layout", "utc") == "lst")
 
+    @property
+    def hour_in_batch(self) -> bool:
+        """gsi v3 hour_source=memory: a band-hour is one batch that also makes the hour products
+        (no hour-job rows; the batch's DONE is the band-hour's)."""
+        from .config import v3_params
+        return v3_params(self.cfg.pipeline).hour_source == "memory"
+
     # -- planning ------------------------------------------------------------
 
     def plan(self) -> List[Job]:
@@ -89,7 +97,7 @@ class Orchestrator:
                                  self.state / "manifests" / _run_key(self.cfg.pipeline))
         jobs = worklist.to_jobs(batches)
         self.group_of = {(b.band, b.index): b.group for b in batches}
-        if self.streaming:
+        if self.streaming and not self.hour_in_batch:
             n_batches: Dict[Tuple[int, str], int] = {}
             for b in batches:
                 n_batches[(b.band, b.group)] = n_batches.get((b.band, b.group), 0) + 1
@@ -337,6 +345,8 @@ class Orchestrator:
         for j in self.ledger.all():
             if is_hour_job(j):
                 by_group.setdefault(hour_job_group(j.batch), []).append(j)
+            elif self.hour_in_batch and self._group(j):     # the batch is the band-hour's hour job
+                by_group.setdefault(self._group(j), []).append(j)
         for group, js in sorted(by_group.items()):
             if group in self._wideband_done or not all(j.status in (DONE, SKIPPED) for j in js):
                 continue

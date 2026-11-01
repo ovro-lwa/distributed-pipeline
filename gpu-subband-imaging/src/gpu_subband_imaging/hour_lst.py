@@ -54,14 +54,21 @@ def qa_reject(rms: List[float]) -> Tuple[List[int], float, float]:
 
 
 def read_stats(qa_dir: Path) -> List[Dict]:
+    """The pilot QA rows of a band-hour; a snapshot imaged by several runs counts once, the newest
+    (row time "t" where the worker wrote one, else the file's modification time; ties by name)."""
     rows: Dict[str, Dict] = {}
+    when: Dict[str, tuple] = {}
     d = qa_dir / ".snapshot_stats"
     if d.is_dir():
-        for f in sorted(d.glob("*.jsonl")):
+        files = sorted(d.glob("*.jsonl"), key=lambda f: (f.stat().st_mtime, f.name))
+        for k, f in enumerate(files):
+            mt = f.stat().st_mtime
             for line in f.read_text().splitlines():
                 if line.strip():
                     r = json.loads(line)
-                    rows[r["ts"]] = r            # a re-run of a snapshot replaces it
+                    key = (float(r.get("t", mt)), k)
+                    if r["ts"] not in when or key >= when[r["ts"]]:
+                        rows[r["ts"]], when[r["ts"]] = r, key      # a re-run of a snapshot replaces it
     return [rows[k] for k in sorted(rows)]
 
 
@@ -167,10 +174,61 @@ def _git_rev(path: str) -> str:
         return "unknown"
 
 
+def qa_step(qa_dir: Path, band: int, rows: List[Dict]) -> Tuple[set, Dict]:
+    """Step 1 (shared by the hour job and the gsi v3 in-batch hour stage): the main-pipeline QA
+    files of the band-hour's pilot V rows; returns (rejected timestamps, QA summary)."""
+    return write_qa(qa_dir, band, rows)
+
+
+def movie_step(cfg: Config, band: int, group: str, bdir: Path) -> Tuple[Optional[str], float]:
+    """Step 4: Movies/<band>MHz_I_Clean.mp4 from the frames; (movie path or None, seconds)."""
+    from .stages import movie
+    pl = cfg.pipeline
+    t0 = time.perf_counter()
+    frames = bdir / "Movies" / "frames"
+    out = None
+    try:
+        m = movie.stitch(frames, bdir / "Movies" / f"{band}MHz_I_Clean.mp4", pl.movie.fps, pl.movie.crf)
+        out = str(m) if m else None
+        if m and not pl.movie.keep_frames:
+            shutil.rmtree(frames, ignore_errors=True)
+    except Exception as e:
+        log.error("movie %sMHz %s failed: %s", band, group, e)
+    return out, time.perf_counter() - t0
+
+
+def write_provenance(cfg: Config, band: int, group: str, gpu: Optional[int], rec: Dict,
+                     v3: Optional[Dict] = None) -> Dict:
+    """Step 5: provenance.json of the band directory and QA/<band>MHz-hour-timing.json."""
+    from .metadata import _code_revision, software_versions
+    pl, h = cfg.pipeline, cfg.pipeline.hour_imaging
+    lst_hour = int(group.rstrip("h"))
+    bdir = _band_dir(cfg, band, lst_hour)
+    qa_dir = bdir / "QA"
+    snaps = sorted((bdir / "snapshots_clean").glob("*.fits.fz")) if (bdir / "snapshots_clean").is_dir() else []
+    prov = {
+        "pipeline": "gpu-subband-imaging", "layout": "lst",
+        "pipeline_version": _code_revision(), "ttcalx_version": _git_rev(pl.env.ttcalx),
+        "worker_node": os.uname().nodename, "gpu": gpu, "subband": f"{band}MHz",
+        "obs_date": pl.date, "lst_label": group, "run_label": pl.run_label,
+        "phase_centre": lst.phase_centre(lst_hour),
+        "snapshot_phase_centre": pl.snapshot_phase_centre,
+        "bp_table": pl.cal.bp, "xy_table": pl.cal.xy, "sky_model": pl.cal.sources,
+        "rfi_model": pl.cal.rfi_sources if pl.peel_for_band(band).rfi else None,
+        "peel": vars(pl.peel_for_band(band)), "imaging": vars(pl.imaging),
+        "hour_imaging": {"products": list(h.products), "imager": h.ttcalx_image},
+        "software": software_versions(cfg),
+        "sun_cut": pl.sun_cut, "n_snapshots_clean": len(snaps), "hour": rec,
+    }
+    if v3 is not None:
+        prov["v3"] = v3
+    (bdir / "provenance.json").write_text(json.dumps(prov, indent=1, default=str))
+    (qa_dir / f"{band}MHz-hour-timing.json").write_text(json.dumps(rec, indent=1, default=str))
+    return prov
+
+
 def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> Dict:
     from . import hour_image
-    from .metadata import _code_revision, software_versions
-    from .stages import movie
 
     pl, h = cfg.pipeline, cfg.pipeline.hour_imaging
     lst_hour = int(group.rstrip("h"))
@@ -203,8 +261,7 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
 
     # 1. QA
     t0 = time.perf_counter()
-    rows = read_stats(qa_dir)
-    bad_ts, rec["qa"] = write_qa(qa_dir, band, rows)
+    bad_ts, rec["qa"] = qa_step(qa_dir, band, read_stats(qa_dir))
     exclude = [i for i, s in enumerate(stamps) if lst.timestamp(s) in bad_ts]
     rec["qa"]["excluded_from_hour"] = len(exclude)
     rec["timing_s"] = {"qa": time.perf_counter() - t0}
@@ -284,41 +341,17 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
 
     # 4. movie
     if pl.movie.enabled:
-        t0 = time.perf_counter()
-        frames = bdir / "Movies" / "frames"
-        try:
-            m = movie.stitch(frames, bdir / "Movies" / f"{band}MHz_I_Clean.mp4", pl.movie.fps, pl.movie.crf)
-            rec["movie"] = str(m) if m else None
-            if m and not pl.movie.keep_frames:
-                shutil.rmtree(frames, ignore_errors=True)
-        except Exception as e:
-            log.error("movie %sMHz %s failed: %s", band, group, e)
-        rec["timing_s"]["movie"] = time.perf_counter() - t0
+        rec["movie"], rec["timing_s"]["movie"] = movie_step(cfg, band, group, bdir)
 
     # 5. provenance, kept MSes
     rec["timing_s"]["total"] = time.perf_counter() - t_all
-    snaps = sorted((bdir / "snapshots_clean").glob("*.fits.fz")) if (bdir / "snapshots_clean").is_dir() else []
-    prov = {
-        "pipeline": "gpu-subband-imaging", "layout": "lst",
-        "pipeline_version": _code_revision(), "ttcalx_version": _git_rev(pl.env.ttcalx),
-        "worker_node": os.uname().nodename, "gpu": gpu, "subband": f"{band}MHz",
-        "obs_date": pl.date, "lst_label": group, "run_label": pl.run_label,
-        "phase_centre": lst.phase_centre(lst_hour),
-        "snapshot_phase_centre": pl.snapshot_phase_centre,
-        "bp_table": pl.cal.bp, "xy_table": pl.cal.xy, "sky_model": pl.cal.sources,
-        "rfi_model": pl.cal.rfi_sources if pl.peel_for_band(band).rfi else None,
-        "peel": vars(pl.peel_for_band(band)), "imaging": vars(pl.imaging),
-        "hour_imaging": {"products": list(h.products), "imager": h.ttcalx_image},
-        "software": software_versions(cfg),
-        "sun_cut": pl.sun_cut, "n_snapshots_clean": len(snaps), "hour": rec,
-    }
+    v3b = None
     if v3_params(pl).hour_source == "archive":
-        prov["v3"] = {"hour_source": "archive", "used": source, "archive": v3_params(pl).archive,
-                      "files": [{"path": str(a), "bytes": a.stat().st_size} for a in archives if a.exists()],
-                      "n_records": len(stamps) if source == "archive" else None,
-                      "problems": rec.get("archive_problems")}
-    (bdir / "provenance.json").write_text(json.dumps(prov, indent=1, default=str))
-    (qa_dir / f"{band}MHz-hour-timing.json").write_text(json.dumps(rec, indent=1, default=str))
+        v3b = {"hour_source": "archive", "used": source, "archive": v3_params(pl).archive,
+               "files": [{"path": str(a), "bytes": a.stat().st_size} for a in archives if a.exists()],
+               "n_records": len(stamps) if source == "archive" else None,
+               "problems": rec.get("archive_problems")}
+    write_provenance(cfg, band, group, gpu, rec, v3b)
     log.info("timing %sMHz lst=%s phase=hour_total elapsed=%.2f s rc=%s n_ms=%d",
              band, group, rec["timing_s"]["total"], rc, len(ms))
     if source == "failed":

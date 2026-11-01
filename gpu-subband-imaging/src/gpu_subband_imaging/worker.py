@@ -248,7 +248,7 @@ class Worker:
 
     UNTAR_SPACE_MARGIN = 1.5   # free space wanted in untar_to, in units of the tar size
 
-    def _untar_root(self) -> Optional[Path]:
+    def _untar_root(self, configured: bool = False) -> Optional[Path]:
         """This process's directory under v3.untar_to: <untar_to>/.gsi3w_<uid>_<host>_<pid>.
 
         Named so that a later batch can tell a crashed worker's leftovers (same user and
@@ -256,13 +256,16 @@ class Worker:
         """
         import os
         v3 = getattr(self.cfg.pipeline, "v3", None)
-        if v3 is None or not v3.untar_to:
+        # configured=True: the directory v3.untar_to names whether or not untar to tmpfs is in use right
+        # now (the gsi v3 batch turns it off under memory pressure; sweeps and cleanups still need it)
+        if v3 is None or not v3.untar_to or (getattr(self, "_untar_disabled", False) and not configured):
             return None
         return Path(v3.untar_to) / f".gsi3w_{os.getuid()}_{os.uname().nodename}_{os.getpid()}"
 
-    def _untar_dir(self, stamp: str) -> Optional[Path]:
-        """<untar root>/<stamp> when the tar is to be streamed into tmpfs, else None."""
-        root = self._untar_root()
+    def _untar_dir(self, stamp: str, configured: bool = False) -> Optional[Path]:
+        """<untar root>/<stamp> when the tar is to be streamed into tmpfs, else None (configured: the
+        directory even while untar to tmpfs is turned off, for cleanups)."""
+        root = self._untar_root(configured)
         return None if root is None else root / stamp
 
     def _v3_sweep_untar(self) -> None:
@@ -270,7 +273,7 @@ class Worker:
         import os
         import re
         import stat
-        root = self._untar_root()
+        root = self._untar_root(configured=True)
         if root is None:
             return
         base, uid, host = root.parent, os.getuid(), os.uname().nodename
@@ -664,7 +667,6 @@ class Worker:
 
     def _image_archive(self, stamp: str, avg: Path) -> None:
         """Image, render frame, compress+archive FITS for one peeled MS."""
-        vmax = self.cfg.pipeline.movie.fixed_vmax
         t0 = time.perf_counter()
         prefix = self.work / stamp / f"img_{stamp}"
         steps: dict = {}
@@ -690,7 +692,24 @@ class Worker:
                      self.band, self.batch, stamp, name, dt)
         log.info("timing %sMHz batch%d stamp=%s phase=image elapsed=%.2f s",
                  self.band, self.batch, stamp, time.perf_counter() - t0)
+        self._post_image(stamp, fits_files)
+        archive = v3_params(self.cfg.pipeline).archive != "none"
+        if archive:            # the snapshot is archived: the hour job must find its record
+            self._archive_expected(stamp)
+        kept = None
+        if (self.cfg.pipeline.keep_ms_root or getattr(self.cfg.pipeline, "keep_ms_local", None)) and \
+                v3_params(self.cfg.pipeline).write_kept_ms:
+            t0 = time.perf_counter()
+            kept = self.keep_ms(stamp, avg)
+            log.info("timing %sMHz batch%d stamp=%s phase=keep_ms elapsed=%.2f s dst=%s",
+                     self.band, self.batch, stamp, time.perf_counter() - t0, kept)
+        if archive:            # after the FITS and keep_ms: the archive's set is v2's kept set
+            self._archive_record(stamp, kept or avg, kept)
+        shutil.rmtree(self.work / stamp, ignore_errors=True)
 
+    def _post_image(self, stamp: str, fits_files: List[Path]) -> None:
+        """Frame, pilot QA row, fpack and archive move of one snapshot's [I, V] FITS (v2 and v3)."""
+        vmax = self.cfg.pipeline.movie.fixed_vmax
         if (self.cfg.pipeline.movie.enabled and
                 self.cfg.pipeline.movie.scale_mode == "adaptive_i"):
             t0 = time.perf_counter()
@@ -717,9 +736,10 @@ class Worker:
                 log.error("render_frame %s failed: %s", stamp, e)
 
         if self.lst_layout:
-            self._qa.append(dict(stamp=stamp, ts=lst.timestamp(stamp),
-                                 file=self._archive_paths(stamp)[1].name,
-                                 **image.v_stats(fits_files[1])))
+            row = dict(stamp=stamp, ts=lst.timestamp(stamp), file=self._archive_paths(stamp)[1].name,
+                       t=time.time(), **image.v_stats(fits_files[1]))
+            self._qa.append(row)
+            self._append_qa_row(row)
         for f, target in zip(fits_files, self._archive_paths(stamp)):
             t0 = time.perf_counter()
             f = f.rename(f.parent / target.name)
@@ -728,19 +748,6 @@ class Worker:
                      self.band, self.batch, stamp, f.name, time.perf_counter() - t0)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(fz), str(target.parent / fz.name))
-        archive = v3_params(self.cfg.pipeline).archive != "none"
-        if archive:            # the snapshot is archived: the hour job must find its record
-            self._archive_expected(stamp)
-        kept = None
-        if (self.cfg.pipeline.keep_ms_root or getattr(self.cfg.pipeline, "keep_ms_local", None)) and \
-                v3_params(self.cfg.pipeline).write_kept_ms:
-            t0 = time.perf_counter()
-            kept = self.keep_ms(stamp, avg)
-            log.info("timing %sMHz batch%d stamp=%s phase=keep_ms elapsed=%.2f s dst=%s",
-                     self.band, self.batch, stamp, time.perf_counter() - t0, kept)
-        if archive:            # after the FITS and keep_ms: the archive's set is v2's kept set
-            self._archive_record(stamp, kept or avg, kept)
-        shutil.rmtree(self.work / stamp, ignore_errors=True)
 
     def keep_root(self) -> str:
         """keep_ms_local while it has keep_ms_local_min_free_gb free, else keep_ms_root."""
@@ -781,6 +788,9 @@ class Worker:
         return dst
 
     def run_batch(self, tars: List[str]) -> None:
+        if v3_params(self.cfg.pipeline).snapshot_io == "shm":
+            from .v3 import worker_v3              # gsi v3: no MS files, hour stage in the batch
+            return worker_v3.run_batch_v3(self, tars)
         todo = [t for t in tars
                 if not self._fits_path_for_stamp(_stamp(t)).exists()]
         if not todo:
@@ -899,6 +909,23 @@ class Worker:
             log.info("timing %sMHz batch%d stamp=%s phase=%s elapsed=%.2f s",
                      self.band, self.batch, stamp, name, dt)
 
+    def _qa_stats_path(self, stamp: str) -> Path:
+        import os
+        return (self.band_dir(stamp) / "QA" / ".snapshot_stats" /
+                f"b{self.batch}_{os.uname().nodename}_{os.getpid()}.jsonl")
+
+    def _append_qa_row(self, row: dict) -> None:
+        """Persist one pilot QA row at once (a killed batch keeps the rows of its archived snapshots;
+        _write_qa_stats rewrites the same file with the same rows at the end)."""
+        import json
+        try:
+            p = self._qa_stats_path(row["stamp"])
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with self._archive_lock, open(p, "a") as fh:
+                fh.write(json.dumps(row) + "\n")
+        except OSError as e:
+            log.warning("pilot QA row %s not persisted: %s", row.get("stamp"), e)
+
     def _write_qa_stats(self) -> None:
         """Pilot V statistics of this batch -> QA/.snapshot_stats/<batch>.jsonl (hour step reads them)."""
         if not self._qa:
@@ -918,6 +945,15 @@ class Worker:
         if getattr(self.cfg.pipeline.imaging, "imager", "wsclean") == "ttcalx":
             # the GPU snapshot imager shares this GPU: make CUDA.jl hand cached memory back
             env.setdefault("JULIA_CUDA_SOFT_MEMORY_LIMIT", "4GiB")
+        lim = v3_params(self.cfg.pipeline).zest_soft_memory_limit
+        if lim == "none":
+            env.pop("JULIA_CUDA_SOFT_MEMORY_LIMIT", None)
+        elif lim:
+            env["JULIA_CUDA_SOFT_MEMORY_LIMIT"] = lim
+        if v3_params(self.cfg.pipeline).zest_hard_memory_limit:
+            env["JULIA_CUDA_HARD_MEMORY_LIMIT"] = v3_params(self.cfg.pipeline).zest_hard_memory_limit
+        if v3_params(self.cfg.pipeline).zest_gc_between:
+            env["ZEST_GC_BETWEEN"] = v3_params(self.cfg.pipeline).zest_gc_between
         return env
 
     def _start_daemon(self) -> ZestDaemon:

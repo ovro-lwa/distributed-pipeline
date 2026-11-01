@@ -309,7 +309,9 @@ class V3Params:
     peel_io: str = "ms"               # ms | shm
     snapshot_io: str = "ms"           # ms | shm
     hour_source: str = "kept_ms"      # kept_ms | archive | memory
-    write_kept_ms: bool = True        # keep writing kept MSes (v2 hour job / comparisons)
+    # keep writing kept MSes (the v2 hour job, comparisons); None = True except with hour_source=memory
+    # (the batch makes the hour from its records: kept MSes would be ~39 GB written and deleted per band-hour)
+    write_kept_ms: Optional[bool] = None
     archive: str = "none"             # none | iv | full
     archive_root: str = ""            # Lustre directory for the per-band-hour archive files
     archive_python: str = ""          # imager-venv python of the archive writer (default: imaging.gpu_python,
@@ -325,8 +327,30 @@ class V3Params:
     prep_procs: int = 4
     prep_timeout_s: float = 900.0     # per in-memory prep task (as the v2 CASA subprocess)
     peel_backend: str = "daemon"      # daemon | juliacall
+    # snapshot_io=shm: workers/gsi_v3_engine.py (imaging.gpu_python), v3/engine_client.py
+    engine_timeout_s: float = 900.0   # per snapshot (image + record): kill + restart the engine after this
+    engine_start_timeout_s: float = 600.0
+    engine_max_restarts: int = 5      # engine restarts per batch; then the batch is aborted
+    mem_check_every: int = 2          # MemAvailable checked every N snapshots (spill, then less lookahead / no tmpfs)
+    # snapshot_io=shm: true = the engine images snapshot i while the daemon peels i+1 (both on the GPU,
+    # time-sliced); false = the next peel waits until the previous snapshot is imaged (no GPU overlap)
+    image_overlap: bool = True
+    # the zest daemon's JULIA_CUDA_SOFT_MEMORY_LIMIT: "" = as v2 (4GiB when the GPU imager shares the GPU),
+    # "none" = no limit, else the value (e.g. "8GiB").  With the shm hand-off there is no MS I/O between
+    # peels for Julia's GC to run in, and the 4 GiB limit forces a GC inside each peel (+0.3 s at 23 MHz)
+    zest_soft_memory_limit: str = ""
+    zest_hard_memory_limit: str = ""  # the daemon's JULIA_CUDA_HARD_MEMORY_LIMIT ("" = unset, as v2)
+    zest_gc_between: str = ""         # "" (v2) | young | full: Julia GC in the daemon after each snapshot's reply
+    profile_no_image: bool = False    # profiling only: peel + record without the engine's imaging (no FITS, no hour)
+    budget_margin_s: float = 300.0
+    # hour_source=memory: an input that failed in this many batch attempts (0 = max_retries + 1) is given
+    # up, and the hour is made from the rest (V3_HOUR_REDUCED, provenance hour.failed_inputs); a tar that
+    # vanished is given up at once
+    max_input_failures: int = 0    # hour_source=memory: the worker stops itself this long before batch_timeout_seconds
 
     def __post_init__(self) -> None:
+        if self.write_kept_ms is None:
+            object.__setattr__(self, "write_kept_ms", self.hour_source != "memory")
         for name, allowed in (("prep_inmem", ("off", "shadow", "on")), ("peel_io", ("ms", "shm")),
                               ("snapshot_io", ("ms", "shm")),
                               ("hour_source", ("kept_ms", "archive", "memory")),
@@ -359,6 +383,22 @@ class V3Params:
             raise ConfigError("v3.prep_timeout_s must be > 0")
         if self.peel_timeout_s <= 0 or self.peel_start_timeout_s <= 0:
             raise ConfigError("v3.peel_timeout_s and v3.peel_start_timeout_s must be > 0")
+        if self.engine_timeout_s <= 0 or self.engine_start_timeout_s <= 0:
+            raise ConfigError("v3.engine_timeout_s and v3.engine_start_timeout_s must be > 0")
+        if self.hour_source == "memory" and self.checkpoint == "none":
+            raise ConfigError("v3.hour_source=memory needs v3.checkpoint (local | archive): without a record file "
+                              "an engine restart loses the band-hour's records")
+        if self.zest_gc_between not in ("", "young", "full"):
+            raise ConfigError("v3.zest_gc_between must be '', 'young' or 'full'")
+        if self.max_input_failures < 0:
+            raise ConfigError("v3.max_input_failures must be >= 0 (0 = max_retries + 1)")
+        if self.engine_max_restarts < 0 or self.mem_check_every < 1 or self.budget_margin_s < 0:
+            raise ConfigError("v3.engine_max_restarts >= 0, v3.mem_check_every >= 1, v3.budget_margin_s >= 0")
+        if self.checkpoint == "archive" and self.archive == "none":
+            raise ConfigError("v3.checkpoint=archive needs v3.archive (iv)")
+        for d in self.spill_dirs:
+            if Path(d).parts[:2] == ("/", "lustre"):
+                raise ConfigError("v3.spill_dirs must be node-local (the archive is the Lustre copy)")
 
 
 def v3_params(pipeline) -> V3Params:
@@ -481,13 +521,31 @@ class PipelineConfig:
             raise ConfigError("v3.hour_source=memory needs layout=lst and stream_hour_images")
         if self.v3.hour_source == "archive" and self.layout != "lst":
             raise ConfigError("v3.hour_source=archive needs layout=lst (hour_lst.run_band)")
+        if self.v3.hour_source == "memory" and self.batch_timeout_seconds and \
+                self.v3.budget_margin_s >= self.batch_timeout_seconds:
+            raise ConfigError("v3.budget_margin_s must be smaller than batch_timeout_seconds")
+        if self.v3.profile_no_image and not os.environ.get("GSI_V3_ALLOW_PROFILE"):
+            # profiling only: the batch then always fails (no FITS, no hour), so it can never look done
+            raise ConfigError("v3.profile_no_image is a profiling switch: set GSI_V3_ALLOW_PROFILE=1 to use it")
+        if self.v3.hour_source == "memory" and self.batch_timeout_seconds and \
+                self.hour_imaging.timeout_seconds and \
+                self.batch_timeout_seconds < self.hour_imaging.timeout_seconds + 1800 + self.v3.budget_margin_s:
+            raise ConfigError(
+                f"v3.hour_source=memory: the batch makes the hour products, so batch_timeout_seconds "
+                f"({self.batch_timeout_seconds}) must cover the snapshots (>= 1800 s), the hour "
+                f"(hour_imaging.timeout_seconds {self.hour_imaging.timeout_seconds}) and v3.budget_margin_s")
+        if self.v3.snapshot_io == "shm" and self.v3.archive != "none" and self.layout != "lst":
+            raise ConfigError("v3.snapshot_io=shm with v3.archive needs layout=lst (one record file per batch)")
 
     @property
     def run_key(self) -> str:
         """Ledger/manifest key: the date, plus the LST hours for layout=lst (one run per set)."""
         if self.layout != "lst":
             return self.date
-        return f"{self.date}_{self.run_label}_lst" + "-".join(f"{h:02d}" for h in self.lst_hours)
+        key = f"{self.date}_{self.run_label}_lst" + "-".join(f"{h:02d}" for h in self.lst_hours)
+        # hour_source=memory has another batch layout (one batch per band-hour, no hour-job rows): its own
+        # ledger, so a v2 ledger of the same run is never reused (INSERT OR IGNORE on (band, batch))
+        return key + "_v3mem" if self.v3.hour_source == "memory" else key
 
     def peel_for_band(self, band: int) -> PeelParams:
         return self.peel_overrides.get(band, self.peel)
