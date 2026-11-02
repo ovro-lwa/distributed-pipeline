@@ -793,9 +793,14 @@ class V3Batch:
             from ..stages import flag
             from ..worker import _mjd
             t0 = time.perf_counter()
-            w._badants = flag.badants(_mjd(_stamp((todo or self.tars)[0])), f"{self.pl.env.dev_env}/bin/python")
+            first = _stamp((todo or self.tars)[0])
+            fixed = self.pl.cal.badants_for(self.band, w.group(first))   # backlog re-runs: the original list
+            w._badants = (fixed if fixed is not None
+                          else flag.badants(_mjd(first), f"{self.pl.env.dev_env}/bin/python"))
             log.info("timing %sMHz batch%d phase=badants(batch) n=%s elapsed=%.2f s", self.band, self.batch,
                      len(w._badants.split(",")) if w._badants else 0, time.perf_counter() - t0)
+            if fixed is not None:
+                log.info("bad antennas %sMHz batch%d (config): %s", self.band, self.batch, w._badants)
 
     def _run_main(self, tars, todo, have_fits, batch_start) -> None:
         from . import memory, slots
