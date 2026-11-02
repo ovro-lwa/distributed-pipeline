@@ -18,6 +18,17 @@ flowchart LR
 CPU preprocessing, GPU peeling, and image archiving overlap within each batch.
 A failed batch is logged and retried without stopping other subbands.
 
+## Versions
+
+| | tag | what it is |
+|---|---|---|
+| **v1** | `gsi-v1` (= `gsi-production-2026-10-25`) | First GPU pipeline (until 2026-10-25): GPU peeling, WSClean dirty I+V snapshots by date, hourly movies. |
+| **v2** | `gsi-v2` (13405ce; TTCalX `gsi-v2` = 748884a) | Production since 2026-10-26: LST-hour layout as the main pipeline, CLEAN snapshots on the GPU imager, GPU 1-h / 10-min images, QA guards, nightly LST runs. Each snapshot goes through disk several times; the hour job re-reads all kept MSes. |
+| **v3** | branch, opt-in (`v3:` config) | One band-hour in one process, data kept in RAM: numpy prep instead of CASA, peel and imaging through shared memory, hour images made from memory. Same images as v2, ~2.5x faster per band-hour. |
+
+With no `v3:` block and no new `peel:` options the code runs as v2
+(`docs/default_path_vs_13405ce.md`). Roll back: `git checkout gsi-v2` here and in TTCalX.
+
 ## Requirements
 
 - Python 3.8+
@@ -239,3 +250,34 @@ python $GSI_HOME/scripts/run_nightly_lst.py --date 2026-10-26 \
     --output-config /opt/devel/pipeline/gsi-v2/config-lst-auto
 python $GSI_HOME/scripts/night_report.py /lustre/pipeline/snapshots_gpu_pipeline 2026-10-26 <run_label>
 ```
+
+## v3: in-memory band-hour (opt-in)
+
+Needs TTCalX `exp/ttcalx-v3-all` (peeler + imager in one commit). The validated
+production-like setup (images equal to v2 at the GPU floor on all subbands of 2026-10-31
+LST 05h):
+
+```yaml
+peel: {engine: sky_rfi, precision: mixed, peeliter: 3, workspace: true, fast_kernels: true}
+v3:   {untar_to: /dev/shm/gsi3/untar, prep_inmem: on, peel_io: shm, snapshot_io: shm,
+       hour_source: memory, write_kept_ms: false, archive: none, store: auto, checkpoint: local}
+```
+
+New options (all off / v2 behaviour by default):
+
+| option | default | what it does |
+|---|---|---|
+| `v3.*` | off | in-memory band-hour; full list and checks in `docs/v3_design.md` §6 |
+| `v3.max_given_up_fraction` | 0.1 | hour fails if more inputs than this fail permanently |
+| `v3.stale_checkpoint_hours` | 48 | delete local checkpoints older than this at batch start |
+| `peel.engine` | `daemon` | `sky_rfi`: TTCalX sky + RFI engine |
+| `peel.precision` | `double` | `mixed`: ~4x faster peel, same images |
+| `peel.workspace` | false | reuse GPU peel buffers across snapshots (no GC stalls) |
+| `peel.fast_kernels` | false | newer TTCalX GPU kernels (same maths, other rounding) |
+| `peel.smooth_flux`, `peel.restore`, ... | off | sponge smoothing and Jupiter restore, not production yet (`docs/peel_config.md`) |
+| `GSI_SNAP_PIPELINE=1` | off | pipelined snapshot-imager daemon (v2 path) |
+| `GSI_SNAP_REPLY_TIMEOUT_S` | none (900 s when pipelined) | kill the snapshot-imager daemon after this many seconds without a reply |
+
+The imager's own switches (`TTCALX_CHUNK_CACHE`, `TTCALX_CACHE_RESERVE`, ...) default to
+748884a behaviour; v3 turns on `ttcalx_imager.FAST_ENV` (see the TTCalX imager README).
+
