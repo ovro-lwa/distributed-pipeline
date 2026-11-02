@@ -127,3 +127,42 @@ def test_symlink_destination_is_refused(tmp_path, where):
     with pytest.raises(FileExistsError, match="symlink"):
         stage_ms.stream_untar(tar, dest)
     assert sorted(p.name for p in target.iterdir()) == ["keep"]
+
+
+def _flaky_copy(monkeypatch, n_bad):
+    """shutil.copy in stage_ms that writes a truncated tar the first n_bad times."""
+    import shutil as _sh
+    calls = []
+
+    def copy(src, dst):
+        calls.append(1)
+        _sh.copyfile(src, dst)
+        if len(calls) <= n_bad:
+            with open(dst, "r+b") as fh:
+                fh.truncate(700)
+    monkeypatch.setattr(stage_ms.shutil, "copy", copy)
+    return calls
+
+
+def test_v2_stage_copies_once_by_default(tmp_path, monkeypatch, caplog):
+    """attempts=1 (the default, v2 = 13405ce): one copy, a bad tar fails at once, no STAGE_RETRY."""
+    tar, _ = _tar(tmp_path)
+    calls = _flaky_copy(monkeypatch, 1)
+    with pytest.raises(tarfile.ReadError):
+        stage_ms.stage(str(tar), tmp_path / "w")
+    assert calls == [1] and "STAGE_RETRY" not in caplog.text
+
+
+def test_v2_stage_retries_with_attempts(tmp_path, monkeypatch, caplog):
+    tar, ms = _tar(tmp_path)
+    calls = _flaky_copy(monkeypatch, 2)
+    out = stage_ms.stage(str(tar), tmp_path / "w", attempts=3)
+    assert len(calls) == 3 and caplog.text.count("STAGE_RETRY") == 2
+    assert _tree(out) == _tree(ms)
+
+
+def test_stage_attempts_default_follows_v3_mode():
+    from gpu_subband_imaging.config import V3Params
+    assert V3Params().stage_attempts == 1 and not V3Params().active
+    assert V3Params(untar_to="/dev/shm/x").stage_attempts == 3
+    assert V3Params(untar_to="/dev/shm/x", stage_attempts=1).stage_attempts == 1

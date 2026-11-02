@@ -52,12 +52,16 @@
 # "id=<id>" right after the path in FAILED; RESET_WARM answers "RESET_WARM_OK id=<id>".
 push!(LOAD_PATH, joinpath(ENV["TTCALX_DIR"], "src"))
 include(joinpath(ENV["TTCALX_DIR"], "src", "TTCalX.jl"))
-include(joinpath(@__DIR__, "zest_smooth.jl"))
+# zest_smooth.jl (next to this file) is only needed by ZEST_SMOOTH_EXEMPT_BELOW_EL_DEG > 0; without
+# it the default path runs as before (a deploy of this file alone keeps working)
+const ZEST_SMOOTH_JL = joinpath(@__DIR__, "zest_smooth.jl")
+isfile(ZEST_SMOOTH_JL) && include(ZEST_SMOOTH_JL)
 using .TTCalX
 using CUDA
 using Printf
 using Mmap
-using JSON
+# JSON only reads the gsi v3 slot headers (SHM commands); the MS path of the default does not need it
+Base.find_package("JSON") === nothing || @eval using JSON
 
 envf(k, d) = parse(Float64, get(ENV, k, string(d)))
 envi(k, d) = parse(Int, get(ENV, k, string(d)))
@@ -110,6 +114,9 @@ for (k, v) in (("ZEST_SMOOTH_FLUX", smooth_flux), ("ZEST_SMOOTH_BELOW_MHZ", smoo
                ("ZEST_SMOOTH_EXEMPT_BELOW_EL_DEG", smooth_exempt_below_el))
     v >= 0 || (println("CONFIG_ERROR $k must be >= 0, got $v"); flush(stdout); exit(2))
 end
+!(sky_rfi && smooth_flux > 0 && smooth_exempt_below_el > 0) || isfile(ZEST_SMOOTH_JL) ||
+    (println("CONFIG_ERROR ZEST_SMOOTH_EXEMPT_BELOW_EL_DEG needs workers/zest_smooth.jl next to zest_daemon.jl");
+     flush(stdout); exit(2))
 !(sky_rfi && smooth_flux > 0 && smooth_exempt_below_el > 0) ||
     (isdefined(TTCalX, :zest_sky_rfi!) &&
      any(m -> :smooth_exempt_names in Base.kwarg_decl(m), methods(TTCalX.zest_sky_rfi!))) ||

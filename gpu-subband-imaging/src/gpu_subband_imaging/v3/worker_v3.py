@@ -265,6 +265,7 @@ class V3Batch:
         group = self.group()
         want_file = self.v3.archive == "none" and self.v3.checkpoint == "local"
         self._migrate_old_checkpoints()
+        self._sweep_stale_checkpoints()
         old, n_old, b_old = self._existing_store()
         rb = b_old / n_old if n_old else None
         self.plan = memory.plan_store(self.v3.store, max(n_inputs, n_old), self.band, self.v3.ram_reserve_gb,
@@ -367,6 +368,61 @@ class V3Batch:
                 fh.write(json.dumps(dict(stamp=stamp, reason="; ".join(d["reasons"]), permanent=d["permanent"],
                                          batch=self.batch, host=os.uname().nodename, t=time.time())) + "\n")
         self.given_up = self._given_up()
+
+    def _check_given_up_fraction(self) -> None:
+        """No hour from a small part of its inputs (e.g. an upstream bug that zero-flags many snapshots):
+        more than v3.max_given_up_fraction of the inputs given up (no-data skips not counted) fails it."""
+        skipped = self._known_skipped()
+        n_in = len([t for t in self.tars if _stamp(t) not in skipped])
+        n_up = len([t for t in self.tars if _stamp(t) in self.given_up])
+        cap = float(getattr(self.v3, "max_given_up_fraction", 1.0))
+        if n_in and cap < 1.0 and n_up > cap * n_in:
+            raise RuntimeError(f"V3_TOO_MANY_GIVEN_UP {self.band}MHz batch{self.batch}: {n_up} of {n_in} inputs given "
+                               f"up (> v3.max_given_up_fraction {cap:g}): no hour products from what is left")
+
+    def _sweep_stale_checkpoints(self) -> None:
+        """Local checkpoints (spill_dirs/<run_key>/*.gsiv + .idx.jsonl + .lock) of runs that failed for good:
+        files of this user not modified for v3.stale_checkpoint_hours are deleted (never this batch's own,
+        never another user's), and a run_key directory this sweep emptied goes too."""
+        hours = float(getattr(self.v3, "stale_checkpoint_hours", 0) or 0)
+        if hours <= 0 or self.v3.archive != "none":
+            return
+        own = {str(self._ck_name(d)) for d in self.v3.spill_dirs if d}
+        cutoff = time.time() - hours * 3600.0
+        uid = os.getuid()
+        for d in self.v3.spill_dirs:
+            base = Path(d)
+            try:
+                runs = [r for r in base.iterdir() if r.is_dir() and not r.is_symlink()]
+            except OSError:
+                continue
+            for r in runs:
+                try:
+                    files = [f for f in r.iterdir() if f.name.endswith((".gsiv", ".gsiv.idx.jsonl", ".gsiv.lock"))]
+                except OSError:
+                    continue
+                n = 0
+                for f in files:
+                    stem = str(f)[:str(f).index(".gsiv") + len(".gsiv")]
+                    try:
+                        st = os.lstat(f)
+                    except OSError:
+                        continue
+                    if stem in own or st.st_uid != uid or not os.path.isfile(f) or os.path.islink(f) or \
+                            st.st_mtime > cutoff:
+                        continue
+                    try:
+                        f.unlink()
+                        n += 1
+                        log.warning("V3_CHECKPOINT %sMHz batch%d: deleted stale %s (%.0f h old)", self.band,
+                                    self.batch, f, (time.time() - st.st_mtime) / 3600.0)
+                    except OSError as e:
+                        log.warning("V3_CHECKPOINT cannot delete stale %s: %s", f, e)
+                if n:
+                    try:
+                        r.rmdir()                # only if this sweep emptied it
+                    except OSError:
+                        pass
 
     _budget = None
 
@@ -782,6 +838,7 @@ class V3Batch:
                     log.error("V3_HOUR_REDUCED %sMHz batch%d: the hour is made without %d input(s) that failed in "
                               "every attempt: %s", self.band, self.batch, len(self.given_up),
                               {k: v["reasons"][-1][:120] for k, v in list(self.given_up.items())[:5]})
+                    self._check_given_up_fraction()
                 # the batch's output is the band-hour: snapshots done in earlier runs count (a rerun
                 # whose only remaining inputs are skipped snapshots still makes the hour products)
                 from .. import hour_lst
@@ -975,7 +1032,7 @@ class V3Batch:
         t0 = time.perf_counter()
         w._write_qa_stats()
         self._qa_written = True
-        rows = {r["ts"]: r for r in hour_lst.read_stats(qa_dir)}
+        rows = {r["ts"]: r for r in hour_lst.read_stats(qa_dir, newest=True)}
         rows.update({r["ts"]: r for r in w._qa})
         bad_ts, rec["qa"] = hour_lst.qa_step(qa_dir, self.band, [rows[k] for k in sorted(rows)])
         expected = sorted(hour_lst._fits_stems(self.cfg, self.band, lst_hour))

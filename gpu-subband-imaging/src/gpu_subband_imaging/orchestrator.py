@@ -65,10 +65,13 @@ class Orchestrator:
             "GSI_TTCALX_DIR": runtime.ttcalx,
             "GSI_SHARED_DEPOT": runtime.shared_depot,
         }
-        for key in ("GSI_CONDA_SH", "GSI_ALLOWED_LUSTRE_WRITE_ROOT",
-                    "GSI_TASKSET_CPUS", "GSI_NICE", "GSI_IONICE",
-                    "NUMPY_MADVISE_HUGEPAGE", "CASARCFILES", "GSI_PREP_LOOKAHEAD", "XDG_CACHE_HOME",
-                    "GSI_V3_ALLOW_PROFILE"):
+        keys = ["GSI_CONDA_SH", "GSI_ALLOWED_LUSTRE_WRITE_ROOT",
+                "GSI_TASKSET_CPUS", "GSI_NICE", "GSI_IONICE",
+                "NUMPY_MADVISE_HUGEPAGE", "CASARCFILES"]
+        from .config import v3_params
+        if v3_params(cfg.pipeline).active:      # gsi v3 test settings: never forwarded in v2 mode
+            keys += ["GSI_PREP_LOOKAHEAD", "XDG_CACHE_HOME", "GSI_V3_ALLOW_PROFILE"]
+        for key in keys:
             if key in os.environ:
                 self.worker_env[key] = os.environ[key]
         self.group_of: Dict[Tuple[int, int], str] = {}   # (band, batch) -> LST hour label

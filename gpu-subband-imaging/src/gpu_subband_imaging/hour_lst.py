@@ -53,13 +53,22 @@ def qa_reject(rms: List[float]) -> Tuple[List[int], float, float]:
     return bad, med, sd
 
 
-def read_stats(qa_dir: Path) -> List[Dict]:
-    """The pilot QA rows of a band-hour; a snapshot imaged by several runs counts once, the newest
-    (row time "t" where the worker wrote one, else the file's modification time; ties by name)."""
+def read_stats(qa_dir: Path, newest: bool = False) -> List[Dict]:
+    """The pilot QA rows of a band-hour; a snapshot imaged by several runs counts once.
+
+    Default (v2, 13405ce): the row of the last file by name wins.  newest=True (gsi v3 mode): the
+    newest row wins (row time "t" where the worker wrote one, else the file's modification time;
+    ties by name)."""
     rows: Dict[str, Dict] = {}
     when: Dict[str, tuple] = {}
     d = qa_dir / ".snapshot_stats"
-    if d.is_dir():
+    if d.is_dir() and not newest:
+        for f in sorted(d.glob("*.jsonl")):
+            for line in f.read_text().splitlines():
+                if line.strip():
+                    r = json.loads(line)
+                    rows[r["ts"]] = r            # a re-run of a snapshot replaces it
+    elif d.is_dir():
         files = sorted(d.glob("*.jsonl"), key=lambda f: (f.stat().st_mtime, f.name))
         for k, f in enumerate(files):
             mt = f.stat().st_mtime
@@ -180,8 +189,10 @@ def qa_step(qa_dir: Path, band: int, rows: List[Dict]) -> Tuple[set, Dict]:
     return write_qa(qa_dir, band, rows)
 
 
-def movie_step(cfg: Config, band: int, group: str, bdir: Path) -> Tuple[Optional[str], float]:
-    """Step 4: Movies/<band>MHz_I_Clean.mp4 from the frames; (movie path or None, seconds)."""
+def movie_step(cfg: Config, band: int, group: str, bdir: Path,
+               rec: Optional[Dict] = None) -> Tuple[Optional[str], float]:
+    """Step 4: Movies/<band>MHz_I_Clean.mp4 from the frames; (movie path or None, seconds).
+    rec: also set rec["movie"], only when the stitch did not raise (as 13405ce)."""
     from .stages import movie
     pl = cfg.pipeline
     t0 = time.perf_counter()
@@ -190,11 +201,18 @@ def movie_step(cfg: Config, band: int, group: str, bdir: Path) -> Tuple[Optional
     try:
         m = movie.stitch(frames, bdir / "Movies" / f"{band}MHz_I_Clean.mp4", pl.movie.fps, pl.movie.crf)
         out = str(m) if m else None
+        if rec is not None:
+            rec["movie"] = out
         if m and not pl.movie.keep_frames:
             shutil.rmtree(frames, ignore_errors=True)
     except Exception as e:
         log.error("movie %sMHz %s failed: %s", band, group, e)
     return out, time.perf_counter() - t0
+
+
+def _peel_dict(peel) -> Dict:
+    """provenance "peel": PeelParams.as_dict (13405ce's keys while the new fields are at their defaults)."""
+    return peel.as_dict() if hasattr(peel, "as_dict") else vars(peel)
 
 
 def write_provenance(cfg: Config, band: int, group: str, gpu: Optional[int], rec: Dict,
@@ -215,7 +233,7 @@ def write_provenance(cfg: Config, band: int, group: str, gpu: Optional[int], rec
         "snapshot_phase_centre": pl.snapshot_phase_centre,
         "bp_table": pl.cal.bp, "xy_table": pl.cal.xy, "sky_model": pl.cal.sources,
         "rfi_model": pl.cal.rfi_sources if pl.peel_for_band(band).rfi else None,
-        "peel": vars(pl.peel_for_band(band)), "imaging": vars(pl.imaging),
+        "peel": _peel_dict(pl.peel_for_band(band)), "imaging": vars(pl.imaging),
         "hour_imaging": {"products": list(h.products), "imager": h.ttcalx_image},
         "software": software_versions(cfg),
         "sun_cut": pl.sun_cut, "n_snapshots_clean": len(snaps), "hour": rec,
@@ -261,7 +279,7 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
 
     # 1. QA
     t0 = time.perf_counter()
-    bad_ts, rec["qa"] = qa_step(qa_dir, band, read_stats(qa_dir))
+    bad_ts, rec["qa"] = qa_step(qa_dir, band, read_stats(qa_dir, newest=v3_params(pl).active))
     exclude = [i for i, s in enumerate(stamps) if lst.timestamp(s) in bad_ts]
     rec["qa"]["excluded_from_hour"] = len(exclude)
     rec["timing_s"] = {"qa": time.perf_counter() - t0}
@@ -321,10 +339,10 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
                 rec["n_loaded"] = s.get("n_loaded")
                 rec["n_rejected_hour"] = len(s.get("rejected", []))
                 rec["phase_centre_deg"] = s.get("phase_centre")
-                if rc == 0:
+                if strict and rc == 0:
                     imaged = {q["stem"] for q in s.get("qa", [])}
                 shutil.move(str(summary), str(qa_dir / summary.name))
-            except (ValueError, KeyError, TypeError) as e:
+            except (ValueError, KeyError, TypeError) if strict else ValueError as e:
                 log.warning("cannot parse %s: %s", summary, e)
         if strict and rc == 0 and imaged != set(stamps):
             # the job did not load exactly the snapshots it was given: fail, delete nothing
@@ -341,7 +359,7 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
 
     # 4. movie
     if pl.movie.enabled:
-        rec["movie"], rec["timing_s"]["movie"] = movie_step(cfg, band, group, bdir)
+        rec["timing_s"]["movie"] = movie_step(cfg, band, group, bdir, rec)[1]
 
     # 5. provenance, kept MSes
     rec["timing_s"]["total"] = time.perf_counter() - t_all

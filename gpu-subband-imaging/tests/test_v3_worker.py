@@ -53,7 +53,7 @@ class _Calls(list):
 
 
 def _fake_stage(calls):
-    def stage(tar, work_dir, untar_to=None):
+    def stage(tar, work_dir, untar_to=None, attempts=1):
         calls.append(("stage", untar_to))
         work_dir.mkdir(parents=True, exist_ok=True)
         root = untar_to if untar_to is not None else work_dir

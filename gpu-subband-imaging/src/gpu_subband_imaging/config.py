@@ -235,14 +235,35 @@ class PeelParams:
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not value >= 0:
                 raise ConfigError(f"peel.{name} must be >= 0, got {value!r}")
 
-    # ZEST_* variables sent only when set, so the default environment stays as before
+    # The fields added after 13405ce (engine .. workspace) with their defaults.  While every one of them
+    # is at its default, neither the ZEST_* environment nor the provenance "peel" block has them, so
+    # both are exactly 13405ce's; once one is set, all of them are given (as the sky_rfi tests ran).
+    NEW_DEFAULTS = {"engine": "daemon", "smooth_flux": 0.0, "smooth_below_mhz": 0.0,
+                    "smooth_exempt_flux": 0.0, "rfi_smooth_flux": None,
+                    "smooth_exempt_below_el_deg": 0.0, "restore": "", "restore_below_mhz": 41.0,
+                    "restore_offset_deg": 0.0, "precision": "double", "warm_start": False,
+                    "workspace": False}
+    # with the new fields in use: these are still never sent at their defaults
     _UNSET = {"smooth_below_mhz": 0.0, "smooth_exempt_flux": 0.0, "rfi_smooth_flux": None,
               "smooth_exempt_below_el_deg": 0.0, "workspace": False}
 
+    def new_fields_default(self) -> bool:
+        return all(getattr(self, k) == v for k, v in self.NEW_DEFAULTS.items())
+
+    def as_dict(self) -> Dict[str, object]:
+        """The settings for provenance.json: 13405ce's keys while the new fields are at their defaults."""
+        d = dict(vars(self))
+        if self.new_fields_default():
+            for k in self.NEW_DEFAULTS:
+                d.pop(k, None)
+        return d
+
     def daemon_env(self, rfi_sources: Optional[str]) -> Dict[str, str]:
         """ZEST_* environment for the zest daemon."""
+        legacy = self.new_fields_default()
         opts = {k: v for k, v in vars(self).items()
-                if k != "rfi" and not (k in self._UNSET and v == self._UNSET[k])}
+                if k != "rfi" and not (legacy and k in self.NEW_DEFAULTS)
+                and not (k in self._UNSET and v == self._UNSET[k])}
         if self.rfi:
             if not rfi_sources:
                 raise ConfigError("peel.rfi is true but cal.rfi_sources is not set")
@@ -369,13 +390,31 @@ class V3Params:
     zest_hard_memory_limit: str = ""  # the daemon's JULIA_CUDA_HARD_MEMORY_LIMIT ("" = unset, as v2)
     zest_gc_between: str = ""         # "" (v2) | young | full: Julia GC in the daemon after each snapshot's reply
     profile_no_image: bool = False    # profiling only: peel + record without the engine's imaging (no FITS, no hour)
-    budget_margin_s: float = 300.0
+    budget_margin_s: float = 300.0    # hour_source=memory: the worker stops itself this long before batch_timeout_seconds
     # hour_source=memory: an input that failed in this many batch attempts (0 = max_retries + 1) is given
     # up, and the hour is made from the rest (V3_HOUR_REDUCED, provenance hour.failed_inputs); a tar that
     # vanished is given up at once
-    max_input_failures: int = 0    # hour_source=memory: the worker stops itself this long before batch_timeout_seconds
+    max_input_failures: int = 0
+    # hour_source=memory: no hour products when more than this fraction of the band-hour's inputs (no-data
+    # skips not counted) is given up (V3_TOO_MANY_GIVEN_UP; 1 = no cap)
+    max_given_up_fraction: float = 0.1
+    # hour_source=memory: local checkpoints in spill_dirs not modified for this long (a run that failed for
+    # good and was never resumed) are deleted at the next batch start on the node (0 = never)
+    stale_checkpoint_hours: float = 48.0
+    # copy + extract attempts per tar on the v2 staging path (None: 1 as v2, 3 in v3 mode; the untar_to
+    # stream path always makes 3)
+    stage_attempts: Optional[int] = None
+
+    @property
+    def active(self) -> bool:
+        """Any v3 step switched on ("v3 mode").  The v3-only extras follow it: QA row times, the per-row QA
+        append, newest-row QA semantics, the v3 worker environment, the staging retry."""
+        return bool(self.untar_to or self.prep_inmem != "off" or self.peel_io != "ms" or
+                    self.snapshot_io != "ms" or self.hour_source != "kept_ms" or self.archive != "none")
 
     def __post_init__(self) -> None:
+        if self.stage_attempts is None:
+            object.__setattr__(self, "stage_attempts", 3 if self.active else 1)
         if self.write_kept_ms is None:
             object.__setattr__(self, "write_kept_ms", self.hour_source != "memory")
         for name, allowed in (("prep_inmem", ("off", "shadow", "on")), ("peel_io", ("ms", "shm")),
@@ -423,6 +462,10 @@ class V3Params:
             raise ConfigError("v3.engine_max_restarts >= 0, v3.mem_check_every >= 1, v3.budget_margin_s >= 0")
         if self.checkpoint == "archive" and self.archive == "none":
             raise ConfigError("v3.checkpoint=archive needs v3.archive (iv)")
+        if self.stage_attempts < 1:
+            raise ConfigError("v3.stage_attempts must be >= 1")
+        if not 0 <= self.max_given_up_fraction <= 1 or self.stale_checkpoint_hours < 0:
+            raise ConfigError("v3.max_given_up_fraction must be in [0, 1] and v3.stale_checkpoint_hours >= 0")
         for d in self.spill_dirs:
             if Path(d).parts[:2] == ("/", "lustre"):
                 raise ConfigError("v3.spill_dirs must be node-local (the archive is the Lustre copy)")
@@ -626,7 +669,7 @@ def load_pipeline(path: Union[str, Path]) -> PipelineConfig:
         prep=str(d.get("prep", "casa")),
         max_files_per_hour=(int(d["max_files_per_hour"])
                             if d.get("max_files_per_hour") else None),
-        v3=V3Params(**d.get("v3", {})),
+        v3=V3Params(**(d.get("v3") or {})),
     )
 
 

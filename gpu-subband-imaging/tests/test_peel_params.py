@@ -166,3 +166,50 @@ def test_workspace_switch_maps_to_env_only_when_on():
     import pytest
     with pytest.raises(ConfigError):
         PeelParams(workspace=True)
+
+
+# ---- defaults = 13405ce (review M2) ------------------------------------------------------------
+
+# PeelParams fields of 13405ce, in order, with their defaults: vars() of the 13405ce PeelParams()
+PEEL_13405CE = dict(
+    maxiter=30, tolerance=1e-2, minuvw=10.0, peeliter=3, min_source_elevation_deg=15.0,
+    require_convergence=True, max_gain_amplitude=100.0, quality_sample_rows=1024,
+    min_visibility_amplitude=1e-12, min_visibility_nonzero_fraction=0.01, solver="damped",
+    model="kernels", uvw="ms", flag_model=False, resubtract=False, guard=False, rfi=False,
+    rfi_mode="after", fast_io=False, device="gpu", reg_max_offset_deg=0.0, reg_taper_deg=1.0,
+    reg_lambda=1.0, flag_zero=False, residual_guard=False, backstop=False)
+
+
+def _env_13405ce(fields, rfi_sources):
+    """13405ce PeelParams.daemon_env, verbatim, on a dict of its fields."""
+    opts = {k: v for k, v in fields.items() if k != "rfi"}
+    if fields["rfi"]:
+        opts["rfi_sources"] = rfi_sources
+    return {f"ZEST_{k.upper()}": str(v) for k, v in opts.items()}
+
+
+PRODUCTION = dict(maxiter=5, tolerance=1e-4, minuvw=5.0, peeliter=3, min_source_elevation_deg=0.0,
+                  require_convergence=False, max_gain_amplitude=100.0, quality_sample_rows=1024,
+                  min_visibility_amplitude=1e-12, min_visibility_nonzero_fraction=0.01, solver="rk4",
+                  model="exact", uvw="geometric", flag_model=True, resubtract=True, fast_io=True,
+                  rfi=True, flag_zero=True, residual_guard=True)       # the nightly template's peel block
+
+
+@pytest.mark.parametrize("settings", [{}, PRODUCTION, CPU_MATCHED])
+def test_default_env_and_provenance_equal_13405ce(settings):
+    p = PeelParams(**settings)
+    fields = dict(PEEL_13405CE, **settings)
+    rfi = "/cal/rfi.json" if fields["rfi"] else None
+    assert p.daemon_env(rfi) == _env_13405ce(fields, rfi)
+    assert list(p.daemon_env(rfi)) == list(_env_13405ce(fields, rfi))      # same order too
+    assert p.as_dict() == fields and list(p.as_dict()) == list(fields)
+
+
+def test_new_fields_appear_once_one_is_set():
+    env = PeelParams(**PRODUCTION, engine="sky_rfi", precision="mixed").daemon_env("/r.json")
+    assert env["ZEST_ENGINE"] == "sky_rfi" and env["ZEST_PRECISION"] == "mixed"
+    assert env["ZEST_RESTORE_BELOW_MHZ"] == "41.0" and env["ZEST_WARM_START"] == "False"
+    d = PeelParams(**PRODUCTION, engine="sky_rfi").as_dict()
+    assert set(PeelParams.NEW_DEFAULTS) <= set(d)
+    # a restore list keeps its 41 MHz gate (the daemon's own default would be Inf)
+    assert PeelParams(restore="/j.json").daemon_env(None)["ZEST_RESTORE_BELOW_MHZ"] == "41.0"

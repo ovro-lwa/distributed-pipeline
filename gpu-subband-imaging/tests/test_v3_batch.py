@@ -571,7 +571,7 @@ def test_hour_failure_is_retried_once_in_a_fresh_engine(env, caplog):
 @needs_v3_imager
 def test_input_failing_every_attempt_is_given_up_and_the_hour_made_without_it(env, caplog):
     """M1: one permanently bad input must not block the band-hour forever (v2 imaged the rest)."""
-    cfg = _config(env.tmp)                         # examples config: max_retries 1 -> given up after 2 attempts
+    cfg = _config(env.tmp, max_given_up_fraction=1.0)   # no cap; max_retries 1 -> given up after 2 attempts
     b = _bdir(env.tmp)
     with pytest.raises(RuntimeError, match="V3_INCOMPLETE"):
         _worker(cfg, FakeDaemon(fail=STAMPS[1])).run_batch(env.tars)
@@ -596,7 +596,7 @@ def test_degenerate_psf_is_given_up_at_once_and_the_hour_made_without_it(env, ca
     """20261031_101739_32MHz: the imager raises DegeneratePSFError (99.94 % zero data, 28 short
     baselines left after flag_zero).  A property of the data: recorded permanent in the first
     attempt, no retry spent, the hour is made from the rest (as production skipped it)."""
-    cfg = _config(env.tmp)
+    cfg = _config(env.tmp, max_given_up_fraction=1.0)   # 1 of 5 given up: no cap (test_given_up_cap)
     cfg.pipeline.imaging.gpu_env["GSI_V3_FAKE_DEGENERATE"] = STAMPS[1]
     b = _bdir(env.tmp)
     with caplog.at_level(logging.INFO, logger="gsi"):
@@ -618,7 +618,7 @@ def test_degenerate_psf_is_given_up_at_once_and_the_hour_made_without_it(env, ca
 
 @needs_v3_imager
 def test_vanished_tar_is_given_up_at_once(env, monkeypatch, caplog):
-    cfg = _config(env.tmp)
+    cfg = _config(env.tmp, max_given_up_fraction=1.0)   # 1 of 5 given up: no cap (test_given_up_cap)
     real = Worker._stage
 
     def stage(self, tar, d, stamp):
@@ -631,6 +631,23 @@ def test_vanished_tar_is_given_up_at_once(env, monkeypatch, caplog):
         _worker(cfg, FakeDaemon()).run_batch(env.tars)
     h = json.loads((_bdir(env.tmp) / "provenance.json").read_text())["hour"]
     assert h["status"] == "ok" and h["n_loaded"] == 4 and h["failed_inputs"][STAMPS[2]]["permanent"]
+
+
+@needs_v3_imager
+def test_too_many_given_up_inputs_fail_the_hour(env, monkeypatch):
+    """M7: the default cap (v3.max_given_up_fraction 0.1): 1 of 5 inputs given up -> no hour products."""
+    cfg = _config(env.tmp)
+    real = Worker._stage
+
+    def stage(self, tar, d, stamp):
+        if not Path(tar).exists():
+            raise FileNotFoundError(tar)
+        return real(self, tar, d, stamp)
+    monkeypatch.setattr(Worker, "_stage", stage)
+    Path(env.tars[2]).unlink()
+    with pytest.raises(RuntimeError, match="V3_TOO_MANY_GIVEN_UP 23MHz batch0: 1 of 5"):
+        _worker(cfg, FakeDaemon()).run_batch(env.tars)
+    assert not (_bdir(env.tmp) / "provenance.json").exists()
 
 
 @needs_v3_imager
@@ -765,4 +782,85 @@ def test_read_stats_newest_row_wins_by_time(tmp_path):
     d.mkdir()
     (d / "b0_z.jsonl").write_text(json.dumps(dict(ts="20261031_101007", rms=1.0, peak=1, file="f", t=100.0)) + "\n")
     (d / "b0_a.jsonl").write_text(json.dumps(dict(ts="20261031_101007", rms=2.0, peak=1, file="f", t=200.0)) + "\n")
-    assert [r["rms"] for r in hour_lst.read_stats(tmp_path)] == [2.0]      # not the name order (z > a)
+    assert [r["rms"] for r in hour_lst.read_stats(tmp_path, newest=True)] == [2.0]   # not the name order (z > a)
+    # default (v2, 13405ce): the last file by name wins
+    assert [r["rms"] for r in hour_lst.read_stats(tmp_path)] == [1.0]
+
+
+def test_read_stats_default_is_13405ce(tmp_path):
+    """Rows without "t", files whose mtime order differs from their name order: the default equals
+    the verbatim 13405ce read_stats; newest=True follows the mtimes."""
+    import importlib.util
+    import os
+    spec = importlib.util.spec_from_file_location("gpu_subband_imaging._hour_lst_13405ce_rs",
+                                                  Path(__file__).parent / "data" / "hour_lst_13405ce.py")
+    old = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(old)
+    d = tmp_path / ".snapshot_stats"
+    d.mkdir()
+    for k, (name, rms, mt) in enumerate((("b0_a.jsonl", 1.0, 300), ("b1_b.jsonl", 2.0, 100), ("b2_c.jsonl", 3.0, 200))):
+        rows = [dict(ts="20261031_101007", rms=rms, peak=1, file="f"), dict(ts=f"20261031_10110{k}", rms=rms, peak=1, file="g")]
+        (d / name).write_text("".join(json.dumps(r) + "\n" for r in rows))
+        os.utime(d / name, (mt, mt))
+    assert hour_lst.read_stats(tmp_path) == old.read_stats(tmp_path)
+    assert hour_lst.read_stats(tmp_path)[0]["rms"] == 3.0                 # name order: c last
+    assert hour_lst.read_stats(tmp_path, newest=True)[0]["rms"] == 1.0    # mtime order: a newest
+
+
+def _bare_batch(tmp_path, n=20, **v3):
+    from gpu_subband_imaging.v3 import worker_v3
+    b = worker_v3.V3Batch.__new__(worker_v3.V3Batch)
+    b.v3 = V3Params(snapshot_io="shm", peel_io="shm", prep_inmem="on", hour_source="memory",
+                    spill_dirs=[str(tmp_path / "spill")], **v3)
+    b.band, b.batch = 55, 0
+    b.tars = [f"/in/20261031_1010{k:02d}_55MHz.ms.tar" for k in range(n)]
+    b.given_up = {}
+    b._known_skipped = lambda: set()
+    return b
+
+
+def test_given_up_cap(tmp_path):
+    b = _bare_batch(tmp_path)
+    b.given_up = {"20261031_101000_55MHz": {}, "20261031_101001_55MHz": {}}      # 2 of 20 = 10 %: allowed
+    b._check_given_up_fraction()
+    b.given_up["20261031_101002_55MHz"] = {}
+    with pytest.raises(RuntimeError, match="V3_TOO_MANY_GIVEN_UP .* 3 of 20"):
+        b._check_given_up_fraction()
+    b._known_skipped = lambda: {f"20261031_1010{k:02d}_55MHz" for k in range(10, 20)}   # no-data skips do not count
+    with pytest.raises(RuntimeError, match="3 of 10"):
+        b._check_given_up_fraction()
+    b.v3 = V3Params(**{**vars(b.v3), "max_given_up_fraction": 1.0})
+    b._check_given_up_fraction()
+
+
+def test_stale_checkpoints_are_swept(tmp_path):
+    import time as _t
+    b = _bare_batch(tmp_path)
+    run = tmp_path / "spill" / "2026-10-30_Run_X_lst05_v3mem"
+    cur = tmp_path / "spill" / "2026-10-31_Run_T_lst05_v3mem"
+    run.mkdir(parents=True)
+    cur.mkdir(parents=True)
+    old = [run / "55MHz-2026-10-30-05h-b000.gsiv", run / "55MHz-2026-10-30-05h-b000.gsiv.idx.jsonl",
+           run / "55MHz-2026-10-30-05h-b000.gsiv.lock"]
+    own = cur / "55MHz-2026-10-31-05h-b000.gsiv"
+    fresh = cur / "64MHz-2026-10-31-05h-b001.gsiv"
+    other = run / "notes.txt"
+    for f in old + [own, fresh, other]:
+        f.write_bytes(b"x")
+    t = _t.time() - 72 * 3600
+    for f in old + [own, other]:
+        os.utime(f, (t, t))
+    b._ck_name = lambda d: Path(d) / cur.name / own.name
+    gone = tmp_path / "spill" / "2026-10-29_Run_Y_lst05_v3mem"           # only stale files: removed whole
+    gone.mkdir()
+    (gone / "23MHz-2026-10-29-05h-b000.gsiv").write_bytes(b"x")
+    os.utime(gone / "23MHz-2026-10-29-05h-b000.gsiv", (t, t))
+    empty = tmp_path / "spill" / "2026-10-28_Run_Z_lst05"                 # empty already: left alone
+    empty.mkdir()
+    b._sweep_stale_checkpoints()
+    assert not any(f.exists() for f in old) and not gone.exists() and empty.is_dir()
+    assert own.exists() and fresh.exists() and other.exists() and run.is_dir()   # run dir not empty (notes)
+    b.v3 = V3Params(**{**vars(b.v3), "stale_checkpoint_hours": 0.0})
+    os.utime(fresh, (t, t))
+    b._sweep_stale_checkpoints()
+    assert fresh.exists()

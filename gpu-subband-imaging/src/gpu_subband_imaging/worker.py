@@ -307,8 +307,9 @@ class Worker:
         """Stage the raw MS: streamed into tmpfs (v3.untar_to) when it fits and works,
         else the v2 way into work_root (logged V3_FALLBACK)."""
         udir = self._untar_dir(stamp)
+        attempts = v3_params(self.cfg.pipeline).stage_attempts
         if udir is None:
-            return stage_ms.stage(tar, d)
+            return stage_ms.stage(tar, d) if attempts == 1 else stage_ms.stage(tar, d, attempts=attempts)
         try:
             need = Path(tar).stat().st_size * self.UNTAR_SPACE_MARGIN
             udir.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -330,7 +331,7 @@ class Worker:
             shutil.rmtree(udir, ignore_errors=True)
         log.warning("V3_FALLBACK %sMHz stamp=%s untar to tmpfs failed, staging in work_root: %s",
                     self.band, stamp, err)
-        return stage_ms.stage(tar, d)
+        return stage_ms.stage(tar, d, attempts=attempts)
 
     def _prep_inmem(self) -> str:
         pl = self.cfg.pipeline
@@ -735,19 +736,36 @@ class Worker:
             except Exception as e:
                 log.error("render_frame %s failed: %s", stamp, e)
 
+        v3 = v3_params(self.cfg.pipeline).active
         if self.lst_layout:
-            row = dict(stamp=stamp, ts=lst.timestamp(stamp), file=self._archive_paths(stamp)[1].name,
-                       t=time.time(), **image.v_stats(fits_files[1]))
-            self._qa.append(row)
-            self._append_qa_row(row)
-        for f, target in zip(fits_files, self._archive_paths(stamp)):
+            if v3:      # v3: the row time (newest-row QA semantics) and the row persisted at once
+                row = dict(stamp=stamp, ts=lst.timestamp(stamp), file=self._archive_paths(stamp)[1].name,
+                           t=time.time(), **image.v_stats(fits_files[1]))
+                self._qa.append(row)
+                self._append_qa_row(row)
+            else:
+                self._qa.append(dict(stamp=stamp, ts=lst.timestamp(stamp),
+                                     file=self._archive_paths(stamp)[1].name,
+                                     **image.v_stats(fits_files[1])))
+        pairs = list(zip(fits_files, self._archive_paths(stamp)))
+        if v3:
+            # v3 (a budget kill can come at any moment): V first, then the CLEAN I that marks the snapshot
+            # done, each under a temporary name renamed into place, so a killed move never leaves a
+            # truncated FITS under its final name
+            pairs.reverse()
+        for f, target in pairs:
             t0 = time.perf_counter()
             f = f.rename(f.parent / target.name)
             fz = compress.fpack(f)
             log.info("timing %sMHz batch%d stamp=%s phase=fpack file=%s elapsed=%.2f s",
                      self.band, self.batch, stamp, f.name, time.perf_counter() - t0)
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(fz), str(target.parent / fz.name))
+            if v3:
+                part = target.parent / f".{fz.name}.part"
+                shutil.move(str(fz), str(part))
+                os.replace(part, target.parent / fz.name)
+            else:
+                shutil.move(str(fz), str(target.parent / fz.name))
 
     def keep_root(self) -> str:
         """keep_ms_local while it has keep_ms_local_min_free_gb free, else keep_ms_root."""
@@ -822,10 +840,10 @@ class Worker:
             self._v3_start_pool()
             with ThreadPoolExecutor(max_workers=self.cfg.cluster.max_feeders) as pool, \
                  ThreadPoolExecutor(max_workers=max(1, self.cfg.cluster.archive_workers)) as archiver:
-                # test copy: GSI_PREP_LOOKAHEAD bounds how many files the feeders run ahead
-                # of zest (0 = all at once, as production)
-                import os
-                ahead = int(os.environ.get("GSI_PREP_LOOKAHEAD", "0")) or len(todo)
+                # v3 mode only: GSI_PREP_LOOKAHEAD bounds how many files the feeders run ahead
+                # of zest (unset / 0, and always in v2: all at once, as production)
+                ahead = (int(os.environ.get("GSI_PREP_LOOKAHEAD", "0") or 0)
+                         if v3_params(self.cfg.pipeline).active else 0) or len(todo)
                 futs = [pool.submit(self._preprocess, t) for t in todo[:ahead]]
                 archive_futs = []
                 n_zested = 0

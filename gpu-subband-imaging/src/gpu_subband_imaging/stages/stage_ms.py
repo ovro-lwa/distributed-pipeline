@@ -18,13 +18,16 @@ STREAM_BUFSIZE = 1 << 16
 COPY_BUFSIZE = 1 << 20
 
 
-def stage(input_lustre: str, work_dir: Path, untar_to: Optional[Path] = None) -> Path:
+def stage(input_lustre: str, work_dir: Path, untar_to: Optional[Path] = None,
+          attempts: int = 1) -> Path:
     """Return a scratch copy of an archived or unpacked measurement set.
 
     ``untar_to`` (gsi v3 step 1): stream the tar straight from Lustre into that
     directory (e.g. /dev/shm/gsi3/<stamp>) instead of copying the tar into
     ``work_dir`` and extracting it there.  ``work_dir`` is still created (the
-    averaged MS goes there).
+    averaged MS goes there).  ``attempts`` > 1 (gsi v3 mode, v3.stage_attempts):
+    the copy is checked for its size and copy + extract are retried on a bad tar
+    (copies from Lustre were seen short or unreadable under load); 1 = v2.
     """
     work_dir.mkdir(parents=True, exist_ok=True)
     source = Path(input_lustre)
@@ -36,20 +39,24 @@ def stage(input_lustre: str, work_dir: Path, untar_to: Optional[Path] = None) ->
         return stream_untar(source, Path(untar_to))
 
     local_tar = work_dir / source.name
-    # test copy: copies from Lustre to /tmp were seen short or unreadable under load: retry
-    for attempt in range(3):
+    if attempts <= 1:                   # v2 (13405ce)
         shutil.copy(input_lustre, local_tar)
-        try:
-            if local_tar.stat().st_size != source.stat().st_size:
-                raise tarfile.ReadError("short copy")
-            with tarfile.open(local_tar) as t:
-                t.extractall(work_dir)
-            break
-        except tarfile.ReadError as e:
-            if attempt == 2:
-                raise
-            log.warning("STAGE_RETRY %s: %s", source.name, e)
-            shutil.rmtree(work_dir / local_tar.name[:-4], ignore_errors=True)
+        with tarfile.open(local_tar) as t:
+            t.extractall(work_dir)
+    else:
+        for attempt in range(attempts):
+            shutil.copy(input_lustre, local_tar)
+            try:
+                if local_tar.stat().st_size != source.stat().st_size:
+                    raise tarfile.ReadError("short copy")
+                with tarfile.open(local_tar) as t:
+                    t.extractall(work_dir)
+                break
+            except tarfile.ReadError as e:
+                if attempt == attempts - 1:
+                    raise
+                log.warning("STAGE_RETRY %s: %s", source.name, e)
+                shutil.rmtree(work_dir / local_tar.name[:-4], ignore_errors=True)
     local_tar.unlink()
     ms = work_dir / local_tar.name[:-4]
     if not ms.is_dir():
