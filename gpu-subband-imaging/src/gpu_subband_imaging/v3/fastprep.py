@@ -205,10 +205,14 @@ def prep_arrays(raw_ms: str, bp: str, xy: str, badants: str, chanbin: int,
     freq = r["chan_freq_in"]
     J, dead = fastcal.jones(str(raw_ms), bp, xy, r["nant"], freq)
     fastcal.calibrate_arrays(data, flag, flag_row, a1, a2, freq, J, dead, badants)
-    sigma_in = fastcal.sigma_from_weight(r.pop("WEIGHT"))
+    r["WEIGHT_IN"] = r.pop("WEIGHT")
+    sigma_in = fastcal.sigma_from_weight(r["WEIGHT_IN"])
     t = _lap(timings, "cal", t)
 
-    avg, aflag, weight, sigma = average_like_mstransform(data, flag, sigma_in, chanbin)
+    if chanbin == 1:    # input already averaged (night-time backlog): v2 renames the calibrated MS
+        avg, aflag, weight, sigma = data, flag, r.pop("WEIGHT_IN"), sigma_in
+    else:
+        avg, aflag, weight, sigma = average_like_mstransform(data, flag, sigma_in, chanbin)
     del data, flag
     freqs, widths = average_channels(freq, r["chan_width_in"], chanbin)
     t = _lap(timings, "average", t)
@@ -251,8 +255,13 @@ def prep_arrays(raw_ms: str, bp: str, xy: str, badants: str, chanbin: int,
 # -- MS writing -------------------------------------------------------------------------
 
 def make_template(raw_ms: str, out: str, chanbin: int) -> Path:
-    """mstransform of a raw snapshot: the structure write_ms_like copies (one CASA call)."""
+    """mstransform of a raw snapshot: the structure write_ms_like copies (one CASA call).
+    chanbin 1 (already-averaged input, renamed as is by v2): a copy of the input itself."""
     shutil.rmtree(str(out), ignore_errors=True)
+    if chanbin == 1:
+        import subprocess
+        subprocess.run(["cp", "-r", str(raw_ms), str(out)], check=True)
+        return Path(out)
     return fastcal.average(Path(raw_ms), Path(out), chanbin)
 
 

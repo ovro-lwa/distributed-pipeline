@@ -492,6 +492,17 @@ class CalTables:
     sources: str
     aoflagger_strategy: str
     rfi_sources: Optional[str] = None     # RFI model for peel.rfi (TTCal JSON)
+    # fixed bad correlator numbers (CSV, {band: CSV} or {"<LST>h/<band>": CSV}) instead of the
+    # live MNC anthealth lookup, which answers with the current list (backlog re-runs use the
+    # list the original run flagged); as feature/gsi-streaming
+    badants: Optional[Union[str, Dict[Union[int, str], str]]] = None
+
+    def badants_for(self, band: int, group: Optional[str] = None) -> Optional[str]:
+        if isinstance(self.badants, dict):
+            if group is not None and f"{group}/{band}" in self.badants:
+                return self.badants[f"{group}/{band}"]
+            return self.badants.get(band)
+        return self.badants
 
 
 @dataclass(frozen=True)
@@ -568,6 +579,10 @@ class PipelineConfig:
     v3: V3Params = field(default_factory=V3Params)
 
     def __post_init__(self) -> None:
+        if self.chanbin < 1:
+            raise ConfigError("chanbin must be >= 1 (1 = inputs already averaged)")
+        if self.chanbin == 1 and self.do_aoflag:
+            raise ConfigError("chanbin 1 (no averaging) needs do_aoflag false")
         if self.fix_uvw not in FIX_UVW_MODES:
             raise ConfigError(f"fix_uvw must be one of {FIX_UVW_MODES}, got {self.fix_uvw!r}")
         if self.layout not in ("utc", "lst"):
@@ -629,6 +644,14 @@ class PipelineConfig:
         return self.peel_overrides.get(band, self.peel)
 
 
+def _badants(v):
+    if v is None:
+        return None
+    if isinstance(v, dict):
+        return {(int(k) if str(k).isdigit() else str(k)): str(csv) for k, csv in v.items()}
+    return str(v)
+
+
 def load_pipeline(path: Union[str, Path]) -> PipelineConfig:
     d = yaml.safe_load(Path(path).read_text())
     cal = _require(d, "cal", "pipeline.yaml")
@@ -652,7 +675,8 @@ def load_pipeline(path: Union[str, Path]) -> PipelineConfig:
         cal=CalTables(bp=_require(cal, "bp", "cal"), xy=_require(cal, "xy", "cal"),
                       sources=_require(cal, "sources", "cal"),
                       aoflagger_strategy=_require(cal, "aoflagger_strategy", "cal"),
-                      rfi_sources=cal.get("rfi_sources")),
+                      rfi_sources=cal.get("rfi_sources"),
+                      badants=_badants(cal.get("badants"))),
         peel=peel,
         peel_overrides=peel_overrides,
         imaging=ImagingParams(**d.get("imaging", {})),

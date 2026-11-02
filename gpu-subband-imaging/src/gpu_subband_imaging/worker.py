@@ -33,8 +33,9 @@ def _mjd(stamp: str) -> float:
 
 
 def _stamp(input_path: str) -> str:
+    """<date>_<time>_<band>MHz of a raw (.ms.tar / .ms) or night-time averaged (_averaged.ms) input."""
     name = Path(input_path).name
-    for suffix in (".ms.tar", ".ms"):
+    for suffix in ("_averaged.ms", ".ms.tar", ".ms"):
         if name.endswith(suffix):
             return name[:-len(suffix)]
     raise ValueError(f"unsupported measurement-set input: {input_path}")
@@ -196,7 +197,11 @@ class Worker:
                     t0 = time.perf_counter()
                     fastcal.flag_calibrate(ms, self._bp, self._xy, self._badants)
                     t1 = time.perf_counter()
-                    avg = fastcal.average(ms, d / f"{stamp}_avg.ms", self.cfg.pipeline.chanbin)
+                    if self.cfg.pipeline.chanbin == 1:      # input already averaged (night-time backlog)
+                        avg = d / f"{stamp}_avg.ms"
+                        shutil.move(str(ms), str(avg))      # ms may be in tmpfs (v3.untar_to)
+                    else:
+                        avg = fastcal.average(ms, d / f"{stamp}_avg.ms", self.cfg.pipeline.chanbin)
                     log.info("timing %sMHz batch%d stamp=%s phase=flag_cal elapsed=%.2f s",
                              self.band, self.batch, stamp, t1 - t0)
                     log.info("timing %sMHz batch%d stamp=%s phase=average elapsed=%.2f s",
@@ -311,7 +316,10 @@ class Worker:
         if udir is None:
             return stage_ms.stage(tar, d) if attempts == 1 else stage_ms.stage(tar, d, attempts=attempts)
         try:
-            need = Path(tar).stat().st_size * self.UNTAR_SPACE_MARGIN
+            src = Path(tar)
+            size = (sum(f.stat().st_size for f in src.rglob("*") if f.is_file()) if src.is_dir()
+                    else src.stat().st_size)
+            need = size * self.UNTAR_SPACE_MARGIN
             udir.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             if udir.parent.is_symlink():
                 raise FileExistsError(f"{udir.parent} is a symlink")
@@ -825,12 +833,18 @@ class Worker:
                  self.band, self.batch, time.perf_counter() - t0)
         if getattr(self.cfg.pipeline, 'do_badants', True):
             t0 = time.perf_counter()
-            dev_python = f"{self.cfg.pipeline.env.dev_env}/bin/python"
-            self._badants = flag.badants(_mjd(_stamp(todo[0])), dev_python)
+            fixed = self.cfg.pipeline.cal.badants_for(self.band, self.group(_stamp(todo[0])))
+            if fixed is not None:          # the list a previous run used (backlog re-runs)
+                self._badants = fixed
+            else:
+                dev_python = f"{self.cfg.pipeline.env.dev_env}/bin/python"
+                self._badants = flag.badants(_mjd(_stamp(todo[0])), dev_python)
             log.info("timing %sMHz batch%d phase=badants(batch) n=%s elapsed=%.2f s",
                      self.band, self.batch,
                      len(self._badants.split(",")) if self._badants else 0,
                      time.perf_counter() - t0)
+            if fixed is not None:
+                log.info("bad antennas %sMHz batch%d (config): %s", self.band, self.batch, self._badants)
         daemon = self._start_daemon()  # Julia JIT overlaps preprocessing.
         if getattr(self.cfg.pipeline.imaging, "imager", "wsclean") == "ttcalx":
             self._gpu_imager = self._start_gpu_imager()   # started at the first snapshot

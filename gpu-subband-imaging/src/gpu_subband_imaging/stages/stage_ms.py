@@ -33,7 +33,10 @@ def stage(input_lustre: str, work_dir: Path, untar_to: Optional[Path] = None,
     work_dir.mkdir(parents=True, exist_ok=True)
     source = Path(input_lustre)
     if source.is_dir() and source.name.endswith(".ms"):
-        destination = work_dir / source.name
+        # untar_to (v3): an unpacked MS (night-time averaged backlog) is copied into tmpfs too
+        if untar_to is not None:
+            Path(untar_to).mkdir(parents=True, exist_ok=True)
+        destination = (Path(untar_to) if untar_to is not None else work_dir) / source.name
         # cp -r: ~3x faster than shutil.copytree for a ~120-file MS on Lustre (2.7 vs 8.2 s)
         subprocess.run(["cp", "-r", str(source), str(destination)], check=True)
         return destination
