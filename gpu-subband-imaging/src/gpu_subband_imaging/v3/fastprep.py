@@ -187,6 +187,11 @@ def read_raw(raw_ms: str) -> Dict[str, Any]:
     return out
 
 
+def set_env(env: Dict[str, str]) -> None:
+    """Prep pool initializer: extra environment of a prep process (e.g. GSI_PREP_GAIN_CACHE)."""
+    os.environ.update(env)
+
+
 def prep_arrays(raw_ms: str, bp: str, xy: str, badants: str, chanbin: int,
                 fix_uvw_mode: str = "centroid") -> SnapArrays:
     """Raw snapshot MS -> calibrated, averaged, UVW-fixed SnapArrays (raw MS untouched).

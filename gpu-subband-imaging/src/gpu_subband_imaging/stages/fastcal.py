@@ -18,6 +18,7 @@ max 6e-5 of the mean visibility on a 55 MHz snapshot), flags identical.
 """
 from __future__ import annotations
 
+import os
 import threading
 from pathlib import Path
 from typing import Dict, Tuple
@@ -98,10 +99,32 @@ def calibrate_arrays(data: np.ndarray, flag: np.ndarray, flag_row: np.ndarray,
         flag_row |= rows
     if freq.max() > 85e6:
         flag[:, (freq >= 85e6) & (freq <= 100e6), :] = True
+    cached = _gain_products(J, a1, a2) if os.environ.get("GSI_PREP_GAIN_CACHE", "0") == "1" else None
     for k, (p, q) in enumerate(_CORR):
-        data[:, :, k] = (data[:, :, k] / (J[a1, :, p] * np.conj(J[a2, :, q]))
-                         ).astype(data.dtype)
+        g = cached[k] if cached is not None else J[a1, :, p] * np.conj(J[a2, :, q])
+        data[:, :, k] = (data[:, :, k] / g).astype(data.dtype)
         flag[dead[a1, p] | dead[a2, q], :, k] = True
+
+
+_gp_cache: Dict[tuple, list] = {}
+
+
+def _gain_products(J: np.ndarray, a1: np.ndarray, a2: np.ndarray) -> list:
+    """GSI_PREP_GAIN_CACHE=1 (v3.prep_gain_cache): the per-row gain products J[a1, :, p] * conj(J[a2, :, q]) of
+    the four correlations, kept per process while J and the row order stay the same (every snapshot of a
+    band-hour): the same arrays as computed per snapshot, ~0.8 GB per process at 192 channels."""
+    import hashlib
+    key = (id(J), J.shape, hashlib.sha1(np.ascontiguousarray(a1).tobytes()).hexdigest(),
+           hashlib.sha1(np.ascontiguousarray(a2).tobytes()).hexdigest())
+    with _lock:
+        hit = _gp_cache.get(key)
+        if hit is not None and hit[0] is J:
+            return hit[1]
+    out = [J[a1, :, p] * np.conj(J[a2, :, q]) for p, q in _CORR]
+    with _lock:
+        _gp_cache.clear()
+        _gp_cache[key] = (J, out)
+    return out
 
 
 def sigma_from_weight(w: np.ndarray) -> np.ndarray:

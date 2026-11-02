@@ -389,6 +389,8 @@ class V3Params:
     checkpoint: str = "local"         # none | local | archive (only when hour_source != kept_ms)
     delete_checkpoint: bool = True
     lookahead: int = 8
+    # prep processes keep the band-hour's per-row gain products (same values; ~0.8 GB RAM per process)
+    prep_gain_cache: bool = False
     peel_timeout_s: float = 600.0     # peel_io=shm: kill + restart the zest daemon after this
     peel_start_timeout_s: float = 600.0   # peel_io=shm: deadline for the daemon's DAEMON_READY
     prep_procs: int = 4
