@@ -98,6 +98,13 @@ class BatchAborted(RuntimeError):
     """The batch cannot go on (engine failed for good, records lost, budget): stop prepping and peeling."""
 
 
+def _permanent_engine_error(e: BaseException) -> bool:
+    """An engine error reply marked permanent (the imager's DegeneratePSFError: the snapshot's data
+    cannot give a usable PSF): a property of the input, recorded as given up at once (no retry)."""
+    from .engine_client import EngineError
+    return isinstance(e, EngineError) and bool(e.reply.get("permanent"))
+
+
 def _stamp(tar: str) -> str:
     from ..worker import _stamp as s
     return s(tar)
@@ -903,10 +910,15 @@ class V3Batch:
                     f.result()
                     self.n_ok += 1
                 except Exception as e:
-                    log.error("image/archive failed: %s", e)
+                    permanent = _permanent_engine_error(e)
+                    if permanent:
+                        log.error("V3_INPUT_PERMANENT %sMHz stamp=%s: the imager rejected the input data (not "
+                                  "retried; the hour is made without it): %s", self.band, stamp, e)
+                    else:
+                        log.error("image/archive failed: %s", e)
                     self.n_fail += 1
                     if not isinstance(e, BatchAborted) and not self.fatal:
-                        self._fail(stamp, f"engine/archive: {e}")
+                        self._fail(stamp, f"engine/archive: {e}", permanent=permanent)
             if self.fatal:
                 raise BatchAborted(self.fatal)
 

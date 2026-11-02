@@ -592,6 +592,31 @@ def test_input_failing_every_attempt_is_given_up_and_the_hour_made_without_it(en
 
 
 @needs_v3_imager
+def test_degenerate_psf_is_given_up_at_once_and_the_hour_made_without_it(env, caplog):
+    """20261031_101739_32MHz: the imager raises DegeneratePSFError (99.94 % zero data, 28 short
+    baselines left after flag_zero).  A property of the data: recorded permanent in the first
+    attempt, no retry spent, the hour is made from the rest (as production skipped it)."""
+    cfg = _config(env.tmp)
+    cfg.pipeline.imaging.gpu_env["GSI_V3_FAKE_DEGENERATE"] = STAMPS[1]
+    b = _bdir(env.tmp)
+    with caplog.at_level(logging.INFO, logger="gsi"):
+        _worker(cfg, FakeDaemon()).run_batch(env.tars)
+    lines = [json.loads(x) for x in (b / "QA" / ".v3_failed.jsonl").read_text().splitlines()]
+    assert len(lines) == 1 and lines[0]["stamp"] == STAMPS[1] and lines[0]["permanent"] is True
+    assert "DegeneratePSFError" in lines[0]["reason"] and "degenerate PSF" in lines[0]["reason"]
+    assert "V3_INPUT_PERMANENT" in caplog.text and "V3_HOUR_REDUCED" in caplog.text
+    assert "V3_INCOMPLETE" not in caplog.text
+    h = json.loads((b / "provenance.json").read_text())["hour"]
+    assert h["status"] == "ok" and h["n_loaded"] == len(STAMPS) - 1 and h["hour_reduced"]
+    assert h["failed_inputs"][STAMPS[1]]["attempts"] == 1 and h["failed_inputs"][STAMPS[1]]["permanent"]
+    d = FakeDaemon()
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="gsi"):
+        _worker(cfg, d).run_batch(env.tars)
+    assert "nothing to do (hour products done)" in caplog.text and d.calls == []
+
+
+@needs_v3_imager
 def test_vanished_tar_is_given_up_at_once(env, monkeypatch, caplog):
     cfg = _config(env.tmp)
     real = Worker._stage
