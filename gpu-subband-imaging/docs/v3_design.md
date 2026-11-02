@@ -282,12 +282,31 @@ v3:
   peel_backend: daemon    # step 8: daemon | juliacall
 ```
 
+**v3 "prodlike" (config F, validated 2026-11-01/02):** the production `peel:` block plus
+
+```yaml
+peel:
+  engine: sky_rfi
+  precision: mixed
+  peeliter: 3
+  workspace: true
+  fast_kernels: true      # TTCalX exp/ttcalx-v3-all: off by default (748884a kernels); v3 was validated with them on
+  smooth_flux: 0
+  restore: ""
+  warm_start: false
+v3: {untar_to: /dev/shm/gsi3/untar, prep_inmem: on, peel_io: shm, snapshot_io: shm, hour_source: memory,
+     write_kept_ms: false, archive: none, store: auto, checkpoint: local}
+```
+
+The gsi v3 engine sets the imager's `FAST_ENV` (`ttcalx_imager.use_fast_settings`).
+
 Validation in `__post_init__`:
 - `peel_io=shm` needs `prep_inmem=on` and `prep=numpy`;
 - `snapshot_io=shm` needs `peel_io=shm` and `imaging.imager=ttcalx`;
 - `hour_source=memory` needs `snapshot_io=shm`, `layout=lst` and `stream_hour_images`;
 - `archive != none` needs `archive_root`;
-- `untar_to` must not be on Lustre.
+- `untar_to` must not be on Lustre;
+- `hour_source=archive` with `write_kept_ms=false` needs `snapshot_io=shm` (only the v3 batch can replay a lost record).
 
 ## 7. Implementation plan (small steps, each switchable and each with a v2 equivalence test)
 
