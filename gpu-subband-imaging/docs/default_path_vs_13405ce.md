@@ -46,7 +46,7 @@ production TTCalX (748884a) and the production imager venv (748884a).
   cleared per interval, LAPACK SVD, FFT local RMS, full-size scale FFTs, FFT residual updates).  The v3 entry
   points (`hour --archive`, `run_hour_snaps`, the gsi v3 engine) set all of them on with reserve auto and the OOM
   fallback (`ttcalx_imager.FAST_ENV`).  Always on: compact w-term factors (float32 interpolation) and the new
-  Hogbom kernels: same images to float32 rounding, validated by the 2026-10-27 regression set.  The strict beam
+  Hogbom kernels: images within 748884a's run-to-run GPU floor (82 MHz hour job check), 2026-10-27 regression set PASS.  The strict beam
   fit stays opt-in (`TTCALX_STRICT_BEAM=1`) everywhere.  The snapshot `DegeneratePSFError` replaces the old
   empty-selection crash for the same inputs.
 

@@ -187,11 +187,14 @@ class GpuBackend:
         self.cp.get_default_pinned_memory_pool().free_all_blocks()
 
     def before_hour(self):
-        """The snapshot imager's caches go (cuFINUFFT plans, w-term tables / factors / geometry, cuFFT
-        plans); the hour stage gets the whole GPU (no pool limit), as v2's separate hour job.  At 82 MHz
+        """The snapshot imager's caches go (cuFINUFFT plans, w-term tables / factors / geometry, local-RMS
+        circulant matrices, cuFFT plans); the hour stage gets the whole GPU (no pool limit), as v2's separate hour job.  At 82 MHz
         the cached snapshot plans left cuFINUFFT too little memory for the hour's setpts."""
         import gc
         self.gridder.clear_caches()
+        circ = getattr(sys.modules.get("ttcalx_imager.clean"), "_CIRC_CACHE", None)
+        if circ is not None:
+            circ.clear()
         self.cp.fft.config.get_plan_cache().clear()
         gc.collect()
         self.free()
