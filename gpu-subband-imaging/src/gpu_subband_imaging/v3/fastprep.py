@@ -240,6 +240,7 @@ def prep_arrays(raw_ms: str, bp: str, xy: str, badants: str, chanbin: int,
 
     stem = Path(str(raw_ms)).name
     stem = stem[:-3] if stem.endswith(".ms") else stem
+    stem = stem[:-len("_averaged")] if stem.endswith("_averaged") else stem   # night-time averaged input
     meta = {"freqs": freqs, "chan_width": widths, "phase_dir": r["phase_dir"],
             "ant_pos": r["ant_pos"], "telescope": r["telescope"], "observer": r["observer"],
             "field_name": r["field_name"], "chanbin": int(chanbin), "badants": badants,
