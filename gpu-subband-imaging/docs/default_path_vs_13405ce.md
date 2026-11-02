@@ -36,3 +36,16 @@ production TTCalX (748884a) and the production imager venv (748884a).
   - On top of 86afd89, the defaults are kept: the strict beam fit needs `TTCALX_STRICT_BEAM=1`, and the hour OOM fallback needs `TTCALX_CACHE_OOM_FALLBACK=1`. Both are on automatically for `--archive` / `run_hour_snaps`.
   - The snapshot `DegeneratePSFError` replaces the old empty-selection crash for the same inputs.
 - **TTCalX `exp/ttcalx-v3`:** with the workspace off, the paths are equivalent (review).
+
+**Smoke check (2026-11-02, lwacalim00 GPU 1, 2026-10-31 LST 05h 55 MHz, first 25 snapshots, production template).**
+Compared with the production night (Run_20261030_232620). Scripts and results are in
+`/lustre/nkosogor/peel_exp/defaults/{scripts,results}`.
+
+| Run | Code | CLEAN I diff rms / max (σ) | V diff rms / max (σ) | QA rows | provenance keys | log line types |
+|---|---|---|---|---|---|---|
+| A | this branch, production TTCalX + imager (748884a copies) | 0.0067 / 0.34 (median 0.0053 / 0.017) | 0.0083 / 0.024 | same keys, rms/peak ≤ 1.3e-7 rel | equal* | no new ones |
+| B | this branch, TTCalX c78f0b5, imager a496d28 | 0.0067 / 0.34 | 0.0083 / 0.024 | same keys, ≤ 1.8e-7 rel | equal* | no new ones |
+| C | v3 prodlike (config F), same code as B | 0.0054 / 0.017 | 0.0083 / 0.024 | + `t` (v3) | + `v3`, new peel keys (set) | v3 lines |
+
+\* Except harness artefacts: `software.*.git` details are missing because the code copies are not git trees, and
+`imaging.gpu_env.PYTHONPATH` points at the copies.
