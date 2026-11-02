@@ -211,6 +211,9 @@ class PeelParams:
     precision: str = "double"         # double | mixed (normal equations in single precision)
     warm_start: bool = False          # start from the previous snapshot's gains (same channels, <= 60 s)
     workspace: bool = False           # sky_rfi: reuse TTCalX PeelWorkspace buffers (same results, less GC)
+    # TTCalX 0.3.0 GPU kernels (tiled normal equations, device RFI fringes, fused corrupt-subtract;
+    # TTCalX.fast_kernels!): off = 748884a's kernels (bitwise), on = equal to rounding.  v3 prodlike: true
+    fast_kernels: bool = False
 
     def __post_init__(self) -> None:
         choices = {"solver": ("damped", "rk4"), "model": ("kernels", "exact"),
@@ -235,17 +238,17 @@ class PeelParams:
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not value >= 0:
                 raise ConfigError(f"peel.{name} must be >= 0, got {value!r}")
 
-    # The fields added after 13405ce (engine .. workspace) with their defaults.  While every one of them
+    # The fields added after 13405ce (engine .. fast_kernels) with their defaults.  While every one of them
     # is at its default, neither the ZEST_* environment nor the provenance "peel" block has them, so
     # both are exactly 13405ce's; once one is set, all of them are given (as the sky_rfi tests ran).
     NEW_DEFAULTS = {"engine": "daemon", "smooth_flux": 0.0, "smooth_below_mhz": 0.0,
                     "smooth_exempt_flux": 0.0, "rfi_smooth_flux": None,
                     "smooth_exempt_below_el_deg": 0.0, "restore": "", "restore_below_mhz": 41.0,
                     "restore_offset_deg": 0.0, "precision": "double", "warm_start": False,
-                    "workspace": False}
+                    "workspace": False, "fast_kernels": False}
     # with the new fields in use: these are still never sent at their defaults
     _UNSET = {"smooth_below_mhz": 0.0, "smooth_exempt_flux": 0.0, "rfi_smooth_flux": None,
-              "smooth_exempt_below_el_deg": 0.0, "workspace": False}
+              "smooth_exempt_below_el_deg": 0.0, "workspace": False, "fast_kernels": False}
 
     def new_fields_default(self) -> bool:
         return all(getattr(self, k) == v for k, v in self.NEW_DEFAULTS.items())
@@ -443,6 +446,11 @@ class V3Params:
             raise ConfigError("v3.hour_source=archive needs v3.archive (iv)")
         if self.hour_source == "kept_ms" and not self.write_kept_ms:
             raise ConfigError("v3.hour_source=kept_ms needs v3.write_kept_ms")
+        if self.hour_source == "archive" and not self.write_kept_ms and self.snapshot_io != "shm":
+            # the v2 worker moves a snapshot's FITS (the snapshot is done) before its archive record is
+            # written and has no replay: a lost record would leave neither a record nor a kept MS to image
+            raise ConfigError("v3.hour_source=archive with v3.write_kept_ms=false needs v3.snapshot_io=shm "
+                              "(the v2 worker cannot replay a lost archive record)")
         if self.lookahead < 1 or self.prep_procs < 1:
             raise ConfigError("v3.lookahead and v3.prep_procs must be >= 1")
         if not self.prep_timeout_s > 0:

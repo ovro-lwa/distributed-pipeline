@@ -137,6 +137,12 @@ class GpuBackend:
     name = "gpu"
 
     def __init__(self):
+        import ttcalx_imager
+        # the imager's speed settings, as validated for v3 (ttcalx_imager.FAST_ENV: gram SVD, circulant local
+        # RMS, chunk cache store, kept cuFFT plans, reserve auto, OOM fallback, ...; a variable already set in
+        # the engine's environment wins).  An imager without use_fast_settings has them on by default.
+        if hasattr(ttcalx_imager, "use_fast_settings"):
+            ttcalx_imager.use_fast_settings()
         import cupy as cp
         from ttcalx_imager import gridder, snapshot
         from ttcalx_imager.snapshot import SnapshotImager
@@ -192,7 +198,15 @@ class GpuBackend:
         self.pool.set_limit(size=0)
 
     def after_hour(self):
+        """The hour's caches go before the next band-hour's snapshots: cuFINUFFT plans and w-term tables /
+        factors / geometry (gridder.clear_caches), the local-RMS circulant matrices, the cuFFT plans."""
+        import gc
+        self.gridder.clear_caches()
+        circ = getattr(sys.modules.get("ttcalx_imager.clean"), "_CIRC_CACHE", None)
+        if circ is not None:
+            circ.clear()
         self.cp.fft.config.get_plan_cache().clear()
+        gc.collect()
         self.free()
         self.pool.set_limit(size=self.limit)
 

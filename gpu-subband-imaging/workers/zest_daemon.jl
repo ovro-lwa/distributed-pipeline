@@ -36,6 +36,8 @@
 #                      >= it keep per-channel gains), ZEST_SMOOTH_EXEMPT_BELOW_EL_DEG (> 0: sky
 #                      sources below this elevation keep them) and ZEST_RFI_SMOOTH_FLUX (unset:
 #                      the ZEST_SMOOTH_FLUX value), all unset by default
+#   ZEST_FAST_KERNELS  default off: TTCalX.fast_kernels!(true) (tiled normal equations, device RFI
+#                      fringes, fused corrupt-subtract; equal to rounding; needs exp/ttcalx-v3-all)
 #   ZEST_WORKSPACE     sky_rfi engine only (default off): keep one TTCalX.PeelWorkspace and the
 #                      slot's device visibilities across snapshots, so a peel allocates almost no
 #                      GPU memory and CUDA.jl does not collect inside the solve under
@@ -134,6 +136,14 @@ use_workspace && !isdefined(TTCalX, :PeelWorkspace) &&
     error("ZEST_WORKSPACE needs TTCalX with PeelWorkspace (branch exp/peel-workspace)")
 # reused peel buffers; the keyword is only passed when on, so older TTCalX runs with it off
 peel_ws_kw = use_workspace ? (workspace=TTCalX.PeelWorkspace(),) : NamedTuple()
+# ZEST_FAST_KERNELS (default off): TTCalX 0.3.0's faster GPU kernels (TTCalX.fast_kernels!: tiled
+# normal equations, RFI fringes on the device, fused corrupt-subtract; equal to the old kernels to
+# rounding).  Off, nothing is called, so TTCalX's own default applies (the 748884a kernels).
+fast_kernels = envb("ZEST_FAST_KERNELS", false)
+fast_kernels && !isdefined(TTCalX, :fast_kernels!) &&
+    (println("CONFIG_ERROR ZEST_FAST_KERNELS needs TTCalX with fast_kernels! (branch exp/ttcalx-v3-all)");
+     flush(stdout); exit(2))
+fast_kernels && (TTCalX.fast_kernels!(true); println("FAST_KERNELS on"))
 sky_rfi && !isdefined(TTCalX, :zest_sky_rfi!) &&
     (println("CONFIG_ERROR ZEST_ENGINE=sky_rfi needs TTCalX with zest_sky_rfi!"); flush(stdout); exit(2))
 # zest_sky_rfi! runs on host arrays as well (TTCalX host backend), so device=cpu is allowed

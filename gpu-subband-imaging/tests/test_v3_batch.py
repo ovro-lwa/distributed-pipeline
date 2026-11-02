@@ -864,3 +864,32 @@ def test_stale_checkpoints_are_swept(tmp_path):
     os.utime(fresh, (t, t))
     b._sweep_stale_checkpoints()
     assert fresh.exists()
+
+
+def test_engine_image_never_returns_with_the_request_outstanding():
+    """A failing kept-MS write (while_waiting) re-raises only after the engine's reply to the slot's
+    image_slot request, so the caller's slot release never runs under an outstanding request."""
+    from gpu_subband_imaging.v3 import worker_v3
+    events = []
+    gate = threading.Event()
+
+    class Handle:
+        def result(self, timeout):
+            gate.wait(5)
+            events.append("reply")
+            return dict(status="ok")
+
+    class Engine:
+        def submit(self, op, **kw):
+            events.append(op)
+            return Handle()
+
+    fake = SimpleNamespace(gate=worker_v3._EngineGate(), engine=Engine(), v3=SimpleNamespace(engine_timeout_s=5.0),
+                           band=55, records=True, store_path=None, memory=True, _abort=lambda why: None)
+
+    def kept_write_fails():
+        threading.Timer(0.2, gate.set).start()
+        raise RuntimeError("kept MS write failed")
+    with pytest.raises(RuntimeError, match="kept MS write failed"):
+        worker_v3.V3Batch._engine_image(fake, SimpleNamespace(stamp="20261031_101001"), {}, kept_write_fails)
+    assert events == ["image_slot", "reply"]

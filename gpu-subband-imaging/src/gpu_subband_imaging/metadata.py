@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from . import __version__
-from .config import Config
+from .config import Config, PipelineConfig, V3Params
 
 
 def _utc_now() -> str:
@@ -140,6 +140,16 @@ def _config_hashes(config_dir: Path) -> Dict[str, str]:
     return hashes
 
 
+def pipeline_dict(p: PipelineConfig) -> Dict[str, object]:
+    """The run record's "pipeline" block: 13405ce's keys while the new settings are at their defaults
+    (as provenance.json): "peel" is PeelParams.as_dict, and "v3" is left out while it equals V3Params()."""
+    d = asdict(p)
+    d["peel"] = p.peel.as_dict()
+    if p.v3 == V3Params():
+        d.pop("v3", None)
+    return d
+
+
 def write_run_metadata(cfg: Config, config_dir: str, status: str,
                        summary: Optional[Dict[str, int]] = None,
                        error: Optional[str] = None) -> Path:
@@ -171,7 +181,7 @@ def write_run_metadata(cfg: Config, config_dir: str, status: str,
         "host": socket.gethostname(),
         "config_snapshot": str(Path(config_dir).resolve()),
         "config_sha256": _config_hashes(Path(config_dir)),
-        "pipeline": asdict(cfg.pipeline),
+        "pipeline": pipeline_dict(cfg.pipeline),
         "cluster": {
             "slots": [str(slot) for slot in cfg.cluster.slots()],
             "max_feeders": cfg.cluster.max_feeders,

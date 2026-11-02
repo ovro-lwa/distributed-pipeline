@@ -680,7 +680,17 @@ class V3Batch:
         try:
             with self.gate.shared():
                 h = self.engine.submit("image_slot", **req)
-                while_waiting()
+                try:
+                    while_waiting()
+                except BaseException:
+                    # the caller releases the slot next: first the engine must be done with it (its
+                    # reply, or killed by the timeout / dead), never a release under an outstanding request
+                    try:
+                        h.result(self.v3.engine_timeout_s)
+                    except Exception as e:      # noqa: BLE001 (the while_waiting error is what counts)
+                        log.error("V3_ENGINE %sMHz stamp=%s: image_slot after a failed kept-MS write: %s",
+                                  self.band, it.stamp, e)
+                    raise
                 return h.result(self.v3.engine_timeout_s)
         except ec.EngineFailed as e:
             self._abort(f"engine failed: {e}")

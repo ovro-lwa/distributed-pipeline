@@ -527,7 +527,10 @@ def test_v3_archive_config_validation(tmp_path, monkeypatch):
         V3Params(hour_source="archive")
     with pytest.raises(ConfigError, match="write_kept_ms"):
         V3Params(write_kept_ms=False)
-    V3Params(archive="iv", archive_root="/x", hour_source="archive", write_kept_ms=False)
+    with pytest.raises(ConfigError, match="cannot replay"):      # v2 worker: no replay of a lost record
+        V3Params(archive="iv", archive_root="/x", hour_source="archive", write_kept_ms=False)
+    V3Params(archive="iv", archive_root="/x", hour_source="archive", write_kept_ms=False, prep_inmem="on",
+             peel_io="shm", snapshot_io="shm")
     monkeypatch.chdir(tmp_path)
     assert V3Params(archive="iv", archive_root="rel/arch").archive_root == str(tmp_path / "rel" / "arch")
 

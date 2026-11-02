@@ -213,3 +213,11 @@ def test_new_fields_appear_once_one_is_set():
     assert set(PeelParams.NEW_DEFAULTS) <= set(d)
     # a restore list keeps its 41 MHz gate (the daemon's own default would be Inf)
     assert PeelParams(restore="/j.json").daemon_env(None)["ZEST_RESTORE_BELOW_MHZ"] == "41.0"
+
+
+def test_fast_kernels_switch_maps_to_env_only_when_on():
+    assert "ZEST_FAST_KERNELS" not in PeelParams(**PRODUCTION).daemon_env("/r.json")
+    assert "ZEST_FAST_KERNELS" not in PeelParams(**PRODUCTION, engine="sky_rfi").daemon_env("/r.json")
+    env = PeelParams(**PRODUCTION, fast_kernels=True).daemon_env("/r.json")
+    assert env["ZEST_FAST_KERNELS"] == "True" and env["ZEST_ENGINE"] == "daemon"
+    assert PeelParams(**PRODUCTION, fast_kernels=True).as_dict()["fast_kernels"] is True
