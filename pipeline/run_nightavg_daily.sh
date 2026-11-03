@@ -46,6 +46,10 @@ while (( NDAYS == 0 || n < NDAYS )); do
     prev=$(date -u -d "${date_str} - 1 day" +%F)
     prev_log=${REPO}/deploy/logs/nightavg_${prev}.log
     prev_missing=$(grep -o "Outputs missing after run: [0-9]*" "$prev_log" 2>/dev/null | tail -1 | awk '{print $NF}')
+    # A night with no slow data at all (recorders down, seen 2026-11-01) has nothing missing.
+    if [[ -z "$prev_missing" ]] && grep -q ": 0 files in window" "$prev_log" 2>/dev/null; then
+        prev_missing=0
+    fi
     if [[ -e "${prev_log%.log}.ok" ]]; then
         log "Previous night ${prev} accepted by hand (${prev_log%.log}.ok)"
     elif [[ -z "$prev_missing" ]] || (( prev_missing > MAX_MISSING )); then
