@@ -1,7 +1,7 @@
 # Default path vs production 13405ce
 
 **What is verified (short):** the GSI code diff below is reviewed line by line and pinned by tests; the
-default peel with TTCalX `exp/ttcalx-v3-all` gives bitwise the same visibilities as 748884a on 4 production
+default peel with TTCalX `v0.3.0` gives bitwise the same visibilities as 748884a on 4 production
 55 MHz snapshots (GPU); the default imager gives the same images as 748884a to the GPU floor (cuFINUFFT
 float atomics, as two runs of 748884a), not bit for bit.  "Equivalent" below means exactly that.
 
@@ -37,7 +37,7 @@ Tests that pin this: `tests/test_defaults_13405ce.py`, `tests/test_gpu_image_cli
 **Deploy requirements of the default path:** none beyond 13405ce's.  The pipeline runs with the
 production TTCalX (748884a) and the production imager venv (748884a).
 
-**TTCalX (one branch, `exp/ttcalx-v3-all` = `exp/ttcalx-v3` + `exp/imager-v3-engine`):**
+**TTCalX `v0.3.0` (TTCalX `main`; peeler and imager):**
 - **Peeler:** the 0.3.0 GPU kernels (tiled normal equations, device RFI fringes, fused corrupt-subtract) are off
   by default (`TTCalX.fast_kernels!`, gsi `peel.fast_kernels`); v3 prodlike sets `fast_kernels: true`.  With the
   defaults the production peel (`engine: daemon`, residual guard, RFI) gave **bitwise** the visibilities of
@@ -50,27 +50,26 @@ production TTCalX (748884a) and the production imager venv (748884a).
   fit stays opt-in (`TTCALX_STRICT_BEAM=1`) everywhere.  The snapshot `DegeneratePSFError` replaces the old
   empty-selection crash for the same inputs.
 
-**Smoke check (2026-11-02, lwacalim00 GPU 1, 2026-10-31 LST 05h 55 MHz, first 25 snapshots, production template).**
-Compared with the production night (Run_20261030_232620). Scripts and results are in
-`/lustre/nkosogor/peel_exp/defaults/{scripts,results}`.
+**Smoke check (2026-11-02, one GPU, 2026-10-31 LST 05h 55 MHz, first 25 snapshots, production template).**
+Compared with the production night (Run_20261030_232620).
 
 | Run | Code | CLEAN I diff rms / max (σ) | V diff rms / max (σ) | QA rows | provenance keys | log line types |
 |---|---|---|---|---|---|---|
-| A | this branch, production TTCalX + imager (748884a copies) | 0.0067 / 0.34 (median 0.0053 / 0.017) | 0.0083 / 0.024 | same keys, rms/peak ≤ 1.3e-7 rel | equal* | no new ones |
-| B | this branch, TTCalX c78f0b5, imager a496d28 | 0.0067 / 0.34 | 0.0083 / 0.024 | same keys, ≤ 1.8e-7 rel | equal* | no new ones |
+| A | gsi `main`, production TTCalX + imager (748884a copies) | 0.0067 / 0.34 (median 0.0053 / 0.017) | 0.0083 / 0.024 | same keys, rms/peak ≤ 1.3e-7 rel | equal* | no new ones |
+| B | gsi `main`, TTCalX c78f0b5, imager a496d28 (both in v0.3.0) | 0.0067 / 0.34 | 0.0083 / 0.024 | same keys, ≤ 1.8e-7 rel | equal* | no new ones |
 | C | v3 prodlike (config F), same code as B | 0.0054 / 0.017 | 0.0083 / 0.024 | + `t` (v3) | + `v3`, new peel keys (set) | v3 lines |
 
 \* Except harness artefacts: `software.*.git` details are missing because the code copies are not git trees, and
 `imaging.gpu_env.PYTHONPATH` points at the copies.
 
-**Blockers check (2026-11-02, lwacalim00 GPU 1, 2026-10-31 LST 05h, production template, gsi 2b601c4, TTCalX
-`exp/ttcalx-v3-all`).** Scripts and results: `/lustre/nkosogor/peel_exp/blockers/{scripts,results}`.
+**Blockers check (2026-11-02, one GPU, 2026-10-31 LST 05h, production template, gsi 2b601c4, TTCalX
+v0.3.0 code).**
 
 | Check | Result |
 |---|---|
-| Peel, 55 MHz, 4 snapshots: 748884a vs `exp/ttcalx-v3-all` defaults (zest daemon) | every main-table column of the 4 kept MSes **bitwise equal** (DATA, FLAG, UVW, ...) |
+| Peel, 55 MHz, 4 snapshots: 748884a vs v0.3.0 defaults (zest daemon) | every main-table column of the 4 kept MSes **bitwise equal** (DATA, FLAG, UVW, ...) |
 | Peel: 748884a run twice | DATA / FLAG bitwise equal; UVW differs by ≤ 9e-9 m (the prep's fix_uvw, not the peel) |
-| Hour job, 82 MHz, 90 kept MSes (15 min), standalone, 1 s sampling | peak GPU 9292 MiB (748884a) vs 8794 MiB (v3-all defaults); wall 192 s vs 165 s |
-| Hour images, 82 MHz, 748884a vs v3-all defaults | dirty / PSF ≤ 3e-7 σ rms; deep I ≤ 0.0003 σ rms / 0.05 σ max; 10-min I ≤ 0.021 σ rms / 0.86 σ max (interval t0002), equal to 748884a vs 748884a (0.023 σ / 0.85 σ there) |
+| Hour job, 82 MHz, 90 kept MSes (15 min), standalone, 1 s sampling | peak GPU 9292 MiB (748884a) vs 8794 MiB (v0.3.0 defaults); wall 192 s vs 165 s |
+| Hour images, 82 MHz, 748884a vs v0.3.0 defaults | dirty / PSF ≤ 3e-7 σ rms; deep I ≤ 0.0003 σ rms / 0.05 σ max; 10-min I ≤ 0.021 σ rms / 0.86 σ max (interval t0002), equal to 748884a vs 748884a (0.023 σ / 0.85 σ there) |
 | Snapshot + hour images, 55 MHz, 4 snapshots | snapshot I/V 0.0054 / 0.0082 σ rms as 748884a vs itself; hour I ≤ 0.003 σ rms (748884a vs itself 0.03 σ) |
 | Smoke C2 = v3 prodlike + `fast_kernels: true`, 25 snapshots vs production P | I 0.0054 / 0.017 σ, V 0.0083 / 0.024 σ, QA ≤ 9.4e-8 rel (C: 0.0054 / 0.017, 0.0083 / 0.024); hour products C vs C2 ≤ 0.0067 σ rms; 157 s (C 144 s) |
