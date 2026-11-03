@@ -313,7 +313,8 @@ def cleanup_stale(root: PathLike = SHM_ROOT) -> List[str]:
     except FileNotFoundError:
         return removed
     for name in names:
-        m = _NAME.fullmatch(name)
+        sol = name.endswith(".peelsol")          # a slot's peel.save_solutions directory
+        m = _NAME.fullmatch(name[:-len(".peelsol")] if sol else name)
         if not m:
             continue
         p = os.path.join(str(root), name)
@@ -325,7 +326,14 @@ def cleanup_stale(root: PathLike = SHM_ROOT) -> List[str]:
         if st.st_uid != uid or pid == os.getpid() or _pid_alive(pid):
             continue
         try:
-            os.unlink(p)
+            if sol:
+                import shutil
+                import stat
+                if not stat.S_ISDIR(st.st_mode):
+                    continue
+                shutil.rmtree(p, ignore_errors=True)
+            else:
+                os.unlink(p)
             removed.append(p)
         except FileNotFoundError:
             pass
@@ -409,6 +417,9 @@ class SlotRing:
                 os.unlink(p)
             except FileNotFoundError:
                 pass
+            if os.path.isdir(f"{p}.peelsol"):     # peel.save_solutions left by a failed snapshot
+                import shutil
+                shutil.rmtree(f"{p}.peelsol", ignore_errors=True)
 
     def close(self) -> None:
         with self._cv:

@@ -215,6 +215,45 @@ def _peel_dict(peel) -> Dict:
     return peel.as_dict() if hasattr(peel, "as_dict") else vars(peel)
 
 
+def backlog_keys(pl, band: int) -> bool:
+    """Whether provenance gets the backlog keys (feature/gsi-streaming's): only with one of
+    description, cal.badants, peel.save_solutions or hour_imaging.qa_exclude=false set, so a
+    default run's provenance keeps 13405ce's keys."""
+    peel = pl.peel_for_band(band)
+    return bool(getattr(pl, "description", "") or getattr(pl.cal, "badants", None) is not None
+                or getattr(peel, "solution_passes", None)
+                or not getattr(pl.hour_imaging, "qa_exclude", True))
+
+
+def apply_qa_exclude(pl, band: int, bad_ts: set, stamps, rec: Dict) -> set:
+    """hour_imaging.qa_exclude=false: the V-QA-rejected snapshots stay in the hour products (the
+    QA files are already written).  Returns the timestamps to leave out."""
+    if backlog_keys(pl, band):
+        rec["qa"]["rejected_by_v_qa"] = len([s for s in stamps if lst.timestamp(s) in bad_ts])
+    return bad_ts if getattr(pl.hour_imaging, "qa_exclude", True) else set()
+
+
+def merge_solutions(cfg: Config, band: int, group: str, stems, rec: Dict) -> List[str]:
+    """peel.save_solutions: the band-hour's per-snapshot NPZs (of `stems`) ->
+    <band dir>/peeling_solutions/<band>MHz_<date>_<LST>_<pass>.npz.  A failure is logged (the
+    parts stay for a rerun), never fails the hour."""
+    pl = cfg.pipeline
+    if not getattr(pl.peel_for_band(band), "solution_passes", None):
+        return []
+    from .stages import peel_solutions
+    t0 = time.perf_counter()
+    files: List[str] = []
+    try:
+        files = [str(f) for f in peel_solutions.merge_band_hour(
+            _band_dir(cfg, band, int(group.rstrip("h"))), stems, f"{band}MHz_{pl.date}_{group}")]
+    except Exception as e:
+        log.error("peeling solutions %sMHz %s not merged: %s", band, group, e)
+        rec["peel_solutions_error"] = str(e)
+    rec.setdefault("timing_s", {})["peel_solutions"] = time.perf_counter() - t0
+    rec["peel_solutions"] = files
+    return files
+
+
 def write_provenance(cfg: Config, band: int, group: str, gpu: Optional[int], rec: Dict,
                      v3: Optional[Dict] = None) -> Dict:
     """Step 5: provenance.json of the band directory and QA/<band>MHz-hour-timing.json."""
@@ -238,6 +277,23 @@ def write_provenance(cfg: Config, band: int, group: str, gpu: Optional[int], rec
         "software": software_versions(cfg),
         "sun_cut": pl.sun_cut, "n_snapshots_clean": len(snaps), "hour": rec,
     }
+    if backlog_keys(pl, band):
+        from .config import PROTECTED_SOURCES, model_source_names
+        peel = pl.peel_for_band(band)
+        bad = pl.cal.badants_for(band, group) if getattr(pl.cal, "badants", None) is not None else None
+        prov["hour_imaging"]["v_qa_excludes_snapshots"] = h.qa_exclude
+        prov.update({
+            "data_root": pl.data_root, "chanbin": pl.chanbin, "description": pl.description,
+            "bad_antennas": bad if bad is not None else "MNC anthealth at run time (worker log 'bad antennas')",
+            "peeling_solutions": rec.get("peel_solutions", [])})
+        if getattr(peel, "solution_passes", None):
+            from .stages import peel_solutions
+            sols = [Path(f) for f in rec.get("peel_solutions", []) if Path(f).exists()]
+            prov["peeled_sources"] = {
+                "sky_model": model_source_names(pl.cal.sources),
+                "rfi_model": model_source_names(pl.cal.rfi_sources) if peel.rfi else [],
+                "per_snapshot": peel_solutions.peel_summary(sols),   # selected / subtracted snapshots
+                "protected_never_peeled": list(PROTECTED_SOURCES)}
     if v3 is not None:
         prov["v3"] = v3
     (bdir / "provenance.json").write_text(json.dumps(prov, indent=1, default=str))
@@ -280,6 +336,7 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
     # 1. QA
     t0 = time.perf_counter()
     bad_ts, rec["qa"] = qa_step(qa_dir, band, read_stats(qa_dir, newest=v3_params(pl).active))
+    bad_ts = apply_qa_exclude(pl, band, bad_ts, stamps, rec)
     exclude = [i for i, s in enumerate(stamps) if lst.timestamp(s) in bad_ts]
     rec["qa"]["excluded_from_hour"] = len(exclude)
     rec["timing_s"] = {"qa": time.perf_counter() - t0}
@@ -360,6 +417,10 @@ def run_band(cfg: Config, band: int, group: str, gpu: Optional[int] = None) -> D
     # 4. movie
     if pl.movie.enabled:
         rec["timing_s"]["movie"] = movie_step(cfg, band, group, bdir, rec)[1]
+
+    # peeling solutions (peel.save_solutions) of the snapshots this job imaged
+    if stamps:
+        merge_solutions(cfg, band, group, stamps, rec)
 
     # 5. provenance, kept MSes
     rec["timing_s"]["total"] = time.perf_counter() - t_all
