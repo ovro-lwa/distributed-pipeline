@@ -20,6 +20,8 @@ from ..config import ImagingGeom, ImagingParams
 
 log = logging.getLogger("gsi.gpu_image")
 _PREFIX = "GSI_SNAP "
+# GPU allocation failures worth one retry (the GPU is shared with the zest daemon)
+_GPU_ERRORS = ("OutOfMemory", "non-uniform points", "cudaErrorMemoryAllocation")
 
 
 def _timeout(env: Mapping[str, str], default: Optional[float]) -> Optional[float]:
@@ -92,9 +94,17 @@ class SnapshotDaemon:
         """Image one MS; return [I image, V image] like stages.image.image."""
         r = self._request_pipelined(ms, out_prefix, geom, p) if self.pipelined else \
             self._request(ms, out_prefix, geom, p)
-        if r.get("status") == "error" and "OutOfMemory" in r.get("error", "") and retry:
-            # the GPU is shared with the zest daemon, whose pool may peak at the same moment
-            log.warning("GPU snapshot imaging of %s ran out of memory; retrying once", ms)
+        err = r.get("error", "") if r.get("status") == "error" else ""
+        if retry and any(s in err for s in _GPU_ERRORS):
+            # the GPU is shared with the zest daemon, whose pool may peak at the same moment.  After
+            # a failed cuFINUFFT allocation the process kept failing every snapshot (2024-12-19
+            # 82 MHz: 344 of 358), so the one-at-a-time client retries in a fresh process
+            # (feature/gsi-streaming 8646127); the pipelined one retries in the same process.
+            restart = not self.pipelined
+            log.warning("GPU snapshot imaging of %s failed (%s); %sretrying once", ms, err[:80],
+                        "restarting the imager, " if restart else "")
+            if restart:
+                self._restart(r.get("_proc"))
             time.sleep(2.0)
             return self.image(ms, out_prefix, geom, p, timings, retry=False)
         if r.get("status") != "ok":
@@ -135,7 +145,23 @@ class SnapshotDaemon:
             finally:
                 if timer is not None:
                     timer.cancel()
+        if r.get("status") == "error":
+            r = dict(r, _proc=proc)        # which daemon failed (image() may restart it)
         return r
+
+    def _restart(self, proc) -> None:
+        """Close daemon `proc` if it is still the current one (under the lock: never one another
+        request is using); the next request starts a new daemon."""
+        with self._lock:
+            if proc is None or self._p is not proc:
+                return
+            self._p = None
+        try:
+            if proc.stdin:
+                proc.stdin.close()
+            proc.wait(timeout=60)
+        except Exception:
+            self._kill(proc)
 
     # -- GSI_SNAP_PIPELINE=1 ---------------------------------------------------------------------
 
