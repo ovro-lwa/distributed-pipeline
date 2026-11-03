@@ -63,6 +63,11 @@ Defaults keep the original v1 behaviour; the production (v2) config sets the val
 | `keep_ms_root`, `keep_ms_local` | off | keep the peeled MSes (Lustre, or node-local with fallback) for the hour images |
 | `hour_imaging.*` | – | `ttcalx-image hour` products (orca names), QA, `delete_kept_ms` |
 | `stream_hour_images`, `wideband_per_hour` | false | start each band-hour's hour job as soon as its snapshots are done; wideband summary per LST hour |
+| `chanbin` | 4 | `1`: inputs already averaged (night-time `*_averaged.ms`), no averaging; needs `do_aoflag: false` |
+| `cal.badants` | live anthealth | fixed bad-antenna list: CSV, `{band: CSV}` or `{"<LST>h/<band>": CSV}` (re-runs) |
+| `peel.save_solutions` | off | `sky`, `sky,rfi`: save the final gains; one NPZ per band-hour and pass in `<band dir>/peeling_solutions/` |
+| `hour_imaging.qa_exclude` | true | `false`: keep the V-QA-rejected snapshots in the hour products (QA files still written) |
+| `description` | – | free text for `provenance.json` |
 
 The zest daemon logs every solve decision and `ZEST_TIMING read=… peel=… write=…` per snapshot.
 `uvw.fix_uvw(ms, dry_run=True)` reports how far an MS's UVW are from J2000.
@@ -95,6 +100,17 @@ previous night's (falling back to the backup), runs as the data arrive and write
 report. `run_daily_cal_lst.py` runs the daily calibration; `run_daily_allsubbands.py` and
 `run_cosmology_backfill.py` are the older date-based launchers. All share one cluster lock.
 Deployment: `deploy/README-deploy.md`; scheduler design: `docs/DESIGN.md`.
+
+## Backlog re-runs (night-time averaged data)
+
+`scripts/run_backlog.py` re-processes old nights from `/lustre/pipeline/night-time/averaged`
+(`chanbin: 1`), one or more LST hours per `gsi run`, with exopipe's bandpass and per band-hour
+bad-antenna lists (`--badants-dir`), between nightly runs (`--stop-before-nightly`, `--loop`
+waits). Done hours go to `<output_root>/_state/backlog_<run_label>.json`; an hour whose run
+skipped jobs is not marked done. It works with the v2 and the v3 config. A sky or RFI model with
+a Scaife & Heald calibrator (3C 48, 147, 196, 286, 295, 380, by name or within 1°) is refused at
+config load. With any backlog option set, `provenance.json` also records `description`,
+`data_root`, `chanbin`, `bad_antennas`, `peeling_solutions` and `peeled_sources`.
 
 ## v3: in-memory band-hour (opt-in)
 
