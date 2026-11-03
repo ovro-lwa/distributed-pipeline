@@ -146,6 +146,12 @@ def calibrate(date: str, role: str, t0: datetime, why: str, a) -> dict:
         if utcnow() > deadline and any(sel.values()):
             log(f"{date} {role}: deadline passed, using what is there")
             break
+        if utcnow() > deadline + timedelta(hours=a.max_wait_hours):
+            # no files at all (2026-11-01: no data that night) used to block every later date
+            log(f"{date} {role}: no data {2 * a.max_wait_hours:g} h after {t0:%H:%M} UTC, giving up")
+            rec["status"] = "no-data"
+            state_path.write_text(json.dumps(rec, indent=1))
+            return rec
         time.sleep(a.poll_seconds)
     sel = {b: v for b, v in sel.items() if v}
     dest = Path(a.fast_base) / date / t0.strftime("%H%M")
