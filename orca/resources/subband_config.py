@@ -280,27 +280,68 @@ IMAGING_STEPS = [
 ]
 
 # Spectral-line (RRL) Stokes-I cubes, produced with ``--cube``.
-# ``-channels-out`` is set at runtime to the number of channels in the
-# concat MS (one output plane per input channel; 48 for the 4x-averaged
-# archive), and ``-niter`` is scaled to NITER_REF / sqrt(nchan) for a
-# moderate per-channel clean.  Both values below are placeholders that get
-# patched.  Output goes to I/cube/.
+# Steps are grouped into presets selected with ``--cube_preset``.
+# ``-channels-out`` is always set at runtime to the number of channels in
+# the concat MS (one output plane per input channel).  Unless a step sets
+# ``fixed_args``, ``-size``/``-scale`` are patched to the subband's pixel
+# grid and ``-niter`` is scaled to NITER_REF / sqrt(nchan) for a moderate
+# per-channel clean.  A step's ``flag_antennas`` (MS antenna indices) are
+# flagged in the concat MS before it is imaged; the flags are permanent,
+# so they also apply to any later step and to an archived concat MS.
+# Output goes to I/cube/.
 CUBE_NITER_REF = 500000
 
-CUBE_IMAGING_STEPS = [
-    {
-        'pol': 'I', 'category': 'cube', 'suffix': 'I-Deep-Taper-Robust-0-cube',
-        'args': [
-            '-channels-out', '192',
-            '-log-time', '-pol', 'I', '-multiscale', '-multiscale-scale-bias', '0.8',
-            '-niter', '500000', '-mgain', '0.95', '-horizon-mask', '10deg',
-            '-mem', '50', '-auto-threshold', '0.5', '-auto-mask', '3', '-local-rms',
-            '-size', '4096', '4096', '-scale', '0.03125',
-            '-taper-inner-tukey', '30', '-weight', 'briggs', '0',
-            '-no-update-model-required',
-        ],
-    },
+# Outrigger antennas (MS antenna row indices, not LWA numbers): every
+# antenna more than ~130 m from the array centre.  Flagging them keeps the
+# 238-antenna core, which is sensitive to large-scale (> 2 deg) emission.
+OUTRIGGER_ANTENNAS = [
+    186, 283, 315, 33, 347, 32, 35, 1, 34, 346, 123, 37, 349, 36, 0, 3, 2, 5,
+    39, 4, 38, 7, 91, 90, 6, 9, 8, 220, 41, 11, 10, 40, 43, 13, 93, 223, 42,
+    189, 285, 45, 44, 284, 188, 47, 46, 314, 49, 191, 348, 48, 92, 51, 351,
+    50, 53, 12, 15, 14, 17, 16, 19, 18, 21, 350, 155, 52, 55, 190, 54, 20,
+    251, 95, 122, 154, 250, 23, 157, 287, 22, 125, 25, 253, 156, 57, 56, 59,
+    24, 27, 26, 29, 317, 58, 61, 252, 316, 255, 124, 282, 319, 60, 28, 31, 63,
+    222, 318, 286, 159, 254, 62, 158, 30, 94, 127, 126,
 ]
+
+CUBE_PRESETS = {
+    # Original RRL cube: full array, Briggs 0 with inner Tukey taper.
+    # The taper suppresses structure larger than ~2 deg.
+    'robust0_tukey': [
+        {
+            'pol': 'I', 'category': 'cube', 'suffix': 'I-Deep-Taper-Robust-0-cube',
+            'args': [
+                '-channels-out', '192',
+                '-log-time', '-pol', 'I', '-multiscale', '-multiscale-scale-bias', '0.8',
+                '-niter', '500000', '-mgain', '0.95', '-horizon-mask', '10deg',
+                '-mem', '50', '-auto-threshold', '0.5', '-auto-mask', '3', '-local-rms',
+                '-size', '4096', '4096', '-scale', '0.03125',
+                '-taper-inner-tukey', '30', '-weight', 'briggs', '0',
+                '-no-update-model-required',
+            ],
+        },
+    ],
+    # Large-scale structure: outriggers flagged, natural weighting, 2 deg
+    # Gaussian taper, 3 deg restoring beam, joined-channel deconvolution.
+    # Grid and niter are used as given (fixed_args).
+    'natural_core': [
+        {
+            'pol': 'I', 'category': 'cube', 'suffix': 'I-Deep-Taper-Natural-cube',
+            'fixed_args': True,
+            'flag_antennas': OUTRIGGER_ANTENNAS,
+            'args': [
+                '-channels-out', '192', '-join-channels',
+                '-log-time', '-pol', 'I', '-multiscale', '-multiscale-scale-bias', '0.8',
+                '-niter', '500000', '-mgain', '0.95', '-horizon-mask', '10deg',
+                '-mem', '25', '-auto-threshold', '0.5', '-auto-mask', '3', '-local-rms',
+                '-size', '512', '512', '-scale', '0.25',
+                '-weight', 'natural', '-taper-gaussian', '2deg', '-beam-size', '3.0deg',
+                '-no-update-model-required',
+            ],
+        },
+    ],
+}
+DEFAULT_CUBE_PRESET = 'robust0_tukey'
 
 
 # ---------------------------------------------------------------------------

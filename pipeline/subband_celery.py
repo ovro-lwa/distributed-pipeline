@@ -49,6 +49,8 @@ from orca.utils.sun_cut import (
 from orca.resources.subband_config import (
     NODE_SUBBAND_MAP,
     DYNAMIC_NODE_POOL,
+    CUBE_PRESETS,
+    DEFAULT_CUBE_PRESET,
     get_queue_for_subband,
 )
 
@@ -229,9 +231,9 @@ def main():
                              'QA, and science. Only produce clean Stokes-I snapshots '
                              'and I movies (Raw + Filtered). For reprocessing old dates.')
     parser.add_argument('--cube', action='store_true',
-                        help='Also produce Stokes-I spectral cubes (CUBE_IMAGING_STEPS: '
-                             'one plane per MS channel, niter = 500000/sqrt(nchan)) in '
-                             'I/cube/, PB-corrected and stacked into FITS cubes.')
+                        help='Also produce Stokes-I spectral cubes (CUBE_PRESETS[--cube_preset], '
+                             'one plane per MS channel) in I/cube/, PB-corrected and '
+                             'stacked into FITS cubes.')
     parser.add_argument('--cube_only', action='store_true',
                         help='Implies --cube. Calibration, peeling, '
                              'AOFlagger, pilot V snapshot QA flagging and --hot_baselines '
@@ -241,6 +243,12 @@ def main():
                         help='Also write ionospherically dewarped cube copies (*_dewarped); '
                              'screen from the cube MFS image vs VLSSr, scaled by nu^-2 per '
                              'channel. Originals are always kept.')
+    parser.add_argument('--cube_preset', default=DEFAULT_CUBE_PRESET,
+                        choices=sorted(CUBE_PRESETS),
+                        help='Cube imaging steps (CUBE_PRESETS): robust0_tukey = full array, '
+                             'Briggs 0, inner Tukey taper (default); natural_core = outriggers '
+                             'flagged, natural weighting, 2 deg Gaussian taper, 512 px x 0.25 deg, '
+                             'joined channels.')
     parser.add_argument('--no_sun_cut', action='store_true',
                         help='Disable the Sun-altitude frame cut (default: refuse frames '
                              'with the Sun above --sun_morning_max while rising and above '
@@ -384,6 +392,7 @@ def main():
                     'cube': args.cube,
                     'cube_only': args.cube_only,
                     'cube_dewarp': args.cube_dewarp,
+                    'cube_preset': args.cube_preset,
                 })
 
         if not all_work_units:
@@ -542,6 +551,7 @@ def main():
             cube=args.cube,
             cube_only=args.cube_only,
             cube_dewarp=args.cube_dewarp,
+            cube_preset=args.cube_preset,
         )
         results.append({
             'subband': subband,

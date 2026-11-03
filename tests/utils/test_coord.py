@@ -21,9 +21,15 @@ HAS_LEGACY_DATA = path.isfile(LEGACY_FITS)
 
 
 def test_verify_coordinates():
-    assert coordutils.CAS_A.separation(SkyCoord.from_name('Cas A')) < 1 * u.arcmin
-    assert coordutils.CYG_A.separation(SkyCoord.from_name('Cygnus A')) < 1 * u.arcmin
-    assert coordutils.TAU_A.separation(SkyCoord.from_name('Crab Pulsar ')) < 1 * u.arcmin
+    # Sesame (CDS / CfA) name lookup over the network; skip rather than fail when it is unreachable
+    from astropy.coordinates.name_resolve import NameResolveError
+    try:
+        cas, cyg, crab = (SkyCoord.from_name(n) for n in ('Cas A', 'Cygnus A', 'Crab Pulsar '))
+    except NameResolveError as e:
+        pytest.skip(f'Sesame name resolver unreachable: {e}')
+    assert coordutils.CAS_A.separation(cas) < 1 * u.arcmin
+    assert coordutils.CYG_A.separation(cyg) < 1 * u.arcmin
+    assert coordutils.TAU_A.separation(crab) < 1 * u.arcmin
 
 
 @mark.parametrize('t, zenith_coord', [
