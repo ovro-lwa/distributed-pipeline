@@ -18,7 +18,7 @@ from typing import List, Optional, Tuple
 
 from . import lst
 from .config import Config, v3_params
-from .stages import (average, calibrate, compress, fastcal, flag, image, movie, quality,
+from .stages import (average, calibrate, compress, fastcal, flag, image, movie, peel_solutions, quality,
                      stage_ms, uvw)
 from .stages.peel import ZestDaemon
 
@@ -702,6 +702,8 @@ class Worker:
         log.info("timing %sMHz batch%d stamp=%s phase=image elapsed=%.2f s",
                  self.band, self.batch, stamp, time.perf_counter() - t0)
         self._post_image(stamp, fits_files)
+        if getattr(self.cfg.pipeline.peel_for_band(self.band), "solution_passes", None):
+            self._save_solutions(stamp, avg, peel_solutions.ms_axes(avg))
         archive = v3_params(self.cfg.pipeline).archive != "none"
         if archive:            # the snapshot is archived: the hour job must find its record
             self._archive_expected(stamp)
@@ -715,6 +717,27 @@ class Worker:
         if archive:            # after the FITS and keep_ms: the archive's set is v2's kept set
             self._archive_record(stamp, kept or avg, kept)
         shutil.rmtree(self.work / stamp, ignore_errors=True)
+
+    def _save_solutions(self, stamp: str, target: Path, axes) -> List[Path]:
+        """peel.save_solutions: the daemon's <target>.peelsol (target = the peeled MS or v3 slot) ->
+        <band dir>/peeling_solutions/.snapshots/<stamp>/<pass>.npz (merged by the hour step)."""
+        t0 = time.perf_counter()
+        files = peel_solutions.convert(peel_solutions.sol_dir(target),
+                                       peel_solutions.parts_dir(self.band_dir(stamp)) / self._kept_stem(stamp),
+                                       self._solution_meta(), axes, ms_name=f"{stamp}_avg.ms")
+        log.info("timing %sMHz batch%d stamp=%s phase=peel_solutions elapsed=%.2f s files=%d",
+                 self.band, self.batch, stamp, time.perf_counter() - t0, len(files))
+        if not files:
+            raise RuntimeError(f"peel.save_solutions: the daemon wrote no solutions for {stamp}")
+        return files
+
+    def _solution_meta(self) -> dict:
+        pl = self.cfg.pipeline
+        peel = pl.peel_for_band(self.band)
+        return dict(band=f"{self.band}MHz", date=pl.date, run_label=pl.run_label,
+                    sky_model=pl.cal.sources, rfi_model=pl.cal.rfi_sources,
+                    bp_table=pl.cal.bp, xy_table=pl.cal.xy,
+                    peel=peel.as_dict() if hasattr(peel, "as_dict") else vars(peel))
 
     def _post_image(self, stamp: str, fits_files: List[Path]) -> None:
         """Frame, pilot QA row, fpack and archive move of one snapshot's [I, V] FITS (v2 and v3)."""
@@ -920,7 +943,16 @@ class Worker:
         """Peel `avg` in place: v2 through the MS, or (v3.peel_io=shm) through a /dev/shm slot."""
         v3 = getattr(self.cfg.pipeline, "v3", None)
         if v3 is None or v3.peel_io != "shm":
-            daemon.zest(avg)
+            try:
+                daemon.zest(avg)
+            except RuntimeError as e:
+                # the GPU is shared with the snapshot imager, whose peak may coincide; a failed
+                # zest leaves the MS unchanged (it is written at the end): retry once
+                if "out of gpu memory" not in str(e).lower():
+                    raise
+                log.warning("zest %s ran out of GPU memory; retrying once", stamp)
+                time.sleep(5.0)
+                daemon.zest(avg)
             return
         from .v3 import peel_shm, slots
         steps: dict = {}

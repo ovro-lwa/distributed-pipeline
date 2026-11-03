@@ -214,8 +214,14 @@ class PeelParams:
     # TTCalX 0.3.0 GPU kernels (tiled normal equations, device RFI fringes, fused corrupt-subtract;
     # TTCalX.fast_kernels!): off = 748884a's kernels (bitwise), on = equal to rounding.  v3 prodlike: true
     fast_kernels: bool = False
+    # comma list of passes ("sky", "sky,rfi") whose final gains the daemon writes per snapshot
+    # (stages/peel_solutions.py), merged per band-hour into <band dir>/peeling_solutions/.
+    # Not part of NEW_DEFAULTS: empty = no ZEST_SAVE_SOLUTIONS and no provenance key, either engine.
+    save_solutions: str = ""
 
     def __post_init__(self) -> None:
+        if any(p not in ("sky", "rfi") for p in self.solution_passes):
+            raise ConfigError(f"peel.save_solutions must list sky and/or rfi, got {self.save_solutions!r}")
         choices = {"solver": ("damped", "rk4"), "model": ("kernels", "exact"),
                    "uvw": ("ms", "geometric"), "rfi_mode": ("after", "joint"),
                    "device": ("gpu", "cpu"), "engine": ("daemon", "sky_rfi"),
@@ -248,7 +254,12 @@ class PeelParams:
                     "workspace": False, "fast_kernels": False}
     # with the new fields in use: these are still never sent at their defaults
     _UNSET = {"smooth_below_mhz": 0.0, "smooth_exempt_flux": 0.0, "rfi_smooth_flux": None,
-              "smooth_exempt_below_el_deg": 0.0, "workspace": False, "fast_kernels": False}
+              "smooth_exempt_below_el_deg": 0.0, "workspace": False, "fast_kernels": False,
+              "save_solutions": ""}
+
+    @property
+    def solution_passes(self) -> List[str]:
+        return [p.strip() for p in self.save_solutions.split(",") if p.strip()]
 
     def new_fields_default(self) -> bool:
         return all(getattr(self, k) == v for k, v in self.NEW_DEFAULTS.items())
@@ -259,6 +270,8 @@ class PeelParams:
         if self.new_fields_default():
             for k in self.NEW_DEFAULTS:
                 d.pop(k, None)
+        if not self.save_solutions:
+            d.pop("save_solutions", None)
         return d
 
     def daemon_env(self, rfi_sources: Optional[str]) -> Dict[str, str]:
@@ -333,6 +346,9 @@ class HourImagingParams:
     env: Dict[str, str] = field(default_factory=dict)
     timeout_seconds: Optional[int] = None
     delete_kept_ms: bool = False        # remove a band-hour's kept MSes after it imaged successfully
+    # false: the snapshots the pilot Stokes V QA rejects stay in the hour products (the QA table
+    # is still written); true (default) leaves them out
+    qa_exclude: bool = True
 
 
 @dataclass(frozen=True)
@@ -516,6 +532,55 @@ class RuntimeEnv:
 
 FIX_UVW_MODES = ("off", "centroid", "time")
 
+# Scaife & Heald (2012) flux-scale calibrators: never peeled.  A sky or RFI model with a source
+# of that name, or within PROTECTED_RADIUS_DEG of one, is refused when the config loads.
+PROTECTED_SOURCES = {"3C 48": ("01h37m41.3s", "+33d09m35s"), "3C 147": ("05h42m36.1s", "+49d51m07s"),
+                     "3C 196": ("08h13m36.0s", "+48d13m03s"), "3C 286": ("13h31m08.3s", "+30d30m33s"),
+                     "3C 295": ("14h11m20.5s", "+52d12m10s"), "3C 380": ("18h29m31.8s", "+48d44m46s")}
+PROTECTED_RADIUS_DEG = 1.0
+
+
+def _model_entries(path: Optional[str]) -> List[dict]:
+    import json
+    if not path or not Path(path).is_file():
+        return []
+    d = json.loads(Path(path).read_text())
+    return d if isinstance(d, list) else d.get("sources", [])
+
+
+def model_source_names(path: Optional[str]) -> List[str]:
+    """Source names of a TTCal JSON model (empty if the file is missing)."""
+    return [str(s.get("name", "?")) for s in _model_entries(path)]
+
+
+def check_protected(path: Optional[str]) -> None:
+    """ConfigError if the model would peel a Scaife & Heald calibrator (by name or position)."""
+    entries = _model_entries(path)
+    if not entries:
+        return
+    norm = lambda n: str(n).replace(" ", "").upper()      # noqa: E731
+    names = {norm(k) for k in PROTECTED_SOURCES}
+    coords = []
+    for s in entries:
+        if norm(s.get("name", "")) in names:
+            raise ConfigError(f"{path}: peels {s['name']}, a Scaife & Heald calibrator")
+        for c in [s] + list(s.get("components", []) or []):
+            if c.get("ra") and c.get("dec"):
+                coords.append((s.get("name", "?"), c["ra"], c["dec"]))
+    if not coords:
+        return
+    from astropy.coordinates import SkyCoord
+    prot = SkyCoord([v[0] for v in PROTECTED_SOURCES.values()], [v[1] for v in PROTECTED_SOURCES.values()])
+    for name, ra, dec in coords:
+        try:
+            c = SkyCoord(ra, dec)
+        except Exception:
+            continue                       # TTCalX-only formats; the name check still applies
+        sep = c.separation(prot).deg
+        if sep.min() < PROTECTED_RADIUS_DEG:
+            raise ConfigError(f"{path}: {name} is {sep.min():.2f} deg from "
+                              f"{list(PROTECTED_SOURCES)[int(sep.argmin())]} (Scaife & Heald calibrator)")
+
 
 def _fix_uvw_mode(v) -> str:
     # YAML reads a bare `off` as False.
@@ -576,6 +641,7 @@ class PipelineConfig:
     # (stages/fastcal.py), without writing CORRECTED_DATA.
     prep: str = "casa"
     max_files_per_hour: Optional[int] = None    # testing: first N snapshots of each hour
+    description: str = ""               # free text for provenance.json (what this run is); "" = no key
     v3: V3Params = field(default_factory=V3Params)
 
     def __post_init__(self) -> None:
@@ -583,6 +649,9 @@ class PipelineConfig:
             raise ConfigError("chanbin must be >= 1 (1 = inputs already averaged)")
         if self.chanbin == 1 and self.do_aoflag:
             raise ConfigError("chanbin 1 (no averaging) needs do_aoflag false")
+        peels = [self.peel, *(self.peel_overrides or {}).values()]
+        if any(getattr(p, "solution_passes", None) for p in peels) and self.layout != "lst":
+            raise ConfigError("peel.save_solutions needs layout=lst (merged per band-hour by the hour step)")
         if self.fix_uvw not in FIX_UVW_MODES:
             raise ConfigError(f"fix_uvw must be one of {FIX_UVW_MODES}, got {self.fix_uvw!r}")
         if self.layout not in ("utc", "lst"):
@@ -701,6 +770,7 @@ def load_pipeline(path: Union[str, Path]) -> PipelineConfig:
         prep=str(d.get("prep", "casa")),
         max_files_per_hour=(int(d["max_files_per_hour"])
                             if d.get("max_files_per_hour") else None),
+        description=str(d.get("description") or ""),
         v3=V3Params(**(d.get("v3") or {})),
     )
 
@@ -717,4 +787,6 @@ class Config:
         cluster = load_cluster(d / "cluster.yaml")
         pipeline = load_pipeline(d / "pipeline.yaml")
         _validate_lustre_write_roots(cluster, pipeline)
+        check_protected(pipeline.cal.sources)
+        check_protected(pipeline.cal.rfi_sources)
         return Config(cluster, load_subbands(d / "subbands.yaml"), pipeline)
