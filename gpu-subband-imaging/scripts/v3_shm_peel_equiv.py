@@ -16,22 +16,18 @@ Subcommands (pipeline python, PYTHONPATH=<code>/src):
 Julia / TTCalX come from the environment as in workers/run_worker.sh: JULIA_BIN (dir),
 TTCALX_DIR, JULIA_DEPOT_PATH, CUDA_VISIBLE_DEVICES, JULIA_NUM_THREADS (device=cpu).
 
-Recipe (as run on lwacalim10 on CPU, 2026-11-01; for the GPU drop --device cpu and set
-CUDA_VISIBLE_DEVICES=<gpu>):
+Recipe (CPU; for the GPU drop --device cpu and set CUDA_VISIBLE_DEVICES=<gpu>):
 
-  source /opt/miniconda3/etc/profile.d/conda.sh
-  conda activate /opt/devel/pipeline/envs/py38_orca_nkosogor
-  export PYTHONPATH=$CODE/src CASARCFILES=/opt/devel/pipeline/gsi-v2/casarc \
+  conda activate <pipeline env>
+  export PYTHONPATH=$CODE/src CASARCFILES=<casarc> \
          PYTHONDONTWRITEBYTECODE=1 JULIA_CUDA_USE_COMPAT=false \
-         JULIA_BIN=/opt/devel/nkosogor/nkosogor/julia-1.10.4/bin \
-         TTCALX_DIR=/lustre/nkosogor/peel_exp/ttcalx_sponge3 \
-         JULIA_DEPOT_PATH=$W/depot:/opt/devel/nkosogor/nkosogor/julia_depot
-  E=/lustre/nkosogor/peel_exp/e2e
+         JULIA_BIN=<julia>/bin TTCALX_DIR=<TTCalX tree> \
+         JULIA_DEPOT_PATH=$W/depot:<shared depot>
   python v3_shm_peel_equiv.py prep --out $W/ms/23 --work $W/work --bp <B> --xy <Xf> \
-      --badants <csv> /lustre/nkosogor/peel_exp/v3_inputs/23MHz/<first 6>.ms.tar
+      --badants <csv> <tar dir>/23MHz/<first 6>.ms.tar
   for m in ms ms shm; do                  # MS twice: the run-to-run floor
     python v3_shm_peel_equiv.py peel --mode $m --inp $W/ms/23 --out $W/runs/$m.$RANDOM/23 \
-        --cfg $E/cfg_new_23/pipeline.yaml --daemon-jl $CODE/workers/zest_daemon.jl
+        --cfg <config dir>/pipeline.yaml --daemon-jl $CODE/workers/zest_daemon.jl
   done
   python v3_shm_peel_equiv.py compare $W/runs/<ms run>/23 $W/runs/<shm run>/23
 """

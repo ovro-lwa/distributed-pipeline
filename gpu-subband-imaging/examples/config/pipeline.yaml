@@ -1,5 +1,6 @@
-# Template for scripts/run_daily_allsubbands.py. The launcher updates date,
-# output_root, and cal.bp; edit the remaining paths and parameters for your site.
+# Template for scripts/run_daily_allsubbands.py (date-based, v1 settings). The launcher
+# updates date, output_root, and cal.bp; edit the remaining paths for your site.
+# The v2 production (LST nightly) settings are listed at the end of this file.
 
 date: "2026-01-01"
 hours: ["05", "06", "07", "08", "09", "10"]
@@ -37,8 +38,10 @@ peel:
   quality_sample_rows: 1024
   min_visibility_amplitude: 1.0e-12
   min_visibility_nonzero_fraction: 0.01
-  # CPU-TTCal-matched zest (README): solver: rk4, model: exact, uvw: geometric,
-  # flag_model: true, resubtract: true, fast_io: true, rfi: true, ...
+  # v2 production (CPU-TTCal-matched sky + RFI zest): maxiter: 5, tolerance: 1.0e-4,
+  # minuvw: 5.0, min_source_elevation_deg: 0.0, require_convergence: false, solver: rk4,
+  # model: exact, uvw: geometric, flag_model: true, resubtract: true, fast_io: true,
+  # rfi: true, flag_zero: true, residual_guard: true
 
 imaging:
   weight: briggs
@@ -63,3 +66,14 @@ env:
   julia_bin: /opt/julia/bin
   ttcalx: /opt/TTCalX
   shared_depot: /opt/julia-depot
+
+# v2 production (scripts/run_nightly_lst.py template) also sets, besides the peel: values above:
+#   layout: lst                      run_label / lst_hours / date: filled in by run_nightly_lst.py
+#   snapshot_phase_centre: lst       bands: [18, 23, ..., 82]   batch_size: 360
+#   batch_timeout_seconds: 7200      prep: numpy
+#   keep_ms_root: <output_root>/_kept_ms     stream_hour_images: true   wideband_per_hour: true
+#   calcache_cleanup: none           nightly_wait_all: true (read by run_nightly_lst.py)
+#   imaging: {imager: ttcalx, mode: clean, abs_mem: 20, retries: 1}
+#   hour_imaging: {ttcalx_image: <imager venv>/bin/ttcalx-image, qa: none,
+#                  timeout_seconds: 7200, delete_kept_ms: true}
+# v3 (opt-in): the peel: and v3: lines in README.md ("v3: in-memory band-hour").

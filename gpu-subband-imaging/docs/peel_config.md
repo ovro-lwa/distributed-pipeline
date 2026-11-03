@@ -1,10 +1,10 @@
 # Peel configuration (sky_rfi engine): recommended settings and the ablation behind them
 
-> **Requirement:** `smooth_exempt_below_el_deg` needs TTCalX `zest_sky_rfi!(...; smooth_exempt_names)`.
-> That is TTCalX branch `exp/sponge-exempt-apparent` (ef89a9a + 55fb775, local, on top of `feature/sponge-restore-fast-zest`),
-> merged into `exp/ttcalx-v3`.
-> With `engine: sky_rfi`, `smooth_flux > 0` and `smooth_exempt_below_el_deg > 0`, the daemon refuses to start with
-> `CONFIG_ERROR` on an older TTCalX.
+> **Status (2026-11-02).**
+> - In `main`: every switch here (`engine: sky_rfi`, `precision`, `peeliter`, `warm_start`, `smooth_*`, `restore*`) in `PeelParams` and `workers/zest_daemon.jl`; all off by default (= v2).
+> - Not in production: v2 uses the daemon engine, and the validated v3 setup (README) uses `sky_rfi` + `mixed` with no smoothing and no restore. The "Recommended" section below is this study's result, not the production config.
+> - The rest is the CPU study record of 2026-11-01 (ablation, rule choice, held-out and Jupiter checks).
+> - `smooth_exempt_below_el_deg` needs TTCalX v0.3.0 (`zest_sky_rfi!(...; smooth_exempt_names)`); on an older TTCalX the daemon exits with `CONFIG_ERROR`.
 
 > **How far to trust the 30° rule:**
 > - The threshold was chosen on 36 snapshots and checked on 26 held-out snapshots (new LST hours, a new night-hour, a new band).
@@ -19,7 +19,6 @@ This note is for the `peel:` section of `pipeline.yaml` with `engine: sky_rfi` (
   - the exemption-rule study: 36 snapshots;
   - the held-out check: 26 snapshots;
   - the Jupiter check: 2024-12-20 and 12-27 bursts.
-- Results are in `/lustre/nkosogor/peel_exp/ablate/`: `SUMMARY.txt`, `results/`, and the scripts in `scripts/`.
 
 ## Recommended `peel:` section
 
@@ -61,7 +60,7 @@ The gate is simpler. It is logged on every snapshot as `PEEL_SMOOTH_GATE centre_
 
 **The 65 MHz gate is interpolated:**
 - Measured: 55 MHz (smoothing helps faint sources) and 82 MHz (smoothing only hurts).
-- Not measured: 59, 64 and 69 MHz. They will be measured in the all-subband GPU test.
+- Not measured: 59, 64 and 69 MHz.
 
 **Strict alternative.** If Tau A must never be left in more than in production, use `smooth_flux: 0` everywhere, keeping mixed, peeliter 2, warm_start false and the restore.
 - At 82 MHz this is equal to production in every metric.
@@ -87,7 +86,7 @@ All four are sent to the daemon only when set, so the defaults leave the daemon 
 - In the 7-source model, catalog flux at about 25 MHz is: Cas A and Cyg A above 10 kJy, Vir A about 7 kJy, Tau A about 3.2 kJy, Hya A and Her A about 600 Jy, Per B (3C123) 400 Jy.
 - `smooth_exempt_flux: 500` therefore leaves only Per B and the RFI emitters band-tied. That rule is LST-dependent and is **not** recommended; it is kept as a switch.
 
-Checks, on CPU through the real daemon (lwacalim10):
+Checks, on CPU through the real daemon:
 - 82 MHz with `smooth_below_mhz: 65` is bitwise equal to `smooth_flux: 0` (DATA and FLAG, 2 snapshots).
 - The default settings give bitwise the same output as the previous daemon (82 MHz new config; 23 MHz production).
 - 23 MHz with `smooth_exempt_flux: 500` reproduces the ablation run E8 to 3e-8 Jy.
@@ -185,7 +184,6 @@ Production chains are hundreds of snapshots long, so leave warm start off.
 | **L20, L30, L35** | sources below 20 / 30 / 35° elevation exempt |
 
 - The sin(el)^1.6 is a fit to the OVRO-LWA Stokes I beam (`OVRO-LWA_MROsoil_updatedheight.h5`, via orca): exponent 1.6 at 20–25 MHz, 1.5 at 55 MHz, 1.2 at 84 MHz.
-- Results are in `/lustre/nkosogor/peel_exp/ablate/results/exempt/`.
 - [`peel_config_ratios.csv`](peel_config_ratios.csv) has the group medians for production / conservative / recommended (L30) / strict, per set, night, band and hour.
   - It covers all 35 groups: 20 tuning, 14 held-out, and 82 MHz from the option ablation.
   - Ratios are given signed and as |·|, at 10 and 60 λ, with `held_out` and `jupiter_detected` flags.
@@ -193,7 +191,7 @@ Production chains are hundreds of snapshots long, so leave warm start off.
 - [`peel_config_fig_bands.csv`](peel_config_fig_bands.csv) is the figure table: per band (18, 23, 27, 41, 55, 82 MHz), quantity and config, the median and 16–84% range over that band's groups.
   - Residuals are |·| at 60 λ (Tau A, Cas A, Hya A, 3C123). Retained sources are at 10 λ (3C134, 3C196, Per A, 3C48). Both are given over all groups and over non-Jupiter groups.
   - Jupiter V kept is over Jupiter-detected snapshots; blank-sky V and I relative to production are over non-Jupiter groups.
-  - Strict was run on every tuning and held-out snapshot (merged daemon exp/gsi-v3, TTCalX c78f0b5). The new production / conservative / L30 values reproduce the earlier table exactly.
+  - Strict was run on every tuning and held-out snapshot (gsi daemon 00871ad, TTCalX c78f0b5; both in `main` / v0.3.0). The new production / conservative / L30 values reproduce the earlier table exactly.
 
 **Jupiter-affected groups are excluded from the medians.** Jupiter is detected in 8 of the 20 groups:
 - 12-20 18/23/27 MHz 03h;
@@ -250,7 +248,7 @@ Catalog and apparent flux pick the bright, high sources instead (Tau A and Hya A
   - Daemon elevations: Tau A 68/57°, Cas A 21/16°, Hya A 30/37°, Vir A low.
 - 2024-12-27 08h (an unused night/hour) at 18, 23, 27, 55 and 41 MHz: Cas A 23°, Hya A 27°.
 - 41 MHz (an unused band) at 2024-12-20 and 12-27, 03/08/12h: Tau A 25–36°, Cyg A 28–33°.
-- There is no Jupiter detection in the held-out set. Results are in `/lustre/nkosogor/peel_exp/ablate/results/heldout/`.
+- There is no Jupiter detection in the held-out set.
 
 ### Results
 
@@ -298,7 +296,7 @@ Medians over the 14 held-out groups:
 
 ## Jupiter check (2024-12-20 / 12-27 burst snapshots)
 
-**Data:** the earlier sponge study's prepped snapshots (`/lustre/nkosogor/peel_exp/runs/big1220|big1227/prep`), with each night's restore JSON from the same directory. CPU, real daemon, single snapshots.
+**Data:** the earlier sponge study's prepped snapshots, with each night's restore JSON. CPU, real daemon, single snapshots.
 
 **Jupiter position:** the |V| peak within 1° of the JSON position, on the unpeeled data. It lies 3–43′ from the ephemeris.
 
@@ -332,7 +330,7 @@ There are 8 detections (|V| > 10 × the blank-sky V rms) in the tuning set: 12-2
 
 ### Strict vs L30 vs production on the 8 Jupiter detections
 
-The run uses the merged daemon (exp/gsi-v3 00871ad) with TTCalX exp/ttcalx-v3 c78f0b5. It reproduces the earlier L30 and production runs exactly (0 difference over 448 values each).
+The run uses gsi daemon 00871ad with TTCalX c78f0b5 (both in `main` / v0.3.0). It reproduces the earlier L30 and production runs exactly (0 difference over 448 values each).
 
 Medians, with ranges:
 

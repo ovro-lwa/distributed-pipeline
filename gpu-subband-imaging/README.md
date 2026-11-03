@@ -45,8 +45,8 @@ calibration, parameters, ledger summary) and a `provenance.json` per band-hour.
 
 ## Options (`pipeline.yaml`)
 
-Defaults keep the original v1 behaviour; the production (v2) config sets the values shown in
-`examples/config` and the nightly template.
+Defaults keep the original v1 behaviour; the v2 production values are listed at the end of
+`examples/config/pipeline.yaml`.
 
 | option | default | what it does |
 |---|---|---|

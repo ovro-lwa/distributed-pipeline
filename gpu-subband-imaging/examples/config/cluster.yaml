@@ -7,6 +7,8 @@ defaults:
   aoflagger_threads: 2
   free_core_budget: 6
   work_root: /fast/gsi
+  # also: archive_workers (default 1), zest_recycle_files (default 25, 0 = never);
+  # v2 production uses archive_workers: 2, zest_recycle_files: 0
 
 nodes:
   - {alias: gpu-node-01, gpus: [0, 1]}
