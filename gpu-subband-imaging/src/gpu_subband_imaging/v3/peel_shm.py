@@ -109,6 +109,12 @@ def peel_ms_via_slot(daemon, ms: PathLike, ring: "_slots.SlotRing",
             peeled = _slots.view_slot(slot, writable=False)
             write_peeled(ms, peeled)
             del peeled
+            sol = Path(f"{slot}.peelsol")       # peel.save_solutions: they belong to the MS
+            if sol.is_dir():
+                import shutil
+                dst = Path(f"{ms}.peelsol")
+                shutil.rmtree(dst, ignore_errors=True)
+                shutil.move(str(sol), str(dst))
         except BaseException:
             try:
                 daemon.reset_warm()

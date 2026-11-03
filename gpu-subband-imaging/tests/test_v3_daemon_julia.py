@@ -122,3 +122,47 @@ def test_daemon_rejects_negative_smoothing_switches(key):
                    zest_env={"ZEST_DEVICE": "cpu", "ZEST_MODEL": "exact", "ZEST_COLUMN": "DATA",
                              key: "-1", "JULIA_NUM_THREADS": "2"},
                    start_timeout=900)
+
+
+PROD_PEEL = {"ZEST_SOLVER": "rk4", "ZEST_MAXITER": "5", "ZEST_TOLERANCE": "0.0001", "ZEST_MINUVW": "0.0",
+             "ZEST_PEELITER": "2", "ZEST_MIN_SOURCE_ELEVATION_DEG": "-90", "ZEST_REQUIRE_CONVERGENCE": "false",
+             "ZEST_UVW": "geometric", "ZEST_FLAG_MODEL": "true", "ZEST_RESUBTRACT": "true", "ZEST_FAST_IO": "true",
+             "ZEST_FLAG_ZERO": "true", "ZEST_RESIDUAL_GUARD": "true"}
+
+
+@pytest.mark.parametrize("engine", ["daemon", "sky_rfi"])
+def test_save_solutions_both_engines(engine, tmp_path):
+    """peel.save_solutions with a real (CPU) peel of a synthetic slot: the daemon writes
+    <slot>.peelsol/sky.{bin,tsv}, every model source (elevation threshold -90) with its 0-based
+    index, the gains in the layout stages/peel_solutions.convert reads."""
+    import json
+    from gpu_subband_imaging.config import model_source_names
+    from gpu_subband_imaging.stages import peel_solutions
+    s = synthetic(seed=4)
+    slot = tmp_path / "gsi3_slot"
+    slots.write_slot(slot, s)
+    env = dict(os.environ, CUDA_VISIBLE_DEVICES="")
+    zenv = dict(PROD_PEEL, ZEST_DEVICE="cpu", ZEST_MODEL="exact", ZEST_COLUMN="DATA", JULIA_NUM_THREADS="2",
+                ZEST_ENGINE=engine, ZEST_SAVE_SOLUTIONS="sky,rfi")
+    d = ZestDaemon(_julia(), os.environ["TTCALX_DIR"], str(DAEMON_JL), SOURCES, env=env, zest_env=zenv,
+                   start_timeout=900)
+    try:
+        d.zest_slot(slot, timeout=600)
+    finally:
+        d.close()
+    sol = peel_solutions.sol_dir(slot)
+    assert sorted(p.name for p in sol.iterdir()) == ["sky.bin", "sky.tsv"]      # no RFI model: no rfi pass
+    files = peel_solutions.convert(sol, tmp_path / "out", {"engine": engine}, peel_solutions.slot_axes(slot),
+                                   ms_name="x_avg.ms")
+    names = model_source_names(SOURCES)
+    with np.load(files[0]) as z:
+        assert z["source_names"].tolist() == names
+        assert z["source_indices"].tolist() == list(range(len(names)))
+        assert z["gains"].shape == (len(names), 4, 9, 6, 1) and z["gains"].dtype == np.complex64
+        assert np.isfinite(z["gains"]).all() and (z["niters"] >= 1).all()
+        assert json.loads(str(z["metadata_json"]))["stage"] == "sky"
+        # an accepted source's gains moved off the identity start
+        acc = z["accepted"]
+        if acc.any():
+            g = z["gains"][acc]
+            assert not np.allclose(g[:, 0], 1) or not np.allclose(g[:, 1], 0)

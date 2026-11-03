@@ -625,6 +625,10 @@ class V3Batch:
             finally:
                 it.imaged.set()
             kept_tmp = kept_box[0] if kept_box else None
+            if getattr(self.pl.peel_for_band(self.band), "solution_passes", None):
+                # the slot's <slot>.peelsol (the daemon's) -> the band dir, before the slot is reused
+                from ..stages import peel_solutions
+                w._save_solutions(it.stamp, it.slot, peel_solutions.slot_axes(it.slot))
             self._release(it.slot)
             released = True
             self._log_engine(it, r, time.perf_counter() - t0)
@@ -1051,6 +1055,7 @@ class V3Batch:
         rows.update({r["ts"]: r for r in w._qa})
         bad_ts, rec["qa"] = hour_lst.qa_step(qa_dir, self.band, [rows[k] for k in sorted(rows)])
         expected = sorted(hour_lst._fits_stems(self.cfg, self.band, lst_hour))
+        bad_ts = hour_lst.apply_qa_exclude(pl, self.band, bad_ts, expected, rec)
         # never silently: every input is imaged (CLEAN FITS), skipped for no data, or given up after failing
         skipped = self._known_skipped()
         inputs = {self.kept_stem(_stamp(t)) for t in self.tars
@@ -1166,6 +1171,8 @@ class V3Batch:
             mt.join()
             rec["movie"], rec["timing_s"]["movie"] = mv.get("r", (None, 0.0))
             rec["timing_s"]["movie_wait"] = time.perf_counter() - t0
+        if rc == 0:                                  # peel.save_solutions of the imaged snapshots
+            hour_lst.merge_solutions(self.cfg, self.band, group, expected, rec)
         rec["timing_s"]["total"] = time.perf_counter() - t_all
         from . import memory
         v3b = dict(hour_source="memory", snapshot_io=self.v3.snapshot_io, peel_io=self.v3.peel_io,

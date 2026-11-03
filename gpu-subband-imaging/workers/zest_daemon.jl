@@ -36,6 +36,12 @@
 #                      >= it keep per-channel gains), ZEST_SMOOTH_EXEMPT_BELOW_EL_DEG (> 0: sky
 #                      sources below this elevation keep them) and ZEST_RFI_SMOOTH_FLUX (unset:
 #                      the ZEST_SMOOTH_FLUX value), all unset by default
+#   ZEST_SAVE_SOLUTIONS  comma list of passes (sky, rfi) whose final gains are written to
+#                      <target>.peelsol/<pass>.bin (complex64 little endian, column-major
+#                      source x jones(xx,xy,yx,yy) x antenna x channel) + <pass>.tsv (one row per
+#                      peeled source; 0-based catalog index), <target> = the MS or the SHM slot;
+#                      <pass>.reverted marks a backstop undo (stages/peel_solutions.py).  Both
+#                      engines; unset by default (nothing written).
 #   ZEST_FAST_KERNELS  default off: TTCalX.fast_kernels!(true) (tiled normal equations, device RFI
 #                      fringes, fused corrupt-subtract; equal to rounding; needs exp/ttcalx-v3-all)
 #   ZEST_WORKSPACE     sky_rfi engine only (default off): keep one TTCalX.PeelWorkspace and the
@@ -102,6 +108,7 @@ gc_between = envs("ZEST_GC_BETWEEN", "", ("", "young", "full"))
 reg_offset = envf("ZEST_REG_MAX_OFFSET_DEG", 0.0)
 reg_taper = envf("ZEST_REG_TAPER_DEG", 1.0)
 reg_lambda = envf("ZEST_REG_LAMBDA", 1.0)
+save_passes = Set(filter(!isempty, strip.(split(lowercase(get(ENV, "ZEST_SAVE_SOLUTIONS", "")), ","))))
 sky_rfi = envs("ZEST_ENGINE", "daemon", ("daemon", "sky_rfi")) == "sky_rfi"
 smooth_flux = envf("ZEST_SMOOTH_FLUX", 0.0)
 smooth_below_mhz = envf("ZEST_SMOOTH_BELOW_MHZ", 0.0)       # 0: smooth every subband
@@ -227,10 +234,37 @@ function add_with_gains!(vis, coherency, calibration, meta)
     gpu_putsrc!(vis, corrupted)
 end
 
+"""ZEST_SAVE_SOLUTIONS: one pass's final gains and per-source status -> <sol_dir>/<pass>.{bin,tsv}."""
+function write_solutions(sol_dir, pass, indices, names, elevations, accepted, converged,
+                         niters, calibrations)
+    isempty(calibrations) && return
+    nant, nfreq = size(calibrations[1].xx)
+    gains = Array{ComplexF32}(undef, length(calibrations), 4, nant, nfreq)
+    for (s, cal) in enumerate(calibrations), (j, f) in enumerate((:xx, :xy, :yx, :yy))
+        gains[s, j, :, :] .= Array(getfield(cal, f))
+    end
+    open(joinpath(sol_dir, "$pass.bin"), "w") do io
+        write(io, htol.(reinterpret(UInt64, vec(gains))))
+    end
+    open(joinpath(sol_dir, "$pass.tsv"), "w") do io
+        println(io, "# shape ", join(size(gains), " "))
+        println(io, "index\tname\televation_deg\taccepted\tconverged\tniters")
+        for s in eachindex(calibrations)
+            @printf(io, "%d\t%s\t%.4f\t%s\t%s\t%d\n", indices[s], names[s], elevations[s],
+                    accepted[s], converged[s], niters[s])
+        end
+    end
+end
+
+# the solutions directory of the snapshot being peeled ("" = none: ZEST_SAVE_SOLUTIONS unset)
+const sol_dir_ref = Ref("")
+
 function safe_zest!(vis, meta, catalog_sources, mjd; pass="sky")
+    sol_dir = sol_dir_ref[]
     selected_sources = GPUSource[]
+    selected_indices = Int[]          # 0-based catalog index, as the main pipeline's exports
     elevations = Float64[]
-    for source in catalog_sources
+    for (catalog_index, source) in enumerate(catalog_sources)
         elevation = elevation_deg(source, meta)
         selected = is_rfi_source(source) || elevation >= min_elevation
         @printf(
@@ -239,6 +273,7 @@ function safe_zest!(vis, meta, catalog_sources, mjd; pass="sky")
         )
         if selected
             push!(selected_sources, source)
+            push!(selected_indices, catalog_index - 1)
             push!(elevations, elevation)
         end
     end
@@ -262,16 +297,26 @@ function safe_zest!(vis, meta, catalog_sources, mjd; pass="sky")
         push!(coherencies, coherency)
     end
 
+    save = !isempty(sol_dir) && pass in save_passes
+    last_converged = falses(length(peel_sources))
+    last_niters = zeros(Int, length(peel_sources))
     if residual_guard
         solvefn = (cal, v, coh) -> solve!(cal, v, coh, meta, reg)
-        report = (s, it; converged, niters, finite, max_gain, p_with, p_old, p_new, action) -> @printf(
+        report = (s, it; converged, niters, finite, max_gain, p_with, p_old, p_new, action) -> begin
+            last_converged[s] = converged
+            last_niters[s] = niters
+            @printf(
             "PEEL_SOLVE pass=%s name=\"%s\" elevation_deg=%.2f iteration=%d/%d converged=%s niters=%d finite=%s max_gain=%.6g accepted=%s action=%s p_ratio_new=%.4g p_ratio_old=%.4g\n",
             pass, get_name(peel_sources[s]), elevations[s], it, piter, converged, niters, finite,
             max_gain, action == :accept, action, p_new / p_with, p_old / p_with)
+        end
         sub = guarded_zest!(vis, meta, coherencies, calibrations, solvefn; peeliter=piter,
                             max_gain=max_gain, require_convergence=require_convergence, report=report)
         @printf("PEEL_SUMMARY pass=%s selected=%d accepted=%d action=guarded_zest\n",
                 pass, length(peel_sources), count(sub))
+        # sub[s]: the source is subtracted with calibrations[s] (an update or the previous gains)
+        save && write_solutions(sol_dir, pass, selected_indices, get_name.(peel_sources), elevations,
+                                sub, last_converged, last_niters, calibrations)
         return
     end
     subtracted = trues(length(peel_sources))
@@ -294,6 +339,8 @@ function safe_zest!(vis, meta, catalog_sources, mjd; pass="sky")
 
             saved = save_calibration(calibration)
             converged, niters = solve!(calibration, vis, coherency, meta, reg)
+            last_converged[index] = converged
+            last_niters[index] = niters
             finite, max_amplitude = gain_quality(calibration)
             accepted = finite && max_amplitude <= max_gain &&
                        (!require_convergence || converged)
@@ -332,6 +379,8 @@ function safe_zest!(vis, meta, catalog_sources, mjd; pass="sky")
         "PEEL_SUMMARY pass=%s selected=%d accepted=%d action=safe_zest\n",
         pass, length(peel_sources), count(accepted_final)
     )
+    save && write_solutions(sol_dir, pass, selected_indices, get_name.(peel_sources), elevations,
+                            subtracted, last_converged, last_niters, calibrations)
 end
 
 init_pycasacore() || error("python-casacore not available")
@@ -376,10 +425,14 @@ function run_sky_rfi!(vis, meta, mjd, initial_gains)
         exempt_kw = (; smooth_exempt_names=exempt)
         @printf("PEEL_SMOOTH_EXEMPT below_el_deg=%g names=\"%s\"\n", smooth_exempt_below_el, join(exempt, ","))
     end
-    report = (name, it; converged, niters, finite, max_gain, p_with, p_old, p_new, action) -> @printf(
+    last_solve = Dict{String,Tuple{Bool,Int}}()      # name => (converged, niters) of its last solve
+    report = (name, it; converged, niters, finite, max_gain, p_with, p_old, p_new, action) -> begin
+        last_solve[name] = (converged, niters)
+        @printf(
         "PEEL_SOLVE pass=%s name=\"%s\" elevation_deg=%.2f iteration=%d/%d converged=%s niters=%d finite=%s max_gain=%.6g accepted=%s action=%s p_ratio_new=%.4g p_ratio_old=%.4g\n",
         name in rfi_names ? "rfi" : "sky", name, elev[name], it, piter, converged, niters, finite,
         max_gain, action == :accept, action, p_new / p_with, p_old / p_with)
+    end
     r = zest_sky_rfi!(vis, meta, mjd, sources, rfi_sources;
                       rfi_mode=rfi_joint ? :joint : :after, solver=solver, maxiter=mi, tolerance=tol,
                       minuvw=muvw, peeliter=piter, max_gain=max_gain, min_elevation=min_elevation,
@@ -397,7 +450,28 @@ function run_sky_rfi!(vis, meta, mjd, initial_gains)
                 real(-1im * (sum(C[2]) - sum(C[3]))) / length(C[1]),
                 rad2deg(d[1]) * 60, rad2deg(d[2]) * 60)
     end
+    isempty(sol_dir_ref[]) || write_sky_rfi_solutions(sol_dir_ref[], r, elev, last_solve)
     warm_start ? r.gains : nothing
+end
+
+"""ZEST_SAVE_SOLUTIONS with ZEST_ENGINE=sky_rfi: the files safe_zest! writes, from zest_sky_rfi!'s
+result.  Passes and indices as the daemon engine: "sky" = the sky sources at or above
+min_elevation (0-based sky-model index), "rfi" = every RFI emitter (0-based RFI-model index);
+with rfi_mode=joint one "sky" pass with the RFI indices after the sky model's."""
+function write_sky_rfi_solutions(sol_dir, r, elev, last_solve)
+    peeled = Set(r.peeled)
+    sky_sel = [(i - 1, s) for (i, s) in enumerate(sources) if elev[get_name(s)] >= min_elevation]
+    rfi_sel = [(i - 1, s) for (i, s) in enumerate(rfi_sources)]
+    groups = rfi_joint ? [("sky", vcat(sky_sel, [(length(sources) + i, s) for (i, s) in rfi_sel]))] :
+                         [("sky", sky_sel), ("rfi", rfi_sel)]
+    for (pass, sel) in groups
+        (pass in save_passes && !isempty(sel)) || continue
+        names = [get_name(s) for (_, s) in sel]
+        write_solutions(sol_dir, pass, [i for (i, _) in sel], names, [elev[n] for n in names],
+                        [n in peeled for n in names], [get(last_solve, n, (false, 0))[1] for n in names],
+                        [get(last_solve, n, (false, 0))[2] for n in names],
+                        [r.gains.cals[n] for n in names])
+    end
 end
 prev_gains = nothing
 
@@ -626,6 +700,7 @@ function peel_snapshot!(vis, meta, mjd)
         if backstop && TTCalX.residual_power(vis) > p0
             @printf("PEEL_BACKSTOP pass=%s reverted=true ratio=%.4g\n", name, TTCalX.residual_power(vis) / p0)
             for f in (:xx, :xy, :yx, :yy); getfield(vis, f) .= getfield(before, f); end
+            isempty(sol_dir_ref[]) || touch(joinpath(sol_dir_ref[], "$name.reverted"))
         end
     end
     if rfi_joint && !isempty(rfi_sources)
@@ -655,6 +730,11 @@ for line in eachline(stdin)
     rid = shm && length(parts) >= 3 ? " id=" * parts[3] : ""
     t0 = time()
     try
+        sol_dir_ref[] = isempty(save_passes) ? "" : ms * ".peelsol"
+        if !isempty(sol_dir_ref[])
+            rm(sol_dir_ref[]; force=true, recursive=true)
+            mkpath(sol_dir_ref[])
+        end
         if shm
             col == "DATA" || error("SHM slots carry DATA only (ZEST_COLUMN=$col)")
             t_read = @elapsed (vis, cal, meta, bl, nrows, slot_mjd) = read_slot(ms; gpu=use_gpu)
