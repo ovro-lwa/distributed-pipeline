@@ -16,10 +16,15 @@ cal:
   xy: /calibration/xyphase.Xf
   sources: /calibration/sources.json
   aoflagger_strategy: /calibration/aoflagger.lua
+  # rfi_sources: /calibration/rfi_model.json   # for peel.rfi (see README)
 
 chanbin: 4
 do_aoflag: false
 do_badants: true
+# Recompute UVW in J2000 after averaging (the raw (u, v) are rotated ~0.34 deg,
+# rotating every snapshot image): centroid (default) | time (chgcentre/main
+# pipeline epoch, 5 s early) | off.
+fix_uvw: centroid
 
 peel:
   maxiter: 30
@@ -32,6 +37,8 @@ peel:
   quality_sample_rows: 1024
   min_visibility_amplitude: 1.0e-12
   min_visibility_nonzero_fraction: 0.01
+  # CPU-TTCal-matched zest (README): solver: rk4, model: exact, uvw: geometric,
+  # flag_model: true, resubtract: true, fast_io: true, rfi: true, ...
 
 imaging:
   weight: briggs

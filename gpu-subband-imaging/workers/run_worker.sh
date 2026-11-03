@@ -4,6 +4,11 @@
 set -eo pipefail
 GPU=$1; CONFIG_DIR=$2; BAND=$3; BATCH=$4; MANIFEST=$5
 
+# Pin this launcher too (its tee and the conda helpers), not only the worker.
+if [[ -n ${GSI_TASKSET_CPUS:-} ]]; then
+    taskset -cp "$GSI_TASKSET_CPUS" $$ >/dev/null
+fi
+
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
 
@@ -48,7 +53,11 @@ import yaml
 config_dir, band = sys.argv[1], sys.argv[2]
 try:
     pipeline = yaml.safe_load((Path(config_dir) / "pipeline.yaml").read_text())
-    root = Path(pipeline["output_root"]) / f"{band}MHz" / str(pipeline["date"]) / "logs"
+    if pipeline.get("layout") == "lst":
+        root = (Path(pipeline["output_root"]) / "_logs" / str(pipeline["date"]) /
+                str(pipeline["run_label"]) / f"{band}MHz")
+    else:
+        root = Path(pipeline["output_root"]) / f"{band}MHz" / str(pipeline["date"]) / "logs"
 except Exception:
     root = Path(config_dir) / "logs"
 print(root)
@@ -56,5 +65,14 @@ PY
 )
 mkdir -p "$LOG_ROOT"
 LOG="$LOG_ROOT/worker-${BAND}_${BATCH}-$(hostname -s)-gpu${GPU}.log"
-python -m gpu_subband_imaging.worker \
+if [[ $MANIFEST == HOUR_IMAGE:* ]]; then
+    LOG="$LOG_ROOT/hour_image-${BAND}_${MANIFEST#HOUR_IMAGE:}-$(hostname -s)-gpu${GPU}.log"
+fi
+# Optional CPU pinning / priority (inherited by wsclean, Julia, casa children):
+# GSI_TASKSET_CPUS=0-23 GSI_NICE=10 GSI_IONICE="-c2 -n7".
+WRAP=()
+[[ -n ${GSI_TASKSET_CPUS:-} ]] && WRAP+=(taskset -c "$GSI_TASKSET_CPUS")
+[[ -n ${GSI_NICE:-} ]] && WRAP+=(nice -n "$GSI_NICE")
+[[ -n ${GSI_IONICE:-} ]] && WRAP+=(ionice $GSI_IONICE)
+"${WRAP[@]}" python -m gpu_subband_imaging.worker \
     "$CONFIG_DIR" "$BAND" "$BATCH" "$MANIFEST" --gpu "$GPU" 2>&1 | tee "$LOG"

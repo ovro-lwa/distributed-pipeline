@@ -57,11 +57,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                         format="%(asctime)s %(levelname)s %(name)s %(message)s",
                         force=True)
     ap = argparse.ArgumentParser(prog="gsi")
-    ap.add_argument("cmd", choices=["run", "resume", "status", "dry-run", "stitch"])
+    ap.add_argument("cmd", choices=["run", "resume", "status", "dry-run", "stitch",
+                                    "hour-image", "cleanup-nodes"])
     ap.add_argument("--config", required=True, help="config dir or a yaml in it")
     ap.add_argument("--list-node", default=None,
                     help="node used to list lustre (default: first slot's node)")
     ap.add_argument("--band", type=int, help="band for `stitch`")
+    ap.add_argument("--bands", default=None,
+                    help="comma list of bands for `hour-image` (default: config bands)")
+    ap.add_argument("--hours", default=None,
+                    help="comma list of hours for `hour-image` (default: config hours)")
     a = ap.parse_args(argv)
 
     cdir = _config_dir(a.config)
@@ -69,7 +74,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if a.cmd == "status":
         cfg = Config.load(cdir)
-        led = Ledger(Path(cfg.cluster.state_dir) / f"ledger_{cfg.pipeline.date}.sqlite")
+        led = Ledger(Path(cfg.cluster.state_dir) / f"ledger_{cfg.pipeline.run_key}.sqlite")
         print(cfg.pipeline.date, led.summary())
         led.close()
         return 0
@@ -81,6 +86,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         orch = _orch(cdir, a.list_node, freeze_config=True)
         orch.plan()  # Existing ledger state makes run and resume equivalent.
         orch.run()
+    elif a.cmd == "hour-image":
+        from . import hour_image
+        orch = _orch(cdir, a.list_node, freeze_config=True)
+        res = hour_image.run_all(
+            orch.cfg, orch.config_dir, orch.worker_sh, orch.worker_env,
+            bands=[int(b) for b in a.bands.split(",")] if a.bands else None,
+            hours=[h.strip().zfill(2) for h in a.hours.split(",")] if a.hours else None)
+        orch.ledger.close()
+        failed = sorted(k for k, ok in res.items() if not ok)
+        log.info("hour-image: %d ok, %d failed %s", len(res) - len(failed), len(failed), failed)
+        return 1 if failed else 0
+    elif a.cmd == "cleanup-nodes":
+        orch = _orch(cdir, a.list_node)
+        orch.cleanup_nodes()
+        orch.ledger.close()
     elif a.cmd == "stitch":
         if a.band is None:
             ap.error("--band required for stitch")

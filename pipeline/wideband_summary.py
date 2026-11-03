@@ -193,6 +193,7 @@ def run_wideband(run_dir, out_dir, df_noise):
 
     stacking_targets = [
         ('I', 'deep',  'Taper', 'Robust-0-',   'Robust-0'),
+        ('I', 'deep',  'Taper', 'Robust-0.75-', 'Robust-0.75'),
         ('I', 'deep',  'NoTaper', 'Robust-0-',  'Robust-0'),
         ('I', 'deep',  'NoTaper', 'Robust-0.75-', 'Robust-0.75'),
         ('V', 'deep',  'Taper', 'Deep',         'Robust-0'),
@@ -259,25 +260,17 @@ def run_wideband(run_dir, out_dir, df_noise):
     # 3-colour PNGs
     print("\n--- 3-Colour PNGs ---")
 
-    # Mixed robust
-    r = wideband_files.get(('Red', 'I', 'deep', 'NoTaper', 'Robust-0.75'))
-    g = wideband_files.get(('Green', 'I', 'deep', 'NoTaper', 'Robust-0'))
-    b = wideband_files.get(('Blue', 'I', 'deep', 'NoTaper', 'Robust-0'))
-    if any(p is not None for p in [r, g, b]):
-        _make_3color_png(r, g, b,
-                         os.path.join(out_dir, "Wideband_I_deep_NoTaper_mixed_3color.png"),
-                         title="Wideband I — Red:R-0.75 Green/Blue:R0")
-
-    # Per-robust
-    for robust_str in ['Robust-0', 'Robust-0.75']:
-        r = wideband_files.get(('Red', 'I', 'deep', 'NoTaper', robust_str))
-        g = wideband_files.get(('Green', 'I', 'deep', 'NoTaper', robust_str))
-        b = wideband_files.get(('Blue', 'I', 'deep', 'NoTaper', robust_str))
-        if any(p is not None for p in [r, g, b]):
-            _make_3color_png(
-                r, g, b,
-                os.path.join(out_dir, f"Wideband_I_deep_NoTaper_{robust_str}_3color.png"),
-                title=f"Wideband I NoTaper {robust_str}")
+    # Per taper and robust
+    for taper_str in ['Taper', 'NoTaper']:
+        for robust_str in ['Robust-0', 'Robust-0.75']:
+            r = wideband_files.get(('Red', 'I', 'deep', taper_str, robust_str))
+            g = wideband_files.get(('Green', 'I', 'deep', taper_str, robust_str))
+            b = wideband_files.get(('Blue', 'I', 'deep', taper_str, robust_str))
+            if any(p is not None for p in [r, g, b]):
+                _make_3color_png(
+                    r, g, b,
+                    os.path.join(out_dir, f"Wideband_I_deep_{taper_str}_{robust_str}_3color.png"),
+                    title=f"Wideband I {taper_str} {robust_str}")
 
     return wideband_files
 

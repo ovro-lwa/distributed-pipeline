@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from . import __version__
-from .config import Config
+from .config import Config, PipelineConfig, V3Params
 
 
 def _utc_now() -> str:
@@ -40,6 +40,97 @@ def _code_revision() -> str:
     return "unknown"
 
 
+def _run(cmd, timeout: int = 30, strip: bool = True) -> str:
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out.strip() if strip else out
+
+
+def git_info(path: str) -> Dict[str, object]:
+    """Commit, branch, origin URL, whether a remote branch has the commit, and uncommitted changes."""
+    p = str(path)
+    commit = _run(["git", "-C", p, "rev-parse", "HEAD"])
+    if not commit:
+        return {"path": p, "commit": "unknown"}
+    # porcelain lines are "XY path"; stripping would eat the leading space of " M path"
+    status = _run(["git", "-C", p, "status", "--porcelain", "--untracked-files=no"], strip=False)
+    return {
+        "path": p,
+        "commit": commit,
+        "branch": _run(["git", "-C", p, "rev-parse", "--abbrev-ref", "HEAD"]),
+        "describe": _run(["git", "-C", p, "describe", "--tags", "--always", "--dirty"]),
+        "origin": _run(["git", "-C", p, "remote", "get-url", "origin"]),
+        "on_remote": bool(_run(["git", "-C", p, "branch", "-r", "--contains", commit])),
+        "uncommitted_files": [ln[3:] for ln in status.splitlines() if ln.strip()],
+    }
+
+
+def _code_info() -> Dict[str, object]:
+    """This package's source: a git checkout, or a copy carrying a .gsi-version marker."""
+    for parent in Path(__file__).resolve().parents:
+        if (parent / ".git").exists():
+            return git_info(str(parent))
+        marker = parent / ".gsi-version"
+        if marker.is_file():
+            return {"path": str(parent), "commit": marker.read_text().strip(), "copy_of_git": True}
+    return {"path": str(Path(__file__).resolve().parents[2]), "commit": "unknown"}
+
+
+def _md5(path: Optional[str]) -> Optional[str]:
+    if not path or not Path(path).is_file():
+        return None
+    return hashlib.md5(Path(path).read_bytes()).hexdigest()
+
+
+_IMAGER_PROBE = r"""
+import importlib, json, os
+out = {}
+for m in ("ttcalx_imager", "cupy", "cufinufft", "numpy", "astropy", "casacore"):
+    try:
+        mod = importlib.import_module(m)
+        out[m] = getattr(mod, "__version__", "?")
+        if m == "ttcalx_imager":
+            out["ttcalx_imager_src"] = os.path.dirname(os.path.realpath(mod.__file__))
+    except Exception as e:
+        out[m] = "unavailable: " + type(e).__name__
+print(json.dumps(out))
+"""
+
+_SOFTWARE: Dict[str, Dict] = {}
+
+
+def software_versions(cfg: Config) -> Dict[str, object]:
+    """Everything that produced a product: this pipeline, the TTCalX peeling tree, the GPU
+    imager install (and the source tree it imports), Julia, and the sky / RFI model files."""
+    key = cfg.pipeline.hour_imaging.ttcalx_image
+    if key in _SOFTWARE:
+        return _SOFTWARE[key]
+    env = cfg.pipeline.env
+    imager_python = cfg.pipeline.imaging.gpu_python or str(Path(key).parent / "python")
+    probe_env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME")}
+    try:
+        imager = json.loads(subprocess.run([imager_python, "-c", _IMAGER_PROBE], capture_output=True,
+                                           text=True, timeout=120, env=probe_env).stdout or "{}")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        imager = {}
+    src = imager.get("ttcalx_imager_src")
+    if src:
+        imager["source_git"] = git_info(src)
+    imager["python"] = imager_python
+    out = {
+        "gpu_subband_imaging": {**_code_info(), "package_version": __version__},
+        "ttcalx_peeling": git_info(env.ttcalx),
+        "imager": imager,
+        "julia": _run([f"{env.julia_bin}/julia", "--version"]),
+        "sky_model": {"path": cfg.pipeline.cal.sources, "md5": _md5(cfg.pipeline.cal.sources)},
+        "rfi_model": {"path": cfg.pipeline.cal.rfi_sources, "md5": _md5(cfg.pipeline.cal.rfi_sources)},
+    }
+    _SOFTWARE[key] = out
+    return out
+
+
 def _config_hashes(config_dir: Path) -> Dict[str, str]:
     hashes = {}
     for name in ("cluster.yaml", "subbands.yaml", "pipeline.yaml"):
@@ -49,12 +140,22 @@ def _config_hashes(config_dir: Path) -> Dict[str, str]:
     return hashes
 
 
+def pipeline_dict(p: PipelineConfig) -> Dict[str, object]:
+    """The run record's "pipeline" block: 13405ce's keys while the new settings are at their defaults
+    (as provenance.json): "peel" is PeelParams.as_dict, and "v3" is left out while it equals V3Params()."""
+    d = asdict(p)
+    d["peel"] = p.peel.as_dict()
+    if p.v3 == V3Params():
+        d.pop("v3", None)
+    return d
+
+
 def write_run_metadata(cfg: Config, config_dir: str, status: str,
                        summary: Optional[Dict[str, int]] = None,
                        error: Optional[str] = None) -> Path:
     """Atomically create or update this date's provenance record."""
-    out = (Path(cfg.pipeline.output_root) / "_metadata" /
-           cfg.pipeline.date / "run.json")
+    name = "run.json" if cfg.pipeline.layout != "lst" else f"run_{cfg.pipeline.run_key}.json"
+    out = Path(cfg.pipeline.output_root) / "_metadata" / cfg.pipeline.date / name
     out.parent.mkdir(parents=True, exist_ok=True)
     previous = {}
     if out.is_file():
@@ -76,10 +177,11 @@ def write_run_metadata(cfg: Config, config_dir: str, status: str,
             "package_version": __version__,
             "python": platform.python_version(),
         },
+        "software": software_versions(cfg),
         "host": socket.gethostname(),
         "config_snapshot": str(Path(config_dir).resolve()),
         "config_sha256": _config_hashes(Path(config_dir)),
-        "pipeline": asdict(cfg.pipeline),
+        "pipeline": pipeline_dict(cfg.pipeline),
         "cluster": {
             "slots": [str(slot) for slot in cfg.cluster.slots()],
             "max_feeders": cfg.cluster.max_feeders,
