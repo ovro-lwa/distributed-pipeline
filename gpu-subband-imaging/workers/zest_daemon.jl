@@ -26,8 +26,8 @@
 #   ZEST_TEST_IO       tests only: "" (peel) | identity (no peel: read + write back) |
 #                      perturb (no peel: scale the visibilities by 1.0001 e^{0.3i} and invert
 #                      the flags of every 7th baseline), for the slot I/O equivalence test
-#   ZEST_ENGINE        daemon (the loop below) | sky_rfi (TTCalX.zest_sky_rfi!, branch
-#                      feature/sponge-restore-fast-zest) with ZEST_SMOOTH_FLUX, ZEST_RESTORE,
+#   ZEST_ENGINE        daemon (the loop below) | sky_rfi (TTCalX.zest_sky_rfi!,
+#                      TTCalX gsi-v2 and later) with ZEST_SMOOTH_FLUX, ZEST_RESTORE,
 #                      ZEST_RESTORE_BELOW_MHZ, ZEST_RESTORE_OFFSET_DEG, ZEST_PRECISION,
 #                      ZEST_WARM_START (the exact model, geometric UVW, flagged models and the
 #                      residual guard are built in), and the smoothing switches
@@ -37,14 +37,14 @@
 #                      sources below this elevation keep them) and ZEST_RFI_SMOOTH_FLUX (unset:
 #                      the ZEST_SMOOTH_FLUX value), all unset by default
 #   ZEST_FAST_KERNELS  default off: TTCalX.fast_kernels!(true) (tiled normal equations, device RFI
-#                      fringes, fused corrupt-subtract; equal to rounding; needs exp/ttcalx-v3-all)
+#                      fringes, fused corrupt-subtract; equal to rounding; needs TTCalX v0.3.0)
 #   ZEST_WORKSPACE     sky_rfi engine only (default off): keep one TTCalX.PeelWorkspace and the
 #                      slot's device visibilities across snapshots, so a peel allocates almost no
 #                      GPU memory and CUDA.jl does not collect inside the solve under
 #                      JULIA_CUDA_SOFT_MEMORY_LIMIT (bitwise the same results; needs TTCalX
-#                      with PeelWorkspace, branch exp/peel-workspace)
+#                      with PeelWorkspace, v0.3.0)
 # Anything but the defaults needs TTCalX with solve_gains!
-# (branch feature/cpu-matched-zest).
+# (TTCalX gsi-v2 = 748884a and later).
 #
 # Commands (one per line): an MS path (peel it in place), "SHM <slot> [<id>]" (gsi v3: peel a
 # /dev/shm slot written by src/gpu_subband_imaging/v3/slots.py in place, see read_slot /
@@ -133,7 +133,7 @@ test_io = Symbol(envs("ZEST_TEST_IO", "", ("", "identity", "perturb")))
 use_workspace = envb("ZEST_WORKSPACE", false)
 use_workspace && !sky_rfi && error("ZEST_WORKSPACE needs ZEST_ENGINE=sky_rfi")
 use_workspace && !isdefined(TTCalX, :PeelWorkspace) &&
-    error("ZEST_WORKSPACE needs TTCalX with PeelWorkspace (branch exp/peel-workspace)")
+    error("ZEST_WORKSPACE needs TTCalX with PeelWorkspace (TTCalX v0.3.0)")
 # reused peel buffers; the keyword is only passed when on, so older TTCalX runs with it off
 peel_ws_kw = use_workspace ? (workspace=TTCalX.PeelWorkspace(),) : NamedTuple()
 # ZEST_FAST_KERNELS (default off): TTCalX 0.3.0's faster GPU kernels (TTCalX.fast_kernels!: tiled
@@ -141,7 +141,7 @@ peel_ws_kw = use_workspace ? (workspace=TTCalX.PeelWorkspace(),) : NamedTuple()
 # rounding).  Off, nothing is called, so TTCalX's own default applies (the 748884a kernels).
 fast_kernels = envb("ZEST_FAST_KERNELS", false)
 fast_kernels && !isdefined(TTCalX, :fast_kernels!) &&
-    (println("CONFIG_ERROR ZEST_FAST_KERNELS needs TTCalX with fast_kernels! (branch exp/ttcalx-v3-all)");
+    (println("CONFIG_ERROR ZEST_FAST_KERNELS needs TTCalX with fast_kernels! (TTCalX v0.3.0)");
      flush(stdout); exit(2))
 fast_kernels && (TTCalX.fast_kernels!(true); println("FAST_KERNELS on"))
 sky_rfi && !isdefined(TTCalX, :zest_sky_rfi!) &&
@@ -156,7 +156,7 @@ sky_rfi && !(fast_io && exact_model && geometric && residual_guard && flag_model
 extended = solver != :damped || exact_model || geometric || fast_io || !use_gpu ||
            reg_offset > 0 || !isempty(rfi_path)
 extended && !isdefined(TTCalX, :solve_gains!) &&
-    error("these ZEST_* settings need TTCalX with solve_gains! (branch feature/cpu-matched-zest)")
+    error("these ZEST_* settings need TTCalX with solve_gains! (TTCalX gsi-v2 or later)")
 use_gpu || exact_model || error("ZEST_DEVICE=cpu needs ZEST_MODEL=exact")
 
 is_rfi_source(source) = isdefined(TTCalX, :is_rfi) && TTCalX.is_rfi(source)

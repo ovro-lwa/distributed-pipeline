@@ -160,7 +160,7 @@ class PeelParams:
     require_convergence=false, model=exact, uvw=geometric, flag_model=true,
     resubtract=true; rfi=true adds the RFI zest after the sky (cal.rfi_sources).
     solver=rk4, model=exact, uvw=geometric, fast_io and device=cpu need a TTCalX
-    with solve_gains! (branch feature/cpu-matched-zest).
+    with solve_gains! (TTCalX gsi-v2 = 748884a and later).
     """
     maxiter: int = 30
     tolerance: float = 1e-2
@@ -188,7 +188,7 @@ class PeelParams:
     flag_zero: bool = False           # flag XX == YY == 0 samples before peeling
     residual_guard: bool = False      # TTCalX guarded_zest!: keep an update only if it lowers the residual
     backstop: bool = False            # undo a whole sky/RFI pass that raises the residual
-    # engine=sky_rfi: TTCalX.zest_sky_rfi! (branch feature/sponge-restore-fast-zest, v0.3.0)
+    # engine=sky_rfi: TTCalX.zest_sky_rfi! (TTCalX gsi-v2 and later)
     # with the options below; the settings above that it shares (solver, maxiter, tolerance,
     # minuvw, peeliter, max_gain_amplitude, min_source_elevation_deg, rfi_mode, flag_zero) apply
     engine: str = "daemon"            # daemon (the daemon's own guarded_zest! loop) | sky_rfi
@@ -199,7 +199,7 @@ class PeelParams:
     # subband centre is >= it (TTCalX smooth_exempt_flux); rfi_smooth_flux (None = smooth_flux)
     # is the RFI emitters' value; smooth_exempt_below_el_deg > 0 keeps per-channel gains for sky
     # sources below that elevation in each snapshot (robust across LST; needs TTCalX with
-    # zest_sky_rfi!(...; smooth_exempt_names), branch exp/sponge-exempt-apparent).
+    # zest_sky_rfi!(...; smooth_exempt_names), TTCalX v0.3.0).
     # The defaults (0, 0, None, 0) leave smoothing as before.
     smooth_below_mhz: float = 0.0
     smooth_exempt_flux: float = 0.0
