@@ -51,3 +51,14 @@ def test_unknown_band_raises():
     sb = load_subbands(CONFIG / "subbands.yaml")
     with pytest.raises(ConfigError):
         sb.geom(13)
+
+
+def test_warn_feeders_below_prep_procs(caplog):
+    from types import SimpleNamespace
+    from gpu_subband_imaging.config import _warn_feeders
+    pl = SimpleNamespace(v3=SimpleNamespace(prep_inmem="on", prep_procs=6))
+    assert _warn_feeders(SimpleNamespace(max_feeders=4), pl) is not None
+    assert "max_feeders: 8" in caplog.text
+    assert _warn_feeders(SimpleNamespace(max_feeders=6), pl) is None
+    assert _warn_feeders(SimpleNamespace(max_feeders=4), SimpleNamespace(v3=SimpleNamespace(prep_inmem="off",
+                                                                                             prep_procs=6))) is None
