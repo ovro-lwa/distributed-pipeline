@@ -114,7 +114,7 @@ def _gain_products(J: np.ndarray, a1: np.ndarray, a2: np.ndarray) -> list:
     the four correlations, kept per process while J and the row order stay the same (every snapshot of a
     band-hour): the same arrays as computed per snapshot, ~0.8 GB per process at 192 channels."""
     import hashlib
-    key = (id(J), J.shape, hashlib.sha1(np.ascontiguousarray(a1).tobytes()).hexdigest(),
+    key = (id(J), J.shape, a1.dtype.str, a2.dtype.str, hashlib.sha1(np.ascontiguousarray(a1).tobytes()).hexdigest(),
            hashlib.sha1(np.ascontiguousarray(a2).tobytes()).hexdigest())
     with _lock:
         hit = _gp_cache.get(key)

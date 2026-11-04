@@ -5,6 +5,8 @@ set -eo pipefail
 GPU=$1; CONFIG_DIR=$2; BAND=$3; BATCH=$4; MANIFEST=$5
 
 # Pin this launcher too (its tee and the conda helpers), not only the worker.
+# Cores 24-47 run the data recorders: pin to 0-23 unless GSI_TASKSET_CPUS says otherwise (set it to "" for no pinning)
+GSI_TASKSET_CPUS=${GSI_TASKSET_CPUS-0-23}
 if [[ -n ${GSI_TASKSET_CPUS:-} ]]; then
     taskset -cp "$GSI_TASKSET_CPUS" $$ >/dev/null
 fi

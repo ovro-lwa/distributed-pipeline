@@ -270,6 +270,7 @@ class V3Batch:
         rb = b_old / n_old if n_old else None
         self.plan = memory.plan_store(self.v3.store, max(n_inputs, n_old), self.band, self.v3.ram_reserve_gb,
                                       self.v3.spill_dirs, record_bytes=rb, want_file=want_file,
+                                      fixed_bytes=memory.fixed_bytes(self.v3.prep_procs, self.v3.prep_gain_cache),
                                       prefer_dir=str(old.parents[1]) if old is not None and want_file else None)
         if self.v3.archive != "none":
             self.store_path = hourstore.archive_path(self.cfg, self.band, group, self.batch)

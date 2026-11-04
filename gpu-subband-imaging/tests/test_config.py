@@ -62,3 +62,28 @@ def test_warn_feeders_below_prep_procs(caplog):
     assert _warn_feeders(SimpleNamespace(max_feeders=6), pl) is None
     assert _warn_feeders(SimpleNamespace(max_feeders=4), SimpleNamespace(v3=SimpleNamespace(prep_inmem="off",
                                                                                              prep_procs=6))) is None
+
+
+@pytest.mark.parametrize("bad", ["", "2026-1-03", "../x", "2026-11-03/..", "*"])
+def test_date_must_be_iso(bad):
+    from gpu_subband_imaging.config import _date
+    with pytest.raises(ConfigError):
+        _date(bad)
+    assert _date("2026-11-03") == "2026-11-03"
+
+
+def test_warn_noop_switches():
+    from types import SimpleNamespace
+    from gpu_subband_imaging.config import _warn_noop
+    on = SimpleNamespace(peel=SimpleNamespace(slot_gpu_io=True),
+                         v3=SimpleNamespace(prep_gain_cache=True, prep_inmem="on", peel_io="shm"))
+    assert _warn_noop(on) == []
+    off = SimpleNamespace(peel=SimpleNamespace(slot_gpu_io=True),
+                          v3=SimpleNamespace(prep_gain_cache=True, prep_inmem="off", peel_io="ms"))
+    assert len(_warn_noop(off)) == 2
+
+
+def test_fixed_bytes_defaults_unchanged():
+    from gpu_subband_imaging.v3 import memory
+    assert memory.fixed_bytes() == memory.FIXED_BYTES
+    assert memory.fixed_bytes(6, True) == memory.FIXED_BYTES + 2 * memory.PREP_PROC_BYTES + 6 * memory.GAIN_CACHE_BYTES

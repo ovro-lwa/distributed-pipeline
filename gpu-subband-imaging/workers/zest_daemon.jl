@@ -712,8 +712,10 @@ leaves a slot that looks prepped or peeled.
 """
 function write_slot!(path::String, vis::GPUVisibilities, baseline_dict::Dict, Nrows::Int)
     raw = slot_dev_raw[]
-    raw === nothing || raw[1] == path || error("ZEST_SLOT_GPU_IO: the device slot is $(raw[1]), not $path")
-    raw === nothing || return write_slot_gpu!(path, vis, Nrows, raw)
+    if raw !== nothing && !isempty(raw[1])
+        raw[1] == path || error("ZEST_SLOT_GPU_IO: the device slot is $(raw[1]), not $path")
+        return write_slot_gpu!(path, vis, Nrows, raw)
+    end
     xx, xy, yx, yy = Array(vis.xx), Array(vis.xy), Array(vis.yx), Array(vis.yy)
     fl = Array(vis.flags)
     open(path, "r+") do io
@@ -770,6 +772,15 @@ function write_slot_gpu!(path::String, vis::GPUVisibilities, Nrows::Int, raw)
         write(io, htol(SLOT_STATE_PEELED))
         flush(io)
     end
+    slot_consumed!()
+    nothing
+end
+
+"""ZEST_SLOT_GPU_IO: the device copy of a slot serves one read / write pair; afterwards (and after any failure)
+it is marked consumed, keeping its buffers for the next slot of the same shape."""
+function slot_consumed!()
+    raw = slot_dev_raw[]
+    raw === nothing || (slot_dev_raw[] = ("", raw[2], raw[3], raw[4]))
     nothing
 end
 
@@ -855,6 +866,7 @@ for line in eachline(stdin)
         @printf("ZESTED %s %.2f%s\n", ms, time() - t0, rid)
     catch e
         global prev_gains = nothing
+        slot_consumed!()
         # one line, so a multi-line message (e.g. a PyCall traceback) cannot be read as the
         # next command's reply
         msg = replace(sprint(showerror, e), r"\s*\n\s*" => " | ")
