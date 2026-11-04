@@ -166,3 +166,41 @@ def test_save_solutions_both_engines(engine, tmp_path):
         if acc.any():
             g = z["gains"][acc]
             assert not np.allclose(g[:, 0], 1) or not np.allclose(g[:, 1], 0)
+
+
+def _gpu_env_ok():
+    return os.environ.get("GSI_TEST_GPU") == "1" and os.environ.get("CUDA_VISIBLE_DEVICES", "") not in ("", "-1")
+
+
+@pytest.mark.skipif(not _gpu_env_ok(), reason="needs GSI_TEST_GPU=1 and a visible GPU (CUDA_VISIBLE_DEVICES)")
+@pytest.mark.parametrize("mode", ["identity", "perturb"])
+def test_daemon_slot_gpu_io_matches_numpy(mode, tmp_path):
+    """ZEST_SLOT_GPU_IO: gather / scatter on the GPU give the slot the host loops give (identity: bitwise),
+    with the device buffers reused for a second slot of the same shape and reallocated for another shape."""
+    zenv = {"ZEST_DEVICE": "gpu", "ZEST_MODEL": "exact", "ZEST_COLUMN": "DATA", "ZEST_TEST_IO": mode,
+            "ZEST_ENGINE": "sky_rfi", "ZEST_UVW": "geometric", "ZEST_FAST_IO": "true", "ZEST_RESIDUAL_GUARD": "true",
+            "ZEST_FLAG_MODEL": "true", "ZEST_WORKSPACE": "true", "ZEST_SLOT_GPU_IO": "true"}
+    d = ZestDaemon(_julia(), os.environ["TTCALX_DIR"], str(DAEMON_JL), SOURCES, env=dict(os.environ),
+                   zest_env=zenv, start_timeout=900)
+    try:
+        for k, (nant, nchan, seed) in enumerate(((9, 6, 1), (9, 6, 2), (12, 5, 3))):
+            s = synthetic(nant, nchan, seed)
+            slot = tmp_path / f"gsi3_slot{k}"
+            slots.write_slot(slot, s)
+            d.zest_slot(slot, timeout=300)
+            assert slots.get_state(slot) == slots.PEELED
+            v = slots.view_slot(slot, writable=False)
+            ref_data, ref_flag = reference(s, mode == "perturb")
+            assert v.flag.tobytes() == ref_flag.tobytes()
+            autos = s.antenna1 == s.antenna2
+            assert v.data[autos].tobytes() == s.data[autos].tobytes()
+            if mode == "identity":
+                assert v.data.tobytes() == ref_data.tobytes()
+            else:
+                rel = np.abs(v.data - ref_data) / np.maximum(np.abs(ref_data), 1e-30)
+                assert rel.max() <= 2.5e-7 and (v.data == ref_data).mean() > 0.99
+            for f in ("uvw", "weight", "time", "antenna1"):
+                assert getattr(v, f).tobytes() == getattr(s, f).tobytes()
+        assert d.restarts == 0
+    finally:
+        d.close()

@@ -214,6 +214,9 @@ class PeelParams:
     # TTCalX 0.3.0 GPU kernels (tiled normal equations, device RFI fringes, fused corrupt-subtract;
     # TTCalX.fast_kernels!): off = 748884a's kernels (bitwise), on = equal to rounding.  v3 prodlike: true
     fast_kernels: bool = False
+    # gsi v3 shm slots: gather / scatter the slot on the GPU (ZEST_SLOT_GPU_IO; bitwise the same slot as the
+    # host loops, ~0.2 s less per snapshot in the daemon); needs workspace
+    slot_gpu_io: bool = False
     # comma list of passes ("sky", "sky,rfi") whose final gains the daemon writes per snapshot
     # (stages/peel_solutions.py), merged per band-hour into <band dir>/peeling_solutions/.
     # Not part of NEW_DEFAULTS: empty = no ZEST_SAVE_SOLUTIONS and no provenance key, either engine.
@@ -234,6 +237,8 @@ class PeelParams:
             raise ConfigError("peel.device=cpu needs peel.model=exact")
         if self.workspace and self.engine != "sky_rfi":
             raise ConfigError("peel.workspace needs peel.engine=sky_rfi")
+        if self.slot_gpu_io and not (self.workspace and self.device == "gpu"):
+            raise ConfigError("peel.slot_gpu_io needs peel.workspace and peel.device=gpu")
         if self.maxiter < 1 or self.peeliter < 1:
             raise ConfigError("peel.maxiter and peel.peeliter must be >= 1")
         for name in ("smooth_flux", "smooth_below_mhz", "smooth_exempt_flux", "rfi_smooth_flux",
@@ -251,10 +256,10 @@ class PeelParams:
                     "smooth_exempt_flux": 0.0, "rfi_smooth_flux": None,
                     "smooth_exempt_below_el_deg": 0.0, "restore": "", "restore_below_mhz": 41.0,
                     "restore_offset_deg": 0.0, "precision": "double", "warm_start": False,
-                    "workspace": False, "fast_kernels": False}
+                    "workspace": False, "fast_kernels": False, "slot_gpu_io": False}
     # with the new fields in use: these are still never sent at their defaults
     _UNSET = {"smooth_below_mhz": 0.0, "smooth_exempt_flux": 0.0, "rfi_smooth_flux": None,
-              "smooth_exempt_below_el_deg": 0.0, "workspace": False, "fast_kernels": False,
+              "smooth_exempt_below_el_deg": 0.0, "workspace": False, "fast_kernels": False, "slot_gpu_io": False,
               "save_solutions": ""}
 
     @property
