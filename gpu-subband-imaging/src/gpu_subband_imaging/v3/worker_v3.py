@@ -1083,6 +1083,14 @@ class V3Batch:
             mt = threading.Thread(target=lambda: mv.update(r=hour_lst.movie_step(self.cfg, self.band, group, bdir)),
                                   name="v3-movie", daemon=True)
             mt.start()
+        # 4b. peel.save_solutions: the per-snapshot parts of every record are merged while the engine makes the
+        # hour products (they do not depend on them); the merged files stay valid if the hour fails
+        srec: dict = {}
+        st = None
+        if getattr(pl.peel_for_band(self.band), "solution_passes", None):
+            st = threading.Thread(target=hour_lst.merge_solutions, args=(self.cfg, self.band, group, expected, srec),
+                                  name="v3-peelsol", daemon=True)
+            st.start()
         # 2. the hour products in the engine
         work = bdir / ".hour_work"
         shutil.rmtree(work, ignore_errors=True)
@@ -1172,8 +1180,14 @@ class V3Batch:
             mt.join()
             rec["movie"], rec["timing_s"]["movie"] = mv.get("r", (None, 0.0))
             rec["timing_s"]["movie_wait"] = time.perf_counter() - t0
-        if rc == 0:                                  # peel.save_solutions of the imaged snapshots
-            hour_lst.merge_solutions(self.cfg, self.band, group, expected, rec)
+        if st is not None:
+            t0 = time.perf_counter()
+            st.join()
+            rec["timing_s"]["peel_solutions_wait"] = time.perf_counter() - t0
+            rec["timing_s"]["peel_solutions"] = srec.get("timing_s", {}).get("peel_solutions", 0.0)
+            rec["peel_solutions"] = srec.get("peel_solutions", [])
+            if "peel_solutions_error" in srec:
+                rec["peel_solutions_error"] = srec["peel_solutions_error"]
         rec["timing_s"]["total"] = time.perf_counter() - t_all
         from . import memory
         v3b = dict(hour_source="memory", snapshot_io=self.v3.snapshot_io, peel_io=self.v3.peel_io,
