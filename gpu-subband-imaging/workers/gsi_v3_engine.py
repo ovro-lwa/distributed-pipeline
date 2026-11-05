@@ -352,7 +352,8 @@ def _fake_hour_module():
         summary = dict(band=band, n_loaded=len(snaps), rejected=drop, phase_centre=[math.degrees(ra), math.degrees(dec)],
                        qa=[dict(stem=x["stem"], time=x["time"]) for x in snaps], timing=dict(timing or {}),
                        products=out, n_samples=int(sum(x.n for x in keep)),
-                       env={k: os.environ.get(k) for k in ("TTCALX_CHUNK_CACHE", "TTCALX_CACHE_RESERVE")})
+                       env={k: os.environ.get(k) for k in ("TTCALX_CHUNK_CACHE", "TTCALX_CACHE_RESERVE",
+                                                            "TTCALX_CACHE_DEVICE")})
         if mode == "cache_fallback":                      # tests: as the imager after a GPU OOM fallback
             summary["cache_fallback"] = [dict(name=f"{out_prefix}-1h", error="OutOfMemoryError: fake",
                                               device_cache_GB=1.0)]
@@ -581,6 +582,12 @@ class Engine:
         own_reserve = "TTCALX_CACHE_RESERVE" not in os.environ
         if own_reserve:
             os.environ["TTCALX_CACHE_RESERVE"] = "auto"
+        # device_cache=False (the worker's fresh-engine retry of an hour that ran out of GPU memory): no device chunk
+        # cache at all, so the retry cannot run out the same way (same images; ~6.5 GB at 18 MHz instead of ~16)
+        no_dev = q.get("device_cache") is False
+        old_dev = os.environ.get("TTCALX_CACHE_DEVICE")
+        if no_dev:
+            os.environ["TTCALX_CACHE_DEVICE"] = "0"
         try:
             with (open(log, "a") if log else contextlib.nullcontext(sys.stderr)) as fh, \
                     contextlib.redirect_stdout(fh):
@@ -590,6 +597,11 @@ class Engine:
         finally:
             if own_reserve:
                 os.environ.pop("TTCALX_CACHE_RESERVE", None)
+            if no_dev:
+                if old_dev is None:
+                    os.environ.pop("TTCALX_CACHE_DEVICE", None)
+                else:
+                    os.environ["TTCALX_CACHE_DEVICE"] = old_dev
             self.b.after_hour()
         return dict(status="ok", n_loaded=s.get("n_loaded"), rejected=s.get("rejected"),
                     qa_stems=[x["stem"] for x in s.get("qa", [])], timing=s.get("timing"),

@@ -1133,13 +1133,18 @@ class V3Batch:
                     raise RuntimeError(f"hour stage failed ({e}) and the engine cannot be restarted (restarts "
                                        f"exhausted earlier: {self.engine.restarts}/{self.engine.max_restarts}"
                                        f"{'; ' + self.engine.failed if self.engine.failed else ''}): no retry") from e
-                log.error("V3_HOUR_RETRY %sMHz %s: %s; again in a fresh engine", self.band, group, e)
+                log.error("V3_HOUR_RETRY %sMHz %s: %s; again in a fresh engine without the device chunk cache",
+                          self.band, group, e)
                 rec["first_hour_error"] = str(e)
+                rec["hour_retry_no_device_cache"] = True
                 self.engine.restart("fresh engine for the hour stage")
                 if left is not None:
                     hto = left if hto is None else min(hto, left)
                 try:
-                    r = self.engine.request("hour", timeout=hto, **hq)
+                    # a GPU allocation failure leaves the first engine's memory unusable even after its own
+                    # fallback (cuFINUFFT plans that failed half way), so the retry is a clean process and keeps
+                    # no chunk on the GPU (same images; e.g. 18 MHz 2024-12-20 LST 05h: ~6.5 GB instead of ~16)
+                    r = self.engine.request("hour", timeout=hto, device_cache=False, **hq)
                 except engine_client.EngineFailed as e2:
                     raise RuntimeError(f"hour stage retry: the engine cannot be restarted ({e2})") from e2
             imaged = set(r.get("qa_stems") or [])
