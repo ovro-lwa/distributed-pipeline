@@ -357,8 +357,12 @@ class Worker:
         n = max(1, int(self.cfg.pipeline.v3.prep_procs))
         # spawn, not fork: the parent has threads (feeders, archiver) and casacore state;
         # processes, not threads: python-casacore holds the GIL while it reads
+        from .v3 import fastprep
+        # v3.prep_gain_cache: the prep processes keep the per-row gain products of the band-hour (fastcal)
+        env = {"GSI_PREP_GAIN_CACHE": "1"} if getattr(self.cfg.pipeline.v3, "prep_gain_cache", False) else {}
         self._v3_pool = ProcessPoolExecutor(max_workers=n,
-                                            mp_context=multiprocessing.get_context("spawn"))
+                                            mp_context=multiprocessing.get_context("spawn"),
+                                            initializer=fastprep.set_env, initargs=(env,))
         log.info("batch %sMHz/%d: v3 prep_inmem=%s in %d spawn processes",
                  self.band, self.batch, self._prep_inmem(), n)
 

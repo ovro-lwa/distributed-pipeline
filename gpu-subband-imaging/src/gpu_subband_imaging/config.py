@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Union
@@ -214,6 +215,9 @@ class PeelParams:
     # TTCalX 0.3.0 GPU kernels (tiled normal equations, device RFI fringes, fused corrupt-subtract;
     # TTCalX.fast_kernels!): off = 748884a's kernels (bitwise), on = equal to rounding.  v3 prodlike: true
     fast_kernels: bool = False
+    # gsi v3 shm slots: gather / scatter the slot on the GPU (ZEST_SLOT_GPU_IO; bitwise the same slot as the
+    # host loops, ~0.2 s less per snapshot in the daemon); needs workspace
+    slot_gpu_io: bool = False
     # comma list of passes ("sky", "sky,rfi") whose final gains the daemon writes per snapshot
     # (stages/peel_solutions.py), merged per band-hour into <band dir>/peeling_solutions/.
     # Not part of NEW_DEFAULTS: empty = no ZEST_SAVE_SOLUTIONS and no provenance key, either engine.
@@ -234,6 +238,8 @@ class PeelParams:
             raise ConfigError("peel.device=cpu needs peel.model=exact")
         if self.workspace and self.engine != "sky_rfi":
             raise ConfigError("peel.workspace needs peel.engine=sky_rfi")
+        if self.slot_gpu_io and not (self.workspace and self.device == "gpu"):
+            raise ConfigError("peel.slot_gpu_io needs peel.workspace and peel.device=gpu")
         if self.maxiter < 1 or self.peeliter < 1:
             raise ConfigError("peel.maxiter and peel.peeliter must be >= 1")
         for name in ("smooth_flux", "smooth_below_mhz", "smooth_exempt_flux", "rfi_smooth_flux",
@@ -251,10 +257,10 @@ class PeelParams:
                     "smooth_exempt_flux": 0.0, "rfi_smooth_flux": None,
                     "smooth_exempt_below_el_deg": 0.0, "restore": "", "restore_below_mhz": 41.0,
                     "restore_offset_deg": 0.0, "precision": "double", "warm_start": False,
-                    "workspace": False, "fast_kernels": False}
+                    "workspace": False, "fast_kernels": False, "slot_gpu_io": False}
     # with the new fields in use: these are still never sent at their defaults
     _UNSET = {"smooth_below_mhz": 0.0, "smooth_exempt_flux": 0.0, "rfi_smooth_flux": None,
-              "smooth_exempt_below_el_deg": 0.0, "workspace": False, "fast_kernels": False,
+              "smooth_exempt_below_el_deg": 0.0, "workspace": False, "fast_kernels": False, "slot_gpu_io": False,
               "save_solutions": ""}
 
     @property
@@ -389,6 +395,8 @@ class V3Params:
     checkpoint: str = "local"         # none | local | archive (only when hour_source != kept_ms)
     delete_checkpoint: bool = True
     lookahead: int = 8
+    # prep processes keep the band-hour's per-row gain products (same values; ~0.8 GB RAM per process)
+    prep_gain_cache: bool = False
     peel_timeout_s: float = 600.0     # peel_io=shm: kill + restart the zest daemon after this
     peel_start_timeout_s: float = 600.0   # peel_io=shm: deadline for the daemon's DAEMON_READY
     prep_procs: int = 4
@@ -731,7 +739,7 @@ def load_pipeline(path: Union[str, Path]) -> PipelineConfig:
         for band, params in d.get("peel_overrides", {}).items()
     }
     return PipelineConfig(
-        date=str(_require(d, "date", "pipeline.yaml")),
+        date=_date(_require(d, "date", "pipeline.yaml")),
         hours=d.get("hours", "all"),
         bands=[int(b) for b in _require(d, "bands", "pipeline.yaml")],
         batch_size=int(d.get("batch_size", 50)),
@@ -775,6 +783,44 @@ def load_pipeline(path: Union[str, Path]) -> PipelineConfig:
     )
 
 
+def _date(value) -> str:
+    """pipeline.yaml date: YYYY-MM-DD (it names directories, and node cleanup removes */<date>)."""
+    s = str(value)
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+        raise ConfigError(f"pipeline.yaml date must be YYYY-MM-DD, got {s!r}")
+    return s
+
+
+def _warn_noop(pipeline: PipelineConfig) -> List[str]:
+    """Warn about speed switches that are set but do nothing with the rest of the config."""
+    import logging
+    v3 = getattr(pipeline, "v3", None)
+    msgs = []
+    if v3 is not None and v3.prep_gain_cache and v3.prep_inmem not in ("on", "shadow"):
+        msgs.append("v3.prep_gain_cache only acts in the v3 prep processes (v3.prep_inmem: on); ignored")
+    if pipeline.peel.slot_gpu_io and (v3 is None or v3.peel_io != "shm"):
+        msgs.append("peel.slot_gpu_io only acts on shared-memory slots (v3.peel_io: shm); ignored")
+    for m in msgs:
+        logging.getLogger("gsi.config").warning(m)
+    return msgs
+
+
+def _warn_feeders(cluster: ClusterConfig, pipeline: PipelineConfig) -> Optional[str]:
+    """Warn (no error) when the v3 in-memory prep has fewer feeder threads than prep processes: a feeder untars
+    its tar and then waits for its prep task, so with max_feeders < prep_procs some prep processes never get
+    work, and even max_feeders = prep_procs leaves them idle during every untar (the snapshot stage is
+    prep-bound at 18-32 MHz); max_feeders = prep_procs + 2 keeps them busy.  Returns the message (tests)."""
+    v3 = getattr(pipeline, "v3", None)
+    if v3 is None or v3.prep_inmem not in ("on", "shadow") or cluster.max_feeders >= v3.prep_procs:
+        return None
+    msg = (f"cluster.yaml defaults.max_feeders={cluster.max_feeders} < v3.prep_procs={v3.prep_procs}: "
+           f"{v3.prep_procs - cluster.max_feeders} prep process(es) never get work and the rest idle while the "
+           f"feeders untar (set max_feeders: {v3.prep_procs + 2})")
+    import logging
+    logging.getLogger("gsi.config").warning(msg)
+    return msg
+
+
 @dataclass(frozen=True)
 class Config:
     cluster: ClusterConfig
@@ -789,4 +835,6 @@ class Config:
         _validate_lustre_write_roots(cluster, pipeline)
         check_protected(pipeline.cal.sources)
         check_protected(pipeline.cal.rfi_sources)
+        _warn_feeders(cluster, pipeline)
+        _warn_noop(pipeline)
         return Config(cluster, load_subbands(d / "subbands.yaml"), pipeline)

@@ -33,6 +33,14 @@ RES_PREFIX = "gsi3_mem_"
 # (~5.6 GB), the Julia daemon (~3-4 GB), the engine (CuPy / cuFINUFFT host side, ~5 GB), hour-stage
 # transients (~2 GB); the ring and the tmpfs raw MSes are /dev/shm (worker_v3._plan_shm)
 FIXED_BYTES = 15e9
+PREP_PROC_BYTES = 1.4e9         # one prep process (~5.6 GB for the 4 in FIXED_BYTES)
+GAIN_CACHE_BYTES = 0.8e9        # v3.prep_gain_cache, per prep process (192 channels)
+
+
+def fixed_bytes(prep_procs: int = 4, gain_cache: bool = False) -> float:
+    """FIXED_BYTES for this many prep processes (FIXED_BYTES counts 4), plus the gain cache when it is on."""
+    return (FIXED_BYTES + max(0, prep_procs - 4) * PREP_PROC_BYTES
+            + (prep_procs * GAIN_CACHE_BYTES if gain_cache else 0.0))
 
 
 def mem_available(meminfo: str = "/proc/meminfo") -> Optional[float]:

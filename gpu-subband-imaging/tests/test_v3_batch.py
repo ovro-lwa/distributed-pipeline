@@ -564,6 +564,10 @@ def test_hour_failure_is_retried_once_in_a_fresh_engine(env, caplog):
     h = json.loads((_bdir(env.tmp) / "provenance.json").read_text())["hour"]
     assert "V3_HOUR_RETRY" in caplog.text and h["status"] == "ok" and h["n_loaded"] == 5
     assert "non-uniform points" in h["first_hour_error"]
+    # the retry runs without the device chunk cache (a fresh engine, TTCALX_CACHE_DEVICE=0 for that request)
+    assert h["hour_retry_no_device_cache"] is True
+    summary = json.loads((_bdir(env.tmp) / "QA" / "23MHz-summary.json").read_text())
+    assert summary["env"]["TTCALX_CACHE_DEVICE"] == "0"
 
 
 # -- follow-up review: M1, M2, L1-L4, L6 ------------------------------------------------------------------

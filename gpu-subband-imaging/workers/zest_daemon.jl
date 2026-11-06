@@ -49,6 +49,8 @@
 #                      GPU memory and CUDA.jl does not collect inside the solve under
 #                      JULIA_CUDA_SOFT_MEMORY_LIMIT (bitwise the same results; needs TTCalX
 #                      with PeelWorkspace, v0.3.0)
+#   ZEST_SLOT_GPU_IO   SHM slots with ZEST_WORKSPACE (default off): copy the slot's DATA / FLAG to the GPU
+#                      as they are and gather / scatter there (bitwise the same slot as the host loops)
 # Anything but the defaults needs TTCalX with solve_gains!
 # (TTCalX gsi-v2 = 748884a and later).
 #
@@ -141,6 +143,8 @@ use_workspace = envb("ZEST_WORKSPACE", false)
 use_workspace && !sky_rfi && error("ZEST_WORKSPACE needs ZEST_ENGINE=sky_rfi")
 use_workspace && !isdefined(TTCalX, :PeelWorkspace) &&
     error("ZEST_WORKSPACE needs TTCalX with PeelWorkspace (TTCalX v0.3.0)")
+slot_gpu_io = envb("ZEST_SLOT_GPU_IO", false)
+slot_gpu_io && !(use_workspace && use_gpu) && error("ZEST_SLOT_GPU_IO needs ZEST_WORKSPACE and ZEST_DEVICE=gpu")
 # reused peel buffers; the keyword is only passed when on, so older TTCalX runs with it off
 peel_ws_kw = use_workspace ? (workspace=TTCalX.PeelWorkspace(),) : NamedTuple()
 # ZEST_FAST_KERNELS (default off): TTCalX 0.3.0's faster GPU kernels (TTCalX.fast_kernels!: tiled
@@ -558,6 +562,72 @@ function reused_device_vis(xx, xy, yx, yy, flags)
     v
 end
 
+# ZEST_SLOT_GPU_IO (gsi v3, default off; needs ZEST_WORKSPACE): the slot's DATA / FLAG go to the GPU as
+# they are and slot_gather! / slot_scatter! run there (the same element operations: ComplexF32 ->
+# ComplexF64 is exact, ComplexF64 -> ComplexF32 rounds to nearest as on the host), instead of the host
+# loops, the four ComplexF64 uploads and downloads.  The device copy of the slot keeps the autocorrelation
+# rows, so the whole slot is written back with two copies (bitwise the slot the host path writes).
+const slot_dev_raw = Ref{Any}(nothing)     # (path, data, flag, cross) of the slot being peeled
+
+function slot_gather_kernel!(xx, xy, yx, yy, flags, data, flag, cross)
+    i = (Int(blockIdx().x) - 1) * Int(blockDim().x) + Int(threadIdx().x)
+    nb = size(xx, 1)
+    if i <= nb * size(xx, 2)
+        α = (i - 1) % nb + 1; f = (i - 1) ÷ nb + 1
+        @inbounds begin
+            r = cross[α]
+            xx[α, f] = ComplexF64(data[1, f, r]); xy[α, f] = ComplexF64(data[2, f, r])
+            yx[α, f] = ComplexF64(data[3, f, r]); yy[α, f] = ComplexF64(data[4, f, r])
+            flags[α, f] = flag[1, f, r] | flag[2, f, r] | flag[3, f, r] | flag[4, f, r]
+        end
+    end
+    return nothing
+end
+
+function slot_scatter_kernel!(data, flag, cross, xx, xy, yx, yy, fl)
+    i = (Int(blockIdx().x) - 1) * Int(blockDim().x) + Int(threadIdx().x)
+    nb = size(xx, 1)
+    if i <= nb * size(xx, 2)
+        α = (i - 1) % nb + 1; f = (i - 1) ÷ nb + 1
+        @inbounds begin
+            r = cross[α]
+            data[1, f, r] = ComplexF32(xx[α, f]); data[2, f, r] = ComplexF32(xy[α, f])
+            data[3, f, r] = ComplexF32(yx[α, f]); data[4, f, r] = ComplexF32(yy[α, f])
+            g = fl[α, f]
+            flag[1, f, r] = g; flag[2, f, r] = g; flag[3, f, r] = g; flag[4, f, r] = g
+        end
+    end
+    return nothing
+end
+
+"""The slot's DATA / FLAG on the device (buffers reused while the shape is the same) and the device
+visibilities gathered from them (the workspace's, as reused_device_vis)."""
+function gpu_slot_vis(path, data::Array{ComplexF32,3}, flag::Array{Bool,3}, cross::Vector{Int}, Nf::Int)
+    old = slot_dev_raw[]
+    slot_dev_raw[] = nothing
+    if old === nothing || size(old[2]) != size(data)
+        old === nothing || foreach(CUDA.unsafe_free!, (old[2], old[3], old[4]))
+        dd, df = CuArray{ComplexF32,3}(undef, size(data)), CuArray{Bool,3}(undef, size(flag))
+    else
+        dd, df = old[2], old[3]
+        CUDA.unsafe_free!(old[4])
+    end
+    copyto!(dd, data); copyto!(df, flag)
+    dc = CuArray(cross)
+    Nbase = length(cross)
+    v = slot_device_vis[]
+    if v === nothing || size(v.xx) != (Nbase, Nf)
+        slot_device_vis[] = nothing
+        v === nothing || foreach(f -> CUDA.unsafe_free!(getfield(v, f)), (:xx, :xy, :yx, :yy, :flags))
+        v = slot_device_vis[] = GPUVisibilities((CuArray{ComplexF64}(undef, Nbase, Nf) for _ in 1:4)...,
+                                                CuArray{Bool}(undef, Nbase, Nf))
+    end
+    n = Nbase * Nf
+    @cuda threads=256 blocks=cld(n, 256) slot_gather_kernel!(v.xx, v.xy, v.yx, v.yy, v.flags, dd, df, dc)
+    slot_dev_raw[] = (path, dd, df, dc)
+    v
+end
+
 """Cross rows as read_ms_fast's _cross_rows: (cross row indices, lo, hi), 0-based antennas."""
 function slot_cross_rows(a1, a2)
     cross = findall(a1 .!= a2)
@@ -600,9 +670,13 @@ function read_slot(path::String; gpu::Bool=true)
             cross, lo0, hi0 = slot_cross_rows(a1, a2)
             lo, hi = lo0 .+ 1, hi0 .+ 1
             Nbase, Nf = length(cross), size(data, 2)
-            xx, xy, yx, yy = (Matrix{ComplexF64}(undef, Nbase, Nf) for _ in 1:4)
-            flags = Matrix{Bool}(undef, Nbase, Nf)
-            slot_gather!(xx, xy, yx, yy, flags, data, flag, cross)
+            up = gpu && CUDA.functional() ? CuArray : identity
+            dev_io = slot_gpu_io && use_workspace && up === CuArray
+            if !dev_io
+                xx, xy, yx, yy = (Matrix{ComplexF64}(undef, Nbase, Nf) for _ in 1:4)
+                flags = Matrix{Bool}(undef, Nbase, Nf)
+                slot_gather!(xx, xy, yx, yy, flags, data, flag, cross)
+            end
             uvw = Float64.(uvw_rows[:, cross])
             channels = Float64.(vec(freqs))
             length(channels) == Nf || error("slot has $(length(channels)) freqs for $Nf channels")
@@ -613,8 +687,8 @@ function read_slot(path::String; gpu::Bool=true)
             maximum(hi) <= Na || error("slot antenna index $(maximum(hi)) > $Na antennas")
             baselines = Int32.(permutedims(hcat(lo, hi)))
             baseline_dict = Dict{Tuple{Int,Int}, Int}((lo[α], hi[α]) => α for α in 1:Nbase)
-            up = gpu && CUDA.functional() ? CuArray : identity
-            vis = use_workspace && up === CuArray ? reused_device_vis(xx, xy, yx, yy, flags) :
+            vis = dev_io ? gpu_slot_vis(path, data, flag, cross, Nf) :
+                  use_workspace && up === CuArray ? reused_device_vis(xx, xy, yx, yy, flags) :
                   GPUVisibilities(up(xx), up(xy), up(yx), up(yy), up(flags))
             meta = GPUMetadata(up(antenna_positions), up(baselines), up(channels), up([0.0, 0.0, 1.0]),
                                ra, dec, up(uvw))
@@ -637,6 +711,11 @@ valid) while the rows are written and PEELED after, so a daemon killed mid-write
 leaves a slot that looks prepped or peeled.
 """
 function write_slot!(path::String, vis::GPUVisibilities, baseline_dict::Dict, Nrows::Int)
+    raw = slot_dev_raw[]
+    if raw !== nothing && !isempty(raw[1])
+        raw[1] == path || error("ZEST_SLOT_GPU_IO: the device slot is $(raw[1]), not $path")
+        return write_slot_gpu!(path, vis, Nrows, raw)
+    end
     xx, xy, yx, yy = Array(vis.xx), Array(vis.xy), Array(vis.yx), Array(vis.yy)
     fl = Array(vis.flags)
     open(path, "r+") do io
@@ -666,6 +745,42 @@ function write_slot!(path::String, vis::GPUVisibilities, baseline_dict::Dict, Nr
         write(io, htol(SLOT_STATE_PEELED))
         flush(io)
     end
+    nothing
+end
+
+"""write_slot! with ZEST_SLOT_GPU_IO: slot_scatter! into the device copy of the slot (read_slot's), then
+DATA and FLAG back to the slot as two copies (the state is FREE in between, as write_slot!)."""
+function write_slot_gpu!(path::String, vis::GPUVisibilities, Nrows::Int, raw)
+    _, dd, df, dc = raw
+    n = length(vis.xx)
+    @cuda threads=256 blocks=cld(n, 256) slot_scatter_kernel!(dd, df, dc, vis.xx, vis.xy, vis.yx, vis.yy, vis.flags)
+    open(path, "r+") do io
+        h = slot_header(io)
+        state_offset = Int(h["state_offset"])
+        maps = Any[]
+        try
+            m(name, T, n) = (A = slot_array(io, h, name, T, Val(n)); push!(maps, A); A)
+            data, flag = m("data", ComplexF32, 3), m("flag", Bool, 3)
+            size(data) == size(dd) && size(flag) == size(df) && size(data, 3) == Nrows ||
+                error("slot has data $(size(data)); the read had $(size(dd))")
+            seek(io, state_offset); write(io, htol(SLOT_STATE_FREE)); flush(io)
+            copyto!(data, dd); copyto!(flag, df)
+        finally
+            unmap!(maps...)
+        end
+        seek(io, state_offset)
+        write(io, htol(SLOT_STATE_PEELED))
+        flush(io)
+    end
+    slot_consumed!()
+    nothing
+end
+
+"""ZEST_SLOT_GPU_IO: the device copy of a slot serves one read / write pair; afterwards (and after any failure)
+it is marked consumed, keeping its buffers for the next slot of the same shape."""
+function slot_consumed!()
+    raw = slot_dev_raw[]
+    raw === nothing || (slot_dev_raw[] = ("", raw[2], raw[3], raw[4]))
     nothing
 end
 
@@ -751,6 +866,7 @@ for line in eachline(stdin)
         @printf("ZESTED %s %.2f%s\n", ms, time() - t0, rid)
     catch e
         global prev_gains = nothing
+        slot_consumed!()
         # one line, so a multi-line message (e.g. a PyCall traceback) cannot be read as the
         # next command's reply
         msg = replace(sprint(showerror, e), r"\s*\n\s*" => " | ")

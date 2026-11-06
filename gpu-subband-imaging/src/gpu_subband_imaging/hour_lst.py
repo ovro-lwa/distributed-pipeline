@@ -243,9 +243,11 @@ def merge_solutions(cfg: Config, band: int, group: str, stems, rec: Dict) -> Lis
     from .stages import peel_solutions
     t0 = time.perf_counter()
     files: List[str] = []
+    bdir, prefix = _band_dir(cfg, band, int(group.rstrip("h"))), f"{band}MHz_{pl.date}_{group}"
     try:
-        files = [str(f) for f in peel_solutions.merge_band_hour(
-            _band_dir(cfg, band, int(group.rstrip("h"))), stems, f"{band}MHz_{pl.date}_{group}")]
+        files = [str(f) for f in peel_solutions.merge_band_hour(bdir, stems, prefix)]
+        if not files:                # a rerun: merged before (e.g. an hour retry), the parts are gone
+            files = sorted(str(f) for f in (bdir / "peeling_solutions").glob(f"{prefix}_*.npz"))
     except Exception as e:
         log.error("peeling solutions %sMHz %s not merged: %s", band, group, e)
         rec["peel_solutions_error"] = str(e)

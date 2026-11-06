@@ -270,6 +270,7 @@ class V3Batch:
         rb = b_old / n_old if n_old else None
         self.plan = memory.plan_store(self.v3.store, max(n_inputs, n_old), self.band, self.v3.ram_reserve_gb,
                                       self.v3.spill_dirs, record_bytes=rb, want_file=want_file,
+                                      fixed_bytes=memory.fixed_bytes(self.v3.prep_procs, self.v3.prep_gain_cache),
                                       prefer_dir=str(old.parents[1]) if old is not None and want_file else None)
         if self.v3.archive != "none":
             self.store_path = hourstore.archive_path(self.cfg, self.band, group, self.batch)
@@ -1082,6 +1083,14 @@ class V3Batch:
             mt = threading.Thread(target=lambda: mv.update(r=hour_lst.movie_step(self.cfg, self.band, group, bdir)),
                                   name="v3-movie", daemon=True)
             mt.start()
+        # 4b. peel.save_solutions: the per-snapshot parts of every record are merged while the engine makes the
+        # hour products (they do not depend on them); the merged files stay valid if the hour fails
+        srec: dict = {}
+        st = None
+        if getattr(pl.peel_for_band(self.band), "solution_passes", None):
+            st = threading.Thread(target=hour_lst.merge_solutions, args=(self.cfg, self.band, group, expected, srec),
+                                  name="v3-peelsol", daemon=True)
+            st.start()
         # 2. the hour products in the engine
         work = bdir / ".hour_work"
         shutil.rmtree(work, ignore_errors=True)
@@ -1124,13 +1133,18 @@ class V3Batch:
                     raise RuntimeError(f"hour stage failed ({e}) and the engine cannot be restarted (restarts "
                                        f"exhausted earlier: {self.engine.restarts}/{self.engine.max_restarts}"
                                        f"{'; ' + self.engine.failed if self.engine.failed else ''}): no retry") from e
-                log.error("V3_HOUR_RETRY %sMHz %s: %s; again in a fresh engine", self.band, group, e)
+                log.error("V3_HOUR_RETRY %sMHz %s: %s; again in a fresh engine without the device chunk cache",
+                          self.band, group, e)
                 rec["first_hour_error"] = str(e)
+                rec["hour_retry_no_device_cache"] = True
                 self.engine.restart("fresh engine for the hour stage")
                 if left is not None:
                     hto = left if hto is None else min(hto, left)
                 try:
-                    r = self.engine.request("hour", timeout=hto, **hq)
+                    # a GPU allocation failure leaves the first engine's memory unusable even after its own
+                    # fallback (cuFINUFFT plans that failed half way), so the retry is a clean process and keeps
+                    # no chunk on the GPU (same images; e.g. 18 MHz 2024-12-20 LST 05h: ~6.5 GB instead of ~16)
+                    r = self.engine.request("hour", timeout=hto, device_cache=False, **hq)
                 except engine_client.EngineFailed as e2:
                     raise RuntimeError(f"hour stage retry: the engine cannot be restarted ({e2})") from e2
             imaged = set(r.get("qa_stems") or [])
@@ -1171,8 +1185,14 @@ class V3Batch:
             mt.join()
             rec["movie"], rec["timing_s"]["movie"] = mv.get("r", (None, 0.0))
             rec["timing_s"]["movie_wait"] = time.perf_counter() - t0
-        if rc == 0:                                  # peel.save_solutions of the imaged snapshots
-            hour_lst.merge_solutions(self.cfg, self.band, group, expected, rec)
+        if st is not None:
+            t0 = time.perf_counter()
+            st.join()
+            rec["timing_s"]["peel_solutions_wait"] = time.perf_counter() - t0
+            rec["timing_s"]["peel_solutions"] = srec.get("timing_s", {}).get("peel_solutions", 0.0)
+            rec["peel_solutions"] = srec.get("peel_solutions", [])
+            if "peel_solutions_error" in srec:
+                rec["peel_solutions_error"] = srec["peel_solutions_error"]
         rec["timing_s"]["total"] = time.perf_counter() - t_all
         from . import memory
         v3b = dict(hour_source="memory", snapshot_io=self.v3.snapshot_io, peel_io=self.v3.peel_io,

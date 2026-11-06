@@ -13,6 +13,7 @@ per band and LST hour: 1-h and 10-min images, QA and a movie.
 | **v1** | `gsi-v1` (= `gsi-production-2026-10-25`) | First GPU pipeline (until 2026-10-25): GPU peeling, WSClean dirty I+V snapshots by date, hourly movies. |
 | **v2** | `gsi-v2` (13405ce; TTCalX `gsi-v2` = 748884a) | Production since 2026-10-26: LST-hour layout as the main pipeline, CLEAN snapshots on the GPU imager, GPU 1-h / 10-min images, QA guards, nightly LST runs. Each snapshot goes through disk several times; the hour job re-reads all kept MSes. |
 | **v3** | opt-in (`v3:` config; TTCalX `v0.3.0`) | One band-hour in one process, data kept in RAM: numpy prep instead of CASA, peel and imaging through shared memory, hour images made from memory. Same images as v2, ~2.5x faster per band-hour. |
+| **v4** | v3 + TTCalX `v0.4.0` + the v4 keys below | The v3 path with the imager speed switches (TTCalX `FAST_ENV`), peel slot I/O on the GPU, cached prep gains and the peel-solution merge during the hour stage. Same images as v3 (deep 1-h products within 0.005 sigma), ~1.7x faster per band-hour from averaged data, ~1.4x from raw nightly data. |
 
 With no `v3:` block and no new `peel:` options the code runs as v2
 (`docs/default_path_vs_13405ce.md`). Roll back: `git checkout gsi-v2` here and in TTCalX.
@@ -123,6 +124,15 @@ v3:   {untar_to: /dev/shm/gsi3/untar, prep_inmem: on, peel_io: shm, snapshot_io:
        hour_source: memory, write_kept_ms: false, archive: none, store: auto, checkpoint: local}
 ```
 
+v4 = the v3 setup above with TTCalX `v0.4.0` (its v3 engine turns the imager's `FAST_ENV`
+switches on) and
+
+```yaml
+peel: {slot_gpu_io: true}                  # with the v3 peel keys
+v3:   {prep_procs: 6, prep_gain_cache: true}
+# cluster.yaml: max_feeders: 8   (>= prep_procs + 2)
+```
+
 New options (all off / v2 behaviour by default):
 
 | option | default | what it does |
@@ -134,6 +144,8 @@ New options (all off / v2 behaviour by default):
 | `peel.precision` | `double` | `mixed`: ~4x faster peel, same images |
 | `peel.workspace` | false | reuse GPU peel buffers across snapshots (no GC stalls) |
 | `peel.fast_kernels` | false | newer TTCalX GPU kernels (same maths, other rounding) |
+| `peel.slot_gpu_io` | false | peel reads and writes the shared-memory slot on the GPU (needs `workspace`; same slot bitwise) |
+| `v3.prep_gain_cache` | false | prep processes keep the band-hour's per-row gain products (same values; ~0.8 GB RAM per process) |
 | `peel.smooth_flux`, `peel.restore`, ... | off | sponge smoothing and Jupiter restore, not production yet (`docs/peel_config.md`) |
 | `GSI_SNAP_PIPELINE=1` | off | pipelined snapshot-imager daemon (v2 path) |
 | `GSI_SNAP_REPLY_TIMEOUT_S` | none (900 s when pipelined) | kill the snapshot-imager daemon after this many seconds without a reply |
