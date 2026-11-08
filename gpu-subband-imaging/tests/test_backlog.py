@@ -37,6 +37,9 @@ def test_stamp_of_averaged_input():
     p = "/lustre/pipeline/night-time/averaged/55MHz/2024-12-20/03/20241220_030005_55MHz_averaged.ms"
     assert _stamp(p) == "20241220_030005_55MHz"
     assert _stamp("/x/20261026_031144_55MHz.ms.tar") == "20261026_031144_55MHz"
+    # night-time averaged inputs are tarred since 2026-11: the same stamp as the directory form (the prep and
+    # the hour stage key snapshots by it; a stamp ending in _averaged left every input unaccounted)
+    assert _stamp("/x/20261107_024755_18MHz_averaged.ms.tar") == "20261107_024755_18MHz"
 
 
 def test_badants_per_band_and_band_hour():

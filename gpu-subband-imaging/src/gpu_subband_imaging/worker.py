@@ -33,9 +33,10 @@ def _mjd(stamp: str) -> float:
 
 
 def _stamp(input_path: str) -> str:
-    """<date>_<time>_<band>MHz of a raw (.ms.tar / .ms) or night-time averaged (_averaged.ms) input."""
+    """<date>_<time>_<band>MHz of a raw (.ms.tar / .ms) or night-time averaged (_averaged.ms, or tarred as
+    _averaged.ms.tar since 2026-11) input."""
     name = Path(input_path).name
-    for suffix in ("_averaged.ms", ".ms.tar", ".ms"):
+    for suffix in ("_averaged.ms.tar", "_averaged.ms", ".ms.tar", ".ms"):
         if name.endswith(suffix):
             return name[:-len(suffix)]
     raise ValueError(f"unsupported measurement-set input: {input_path}")
