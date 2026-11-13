@@ -118,6 +118,9 @@ def main():
     p.add_argument("--root", default="/lustre/pipeline/slow")
     p.add_argument("--out-base", default="/lustre/pipeline/night-time/averaged")
     p.add_argument("--chanbin", type=int, default=4)
+    p.add_argument("--until", metavar="HH:MM",
+                   help="only LST hours that end by this UTC time (early pass while the night is recorded)")
+    p.add_argument("--after", metavar="HH:MM", help="only LST hours that end after this UTC time")
     p.add_argument("--newest-first", action="store_true",
                    help="submit the newest files first (to save the latest hours when the run "
                         "started too late to beat the slow-buffer deletion)")
@@ -133,6 +136,14 @@ def main():
                         criterion=args.lst_criterion)
     if not blocks:
         sys.exit(f"{args.date}: no whole LST hour inside the Sun limits")
+    if args.until or args.after:
+        def utc(hhmm):
+            return datetime.strptime(f"{args.date} {hhmm}", "%Y-%m-%d %H:%M")
+        blocks = [b for b in blocks
+                  if (not args.until or b[2] <= utc(args.until)) and (not args.after or b[2] > utc(args.after))]
+        if not blocks:
+            print(f"{args.date}: no LST hour in --until/--after range")
+            return
     t0, t1 = blocks[0][1], blocks[-1][2]
     print(f"{args.date}: {len(blocks)} whole LST hours accepted by the Sun limits ({args.lst_criterion})")
     for lh, a, b in blocks:
