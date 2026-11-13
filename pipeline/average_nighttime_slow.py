@@ -118,6 +118,9 @@ def main():
     p.add_argument("--root", default="/lustre/pipeline/slow")
     p.add_argument("--out-base", default="/lustre/pipeline/night-time/averaged")
     p.add_argument("--chanbin", type=int, default=4)
+    p.add_argument("--newest-first", action="store_true",
+                   help="submit the newest files first (to save the latest hours when the run "
+                        "started too late to beat the slow-buffer deletion)")
     p.add_argument("--dry-run", action="store_true", help="list and sun-cut only, submit nothing")
     p.add_argument("--stall-min", type=float, default=30,
                    help="stop waiting after this many minutes without a task finishing ...")
@@ -166,7 +169,7 @@ def main():
         return
 
     # Oldest first, subbands interleaved: the slow buffer is deleted ~24 h after recording.
-    todo.sort(key=lambda f: (os.path.basename(f).split("_", 2)[:2], f))
+    todo.sort(key=lambda f: (os.path.basename(f).split("_", 2)[:2], f), reverse=args.newest_first)
     qs = assign_queues(len(todo), queues)
     for q, _ in queues:
         print(f"  {q}: {qs.count(q)} tasks")
