@@ -397,6 +397,15 @@ class V3Params:
     lookahead: int = 8
     # prep processes keep the band-hour's per-row gain products (same values; ~0.8 GB RAM per process)
     prep_gain_cache: bool = False
+    # AOFlagger after peeling (as the main pipeline): "hour" = every peeled slot is copied to aoflag_dir, the
+    # band-hour's cross-correlations are flagged with cal.aoflagger_strategy (time x frequency per baseline,
+    # v3/aoflag_hour.py) and the snapshots are then imaged / recorded from the flagged copies; "off" = v4
+    aoflag: str = "off"
+    aoflag_procs: int = 10            # flagging processes (one band-hour)
+    aoflag_python: str = ""           # a Python with AOFlagger's bindings; "" = <env.dev_env>/bin/python
+    aoflag_dir: str = ""              # slot copies (~110 MB per snapshot at 48 channels); "" = the batch work dir
+    aoflag_timeout_s: float = 1800.0  # the flagging subprocess is killed (batch fails) after this long
+    aoflag_min_snaps: int = 60        # fewer snapshots in one attempt (retries, replays): flagged, but V3_AOFLAG_SMALL
     peel_timeout_s: float = 600.0     # peel_io=shm: kill + restart the zest daemon after this
     peel_start_timeout_s: float = 600.0   # peel_io=shm: deadline for the daemon's DAEMON_READY
     prep_procs: int = 4
@@ -477,6 +486,15 @@ class V3Params:
                               "(the v2 worker cannot replay a lost archive record)")
         if self.lookahead < 1 or self.prep_procs < 1:
             raise ConfigError("v3.lookahead and v3.prep_procs must be >= 1")
+        if isinstance(self.aoflag, bool):              # YAML reads an unquoted off / on as a boolean
+            object.__setattr__(self, "aoflag", "hour" if self.aoflag else "off")
+        if self.aoflag not in ("off", "hour"):
+            raise ConfigError(f"v3.aoflag must be off or hour, not {self.aoflag!r}")
+        if isinstance(self.aoflag_procs, bool) or not isinstance(self.aoflag_procs, int) or self.aoflag_procs < 1:
+            raise ConfigError(f"v3.aoflag_procs must be an integer >= 1, not {self.aoflag_procs!r}")
+        if self.aoflag == "hour" and (self.hour_source != "memory" or self.write_kept_ms):
+            # pass 1 drops the raw MS the kept-MS writer needs, so kept MSes would silently not be written
+            raise ConfigError("v3.aoflag=hour needs v3.hour_source=memory and v3.write_kept_ms=false")
         if not self.prep_timeout_s > 0:
             raise ConfigError("v3.prep_timeout_s must be > 0")
         if self.peel_timeout_s <= 0 or self.peel_start_timeout_s <= 0:
@@ -800,6 +818,8 @@ def _warn_noop(pipeline: PipelineConfig) -> List[str]:
         msgs.append("v3.prep_gain_cache only acts in the v3 prep processes (v3.prep_inmem: on); ignored")
     if pipeline.peel.slot_gpu_io and (v3 is None or v3.peel_io != "shm"):
         msgs.append("peel.slot_gpu_io only acts on shared-memory slots (v3.peel_io: shm); ignored")
+    if v3 is not None and getattr(v3, "aoflag", "off") != "off" and v3.snapshot_io != "shm":
+        msgs.append("v3.aoflag only acts in the shared-memory snapshot path (v3.snapshot_io: shm); ignored")
     for m in msgs:
         logging.getLogger("gsi.config").warning(m)
     return msgs

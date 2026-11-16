@@ -124,13 +124,23 @@ def check_table(bp: str, ref: Optional[str], out_dir: Path, amp=(0.8, 1.25), max
 
 
 def write_config(template: Path, out_dir: Path, date: str, hours: List[int],
-                 run_label: str, bp: str) -> Path:
+                 run_label: str, bp: str, badants: Optional[dict] = None) -> Path:
+    """`badants` (pinned for the night, see pin_badants): cal.badants = its CSV for every band and hour, and
+    the record it came from in the description (both go to provenance.json)."""
     out_dir.mkdir(parents=True, exist_ok=True)
     for name in ("cluster.yaml", "subbands.yaml"):
         (out_dir / name).write_text((template / name).read_text())
     d = yaml.safe_load((template / "pipeline.yaml").read_text())
     d.update(date=date, lst_hours=sorted(hours), run_label=run_label, layout="lst", hours="all")
     d["cal"]["bp"] = bp
+    if badants is not None and not badants.get("pinned", True):
+        note = "Bad antennas NOT pinned (anthealth lookup failed past the deadline): each batch looked them up."
+        d["description"] = (str(d.get("description") or "") + " " + note).strip()
+    elif badants is not None:
+        d["cal"]["badants"] = badants["csv"]
+        note = (f"Bad antennas pinned for the night: anthealth selfcorr record {badants['record_utc']} "
+                f"({badants['n']} correlator numbers{'' if badants['own_night'] else '; NOT the night own record'}).")
+        d["description"] = (str(d.get("description") or "") + " " + note).strip()
     (out_dir / "pipeline.yaml").write_text(yaml.safe_dump(d, sort_keys=False))
     return out_dir
 
@@ -153,6 +163,27 @@ def wideband(run_dir: Path, log_path: Path) -> None:
         rc = subprocess.run([sys.executable, str(script), str(run_dir)], stdout=log,
                             stderr=subprocess.STDOUT).returncode
     print(f"wideband summary {run_dir} rc={rc}", flush=True)
+
+
+def pin_badants(date: str, dev_python: str, deadline: datetime) -> Optional[dict]:
+    """One bad-antenna list for the whole night: the anthealth record of `date` itself (keyed ~08:00 UTC of
+    the date, written hours later), so every hour of the night uses the same antennas and a rerun can repeat
+    it.  None while that record does not exist yet (or the lookup fails) and `deadline` has not passed; after
+    the deadline the newest record is pinned (own_night False), or, if the lookup still fails, nothing is
+    pinned (pinned False: the batches look the list up themselves, as before pinning) so the night never stalls."""
+    from gpu_subband_imaging.stages import flag
+    from astropy.time import Time
+    rec, csv = flag.badants_record(Time(f"{date}T23:59:00").mjd, dev_python)
+    rec_utc = Time(rec, format="mjd").isot[:19] if rec is not None else None
+    own = rec_utc is not None and rec_utc[:10] == date
+    if not own and utcnow() < deadline:
+        return None
+    now = utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+    if rec is None:
+        return dict(pinned=False, csv=None, n=None, record_mjd=None, record_utc=None, own_night=False,
+                    pinned_utc=now)
+    return dict(pinned=True, csv=csv, n=len([x for x in csv.split(",") if x]), record_mjd=rec, record_utc=rec_utc,
+                own_night=own, pinned_utc=now)
 
 
 def main(argv=None) -> int:
@@ -182,6 +213,11 @@ def main(argv=None) -> int:
     ap.add_argument("--wait-all", action="store_true",
                     help="start only when every night hour is ready and run them in one gsi run "
                          "(no rounds; also on with nightly_wait_all: true in the template)")
+    ap.add_argument("--no-pin-badants", action="store_true",
+                    help="do not pin one bad-antenna list for the night (each batch looks it up itself, as before)")
+    ap.add_argument("--badants-deadline-utc", type=float, default=16.5,
+                    help="wait for the night's own anthealth record until this UTC hour of --date, then pin the "
+                         "newest record (default 16.5)")
     ap.add_argument("--no-run", action="store_true", help="print the plan and the first config, then exit")
     a = ap.parse_args(argv)
 
@@ -285,7 +321,32 @@ def main(argv=None) -> int:
             print("no bandpass table found; waiting", flush=True)
             time.sleep(a.poll_seconds)
             continue
-        cfg = write_config(template, Path(a.output_config), a.date, ready, run_label, bp)
+        badants = None
+        if not a.no_pin_badants:
+            badants = state.get("badants")           # one list for the whole night, kept across restarts
+            if badants is None:
+                dev_python = f"{tpl['env']['dev_env']}/bin/python"
+                dl = datetime.strptime(a.date, "%Y-%m-%d") + timedelta(hours=a.badants_deadline_utc)
+                badants = pin_badants(a.date, dev_python, dl)
+                if badants is None:
+                    print(f"{now:%H:%M:%S} waiting for the {a.date} bad-antenna record (deadline {dl:%H:%M} UTC)",
+                          flush=True)
+                    if a.no_run:
+                        return 0
+                    time.sleep(a.poll_seconds)
+                    continue
+                if not a.no_run:                         # a dry run must not pin the night
+                    state["badants"] = badants
+                    state_path.parent.mkdir(parents=True, exist_ok=True)
+                    state_path.write_text(json.dumps(state, indent=1))
+                if badants.get("pinned", True):
+                    print(f"{now:%H:%M:%S} bad antennas pinned for the night: record {badants['record_utc']}, "
+                          f"{badants['n']} correlator numbers"
+                          f"{'' if badants['own_night'] else ' (NOT the night own record)'}", flush=True)
+                else:
+                    print(f"{now:%H:%M:%S} bad-antenna lookup failed past the deadline: NOT pinned, the batches "
+                          f"look the list up themselves", flush=True)
+        cfg = write_config(template, Path(a.output_config), a.date, ready, run_label, bp, badants)
         print(f"{now:%H:%M:%S} LST hours {[lst.label(h) for h in ready]} ready; bandpass {bp}", flush=True)
         if a.no_run:
             print((cfg / "pipeline.yaml").read_text(), flush=True)

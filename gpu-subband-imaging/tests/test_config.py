@@ -81,6 +81,10 @@ def test_warn_noop_switches():
     off = SimpleNamespace(peel=SimpleNamespace(slot_gpu_io=True),
                           v3=SimpleNamespace(prep_gain_cache=True, prep_inmem="off", peel_io="ms"))
     assert len(_warn_noop(off)) == 2
+    ao = SimpleNamespace(peel=SimpleNamespace(slot_gpu_io=False),
+                         v3=SimpleNamespace(prep_gain_cache=False, prep_inmem="on", peel_io="shm",
+                                            snapshot_io="ms", aoflag="hour"))
+    assert any("v3.aoflag" in m for m in _warn_noop(ao))
 
 
 def test_fixed_bytes_defaults_unchanged():

@@ -100,6 +100,11 @@ python $GSI_HOME/scripts/night_report.py /lustre/pipeline/snapshots_gpu_pipeline
 previous night's (falling back to the backup), runs as the data arrive and writes the night
 report. `run_daily_cal_lst.py` runs the daily calibration; `run_daily_allsubbands.py` and
 `run_cosmology_backfill.py` are the older date-based launchers. All share one cluster lock.
+It pins one bad-antenna list for the whole night (every band and hour): the night's own
+anthealth record, written ~15:30 UTC, so the run starts after that; past
+`--badants-deadline-utc` (16.5) it pins the newest record, or, if the lookup fails, lets each
+batch look it up as before. The list and its record go to `provenance.json`
+(`--no-pin-badants`: old behaviour).
 Deployment: `deploy/README-deploy.md`; scheduler design: `docs/DESIGN.md`.
 
 ## Backlog re-runs (night-time averaged data)
@@ -146,6 +151,7 @@ New options (all off / v2 behaviour by default):
 | `peel.fast_kernels` | false | newer TTCalX GPU kernels (same maths, other rounding) |
 | `peel.slot_gpu_io` | false | peel reads and writes the shared-memory slot on the GPU (needs `workspace`; same slot bitwise) |
 | `v3.prep_gain_cache` | false | prep processes keep the band-hour's per-row gain products (same values; ~0.8 GB RAM per process) |
+| `v3.aoflag` | off | `hour`: AOFlagger after peeling on the whole band-hour (time x frequency per baseline, as the main pipeline's concatenated MS; same flags as the CLI), then imaging; ~+14% night time (`v3.aoflag_procs` 10, needs `hour_source: memory`) |
 | `peel.smooth_flux`, `peel.restore`, ... | off | sponge smoothing and Jupiter restore, not production yet (`docs/peel_config.md`) |
 | `GSI_SNAP_PIPELINE=1` | off | pipelined snapshot-imager daemon (v2 path) |
 | `GSI_SNAP_REPLY_TIMEOUT_S` | none (900 s when pipelined) | kill the snapshot-imager daemon after this many seconds without a reply |

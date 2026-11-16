@@ -105,6 +105,26 @@ def _permanent_engine_error(e: BaseException) -> bool:
     return isinstance(e, EngineError) and bool(e.reply.get("permanent"))
 
 
+def _copy_slot(src, dst) -> None:
+    """Copy a slot (header + arrays, its header's nbytes) to `dst`, keeping a larger existing file's size (a ring
+    slot); the slot's <slot>.peelsol directory (peel.save_solutions) goes with it."""
+    from . import slots
+    n = slots.read_header(src)["nbytes"]
+    mode = "r+b" if os.path.exists(dst) else "wb"
+    with open(src, "rb") as fi, open(dst, mode) as fo:
+        left = n
+        while left:
+            b = fi.read(min(left, 64 << 20))
+            if not b:
+                raise OSError(f"{src}: short read ({n - left} of {n} bytes)")
+            fo.write(b)
+            left -= len(b)
+    sol, dsol = Path(f"{src}.peelsol"), Path(f"{dst}.peelsol")
+    shutil.rmtree(dsol, ignore_errors=True)
+    if sol.is_dir():
+        shutil.copytree(sol, dsol)
+
+
 def _stamp(tar: str) -> str:
     from ..worker import _stamp as s
     return s(tar)
@@ -134,6 +154,8 @@ class V3Batch:
         self.mem_start = None
         self.hour_rec: Optional[dict] = None
         self.n_ok = self.n_fail = 0
+        self.aoflag_stats: Optional[dict] = None     # v3.aoflag: the band-hour flagging statistics
+        self._aoflag_proc = None                     # the running flagging subprocess (killed with the budget)
         self.n_prep_fail = 0                 # prep errors (not the no-data skips)
         self.failures: Dict[str, dict] = {}  # this attempt: stamp -> {reason, permanent}
         self.given_up: Dict[str, dict] = {}  # inputs failed in max_input_failures attempts (or vanished)
@@ -447,7 +469,8 @@ class V3Batch:
         if self.engine is not None:
             self.engine.failed = "worker budget expired"       # no restart once the kill has started
         for kill in (lambda: self.daemon._p.kill() if self.daemon is not None else None,
-                     lambda: self.engine._kill("worker budget") if self.engine is not None else None):
+                     lambda: self.engine._kill("worker budget") if self.engine is not None else None,
+                     self._kill_aoflag):
             try:
                 kill()
             except Exception:
@@ -831,7 +854,10 @@ class V3Batch:
             w._v3_sweep_untar()
             w._v3_start_pool()
             t_snap = time.perf_counter()
-            self._run_snapshots(work)
+            if self.v3.aoflag == "hour":
+                self._run_snapshots_aoflag(work)
+            else:
+                self._run_snapshots(work)
             log.info("timing %sMHz batch%d phase=snapshots elapsed=%.2f s n=%d", self.band, self.batch,
                      time.perf_counter() - t_snap, len(work))
             self.daemon.close()
@@ -998,6 +1024,187 @@ class V3Batch:
                         self._fail(stamp, f"engine/archive: {e}", permanent=permanent)
             if self.fatal:
                 raise BatchAborted(self.fatal)
+
+    # -- v3.aoflag: hour (AOFlagger after peeling, on the whole band-hour) ----------------------------------------
+    def _run_snapshots_aoflag(self, work) -> None:
+        """Pass 1: prep + peel every snapshot and copy the peeled slot to disk (v3.aoflag_dir); AOFlagger on the
+        band-hour's cross-correlations (v3/aoflag_hour.py, in the Python with AOFlagger's bindings); pass 2: every
+        snapshot back into a slot and through _post (engine image + record, FITS archive), as _run_snapshots."""
+        n = len(work)
+        root = Path(self.v3.aoflag_dir or self.w.work)
+        cdir = root / f"aoflag_{self.band}MHz_b{self.batch}"
+        shutil.rmtree(cdir, ignore_errors=True)
+        if self.v3.aoflag_dir:                     # copies a crashed worker left (no other run is this old)
+            for old in root.glob("aoflag_*MHz_b*"):
+                try:
+                    if time.time() - old.stat().st_mtime > 6 * 3600:
+                        shutil.rmtree(old, ignore_errors=True)
+                except FileNotFoundError:
+                    pass
+        cdir.mkdir(parents=True)
+        if n < self.v3.aoflag_min_snaps:
+            log.warning("V3_AOFLAG_SMALL %sMHz batch%d: only %d snapshots in this attempt (< %d): AOFlagger sees a "
+                        "short time axis, its flags differ from a full band-hour's", self.band, self.batch, n,
+                        self.v3.aoflag_min_snaps)
+        saved: List[Item] = []
+        recycle = getattr(self.cfg.cluster, "zest_recycle_files", 25)
+        futs: Dict[int, Future] = {}
+        nxt = [0]
+        t_pass1 = time.perf_counter()
+        try:
+            with ThreadPoolExecutor(max_workers=max(1, self.cfg.cluster.max_feeders)) as feeders:
+                def top_up(i: int) -> None:
+                    while nxt[0] < n and nxt[0] <= i + self.lookahead:
+                        try:
+                            slot = self.ring.acquire(timeout=None if nxt[0] <= i else 0)
+                        except TimeoutError:
+                            return
+                        j = nxt[0]
+                        futs[j] = feeders.submit(self._feed, j, work[j][0], slot, work[j][1])
+                        nxt[0] += 1
+                n_zested = 0
+                for i in range(n):
+                    if self.fatal:
+                        for f in futs.values():
+                            f.cancel()
+                        raise BatchAborted(self.fatal)
+                    top_up(i)
+                    it = futs.pop(i).result()
+                    top_up(i)
+                    if it is None:
+                        continue
+                    if recycle and n_zested and n_zested % recycle == 0:
+                        log.info("batch %sMHz/%d: recycling zest daemon after %d files", self.band, self.batch,
+                                 n_zested)
+                        self.daemon.close()
+                        self.daemon = self.w._start_daemon()
+                    try:
+                        try:
+                            t0 = time.perf_counter()
+                            self._peel(it)
+                            n_zested += 1
+                            log.info("timing %sMHz batch%d stamp=%s phase=zest elapsed=%.2f s", self.band,
+                                     self.batch, it.stamp, time.perf_counter() - t0)
+                        except Exception as e:
+                            log.error("zest %s failed: %s", it.stamp, e)
+                            self.n_fail += 1
+                            self._fail(it.stamp, f"peel: {e}")
+                            continue
+                        t0 = time.perf_counter()
+                        dst = cdir / f"{len(saved):04d}_{it.stamp}.slot"
+                        try:
+                            _copy_slot(it.slot, dst)
+                        except OSError as e:                  # disk full etc.: not the input's fault
+                            raise BatchAborted(f"V3_AOFLAG {self.band}MHz batch{self.batch}: saving the peeled "
+                                               f"slot of {it.stamp} failed: {e}") from e
+                        shutil.rmtree(f"{it.slot}.peelsol", ignore_errors=True)    # travels with the copy
+                        if not saved:                         # the first copy sizes the band-hour's
+                            need = (n - 1) * dst.stat().st_size
+                            free = shutil.disk_usage(cdir).free
+                            if free < need:
+                                raise BatchAborted(f"V3_AOFLAG {self.band}MHz batch{self.batch}: {cdir.parent} has "
+                                                   f"{free / 1e9:.0f} GB free, the slot copies need "
+                                                   f"{need / 1e9:.0f} GB more")
+                        log.info("timing %sMHz batch%d stamp=%s phase=aoflag_save elapsed=%.2f s", self.band,
+                                 self.batch, it.stamp, time.perf_counter() - t0)
+                    finally:
+                        self._release(it.slot)
+                        self._cleanup_item(it)
+                    it.slot = dst
+                    saved.append(it)
+            log.info("timing %sMHz batch%d phase=aoflag_pass1 elapsed=%.2f s n=%d", self.band, self.batch,
+                     time.perf_counter() - t_pass1, len(saved))
+            if not saved:
+                return
+            self.aoflag_stats = self._aoflag_hour(cdir, saved)
+            self._image_saved(saved)
+        finally:
+            shutil.rmtree(cdir, ignore_errors=True)
+
+    def _aoflag_hour(self, cdir: Path, saved: List[Item]) -> dict:
+        import subprocess
+        t0 = time.perf_counter()
+        lst_file = cdir / "slots.txt"
+        lst_file.write_text("".join(f"{it.slot}\n" for it in saved))
+        py = self.v3.aoflag_python or f"{self.pl.env.dev_env}/bin/python"
+        env = {k: v for k, v in os.environ.items() if k not in ("PYTHONHOME",)}
+        env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+        env["OMP_NUM_THREADS"] = "1"
+        cmd = [py, "-m", "gpu_subband_imaging.v3.aoflag_hour", str(lst_file), self.pl.cal.aoflagger_strategy,
+               str(self.v3.aoflag_procs), str(cdir / "aoflag_stats.json")]
+        out_file = cdir / "aoflag.log"
+        with open(out_file, "w") as out:
+            self._aoflag_proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, env=env,
+                                                 start_new_session=True)    # own group: its pool dies with it
+            try:
+                rc = self._aoflag_proc.wait(timeout=self.v3.aoflag_timeout_s)
+            except subprocess.TimeoutExpired:
+                self._kill_aoflag()
+                rc = "timeout %.0f s" % self.v3.aoflag_timeout_s
+            except BaseException:
+                self._kill_aoflag()
+                raise
+            finally:
+                self._aoflag_proc = None
+        if rc != 0:
+            raise RuntimeError(f"V3_AOFLAG {self.band}MHz batch{self.batch} failed (rc={rc}): "
+                               f"{out_file.read_text()[-2000:]}")
+        stats = json.loads((cdir / "aoflag_stats.json").read_text())
+        stats["strategy"] = self.pl.cal.aoflagger_strategy
+        stats["short_time_axis"] = len(saved) < self.v3.aoflag_min_snaps
+        log.info("V3_AOFLAG %sMHz batch%d: %s", self.band, self.batch, json.dumps(stats))
+        log.info("timing %sMHz batch%d phase=aoflag elapsed=%.2f s", self.band, self.batch, time.perf_counter() - t0)
+        return stats
+
+    def _kill_aoflag(self) -> None:
+        import signal
+        p = self._aoflag_proc
+        if p is not None and p.poll() is None:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+
+    def _image_saved(self, saved: List[Item]) -> None:
+        """Pass 2: each flagged copy back into a ring slot, then _post (engine image + record, archive)."""
+        from . import memory
+        guard = memory.MemoryGuard(self.v3.ram_reserve_gb, every=self.v3.mem_check_every)
+        t_pass2 = time.perf_counter()
+        posts: List[tuple] = []
+        with ThreadPoolExecutor(max_workers=3) as post:
+            for it in saved:
+                if self.fatal:
+                    break
+                slot = self.ring.acquire(timeout=None)
+                try:
+                    t0 = time.perf_counter()
+                    _copy_slot(it.slot, slot)
+                    log.info("timing %sMHz batch%d stamp=%s phase=aoflag_load elapsed=%.2f s", self.band,
+                             self.batch, it.stamp, time.perf_counter() - t0)
+                except Exception as e:
+                    self._release(slot)
+                    log.error("aoflag reload %s failed: %s", it.stamp, e)
+                    self.n_fail += 1
+                    self._fail(it.stamp, f"aoflag reload: {e}")
+                    continue
+                it2 = Item(it.idx, it.tar, it.stamp, slot, it.replay, None, it.stats)
+                posts.append((it2.stamp, post.submit(self._post, it2)))
+                if guard.check():
+                    self._memory_tight()
+            for stamp, f in posts:
+                try:
+                    f.result()
+                    self.n_ok += 1
+                except Exception as e:
+                    permanent = _permanent_engine_error(e)
+                    log.error("image/archive failed: %s", e)
+                    self.n_fail += 1
+                    if not isinstance(e, BatchAborted) and not self.fatal:
+                        self._fail(stamp, f"engine/archive: {e}", permanent=permanent)
+        log.info("timing %sMHz batch%d phase=aoflag_pass2 elapsed=%.2f s n=%d", self.band, self.batch,
+                 time.perf_counter() - t_pass2, len(posts))
+        if self.fatal:
+            raise BatchAborted(self.fatal)
 
     def _peel(self, it: Item) -> None:
         from . import slots
@@ -1211,6 +1418,8 @@ class V3Batch:
                 pass
         if self.store_path is not None and self.store_path.exists():
             v3b["store_file_bytes"] = self.store_path.stat().st_size
+        if self.v3.aoflag != "off":
+            v3b["aoflag"] = dict(mode=self.v3.aoflag, after="peeling", stats=self.aoflag_stats)
         hour_lst.write_provenance(self.cfg, self.band, group, w.gpu, rec, v3b)
         self.hour_rec = rec
         log.info("timing %sMHz lst=%s phase=hour_total elapsed=%.2f s rc=%s n_ms=%d", self.band, group,
