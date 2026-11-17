@@ -125,6 +125,11 @@ def _copy_slot(src, dst) -> None:
         shutil.copytree(sol, dsol)
 
 
+def _image_empty(r: dict) -> bool:
+    """The engine reply's image is the imager's status "empty": no unflagged visibility, no FITS written."""
+    return (r.get("image") or {}).get("status") == "empty"
+
+
 def _stamp(tar: str) -> str:
     from ..worker import _stamp as s
     return s(tar)
@@ -335,12 +340,12 @@ class V3Batch:
         except (OSError, ValueError, KeyError):
             return set()
 
-    def _note_skipped(self, stamp: str, nonzero: float) -> None:
+    def _note_skipped(self, stamp: str, nonzero: float, reason: str = "no data") -> None:
         p = self._skipped_path()
         try:
             p.parent.mkdir(parents=True, exist_ok=True)
             with self._lock, open(p, "a") as fh:
-                fh.write(json.dumps(dict(stamp=stamp, nonzero_fraction=nonzero, t=time.time())) + "\n")
+                fh.write(json.dumps(dict(stamp=stamp, nonzero_fraction=nonzero, reason=reason, t=time.time())) + "\n")
         except OSError as e:
             log.warning("cannot note skipped %s: %s", stamp, e)
 
@@ -665,6 +670,13 @@ class V3Batch:
                 kept = w.keep_ms(it.stamp, kept_tmp)
                 log.info("timing %sMHz batch%d stamp=%s phase=keep_ms elapsed=%.2f s dst=%s", self.band, self.batch,
                          it.stamp, time.perf_counter() - t1, kept)
+            if not it.replay and req["image"] and _image_empty(r):
+                # every visibility flagged (e.g. AOFlagger on an RFI burst): the imager writes no FITS; the snapshot
+                # is skipped like a no-data input, not failed (a failure would retry the whole band-hour)
+                log.warning("V3_EMPTY %sMHz stamp=%s: all visibilities flagged, no image; skipped", self.band,
+                            it.stamp)
+                self._note_skipped(it.stamp, 0.0, reason="all flagged")
+                return True
             if not it.replay and req["image"]:
                 files = [Path(f"{prefix}-I-image.fits"), Path(f"{prefix}-V-image.fits")]
                 missing = [str(f) for f in files if not f.exists()]

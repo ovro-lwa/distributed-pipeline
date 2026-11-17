@@ -218,3 +218,10 @@ def test_write_config_pins_badants(tmp_path):
     out4 = m.write_config(tpl, tmp_path / "out4", "2026-11-14", [3], "Run_x", "bp",
                           dict(pinned=True, csv="", n=0, record_utc="2026-11-14T08:00:06", own_night=True))
     assert yaml.safe_load((out4 / "pipeline.yaml").read_text())["cal"]["badants"] == ""
+
+
+def test_fully_flagged_snapshot_is_empty_not_failed():
+    from gpu_subband_imaging.v3.worker_v3 import _image_empty
+    assert _image_empty({"status": "ok", "image": {"status": "empty", "files": []}})
+    assert not _image_empty({"status": "ok", "image": {"status": "ok", "files": ["a", "b"]}})
+    assert not _image_empty({"status": "ok"})                      # replay: no image requested
