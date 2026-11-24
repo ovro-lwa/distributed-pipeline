@@ -476,3 +476,37 @@ def test_engine_rotation_and_rephase_equal_chgcentre(tmp_path):
     if np.finfo(np.longdouble).eps < np.finfo(np.float64).eps:      # x87: chgcentre's parse is exact
         assert list(got["phase_dir"]) == list(pd)
     assert np.abs(got["phase_dir"] - pd).max() < 1e-15
+
+
+def test_imaging_gpu_env_ttcalx_v5_reaches_use_fast_settings(tmp_path, monkeypatch):
+    """imaging.gpu_env {TTCALX_V5: "1"} is in the engine's environment (V3Batch._engine_env) when GpuBackend calls
+    ttcalx_imager.use_fast_settings(), which then turns on the imager's v5 set."""
+    import subprocess
+    from types import SimpleNamespace
+    from gpu_subband_imaging.v3 import worker_v3
+    monkeypatch.delenv("TTCALX_V5", raising=False)
+    b = worker_v3.V3Batch.__new__(worker_v3.V3Batch)
+    b.pl = SimpleNamespace(imaging=SimpleNamespace(gpu_python="", gpu_env={"TTCALX_V5": "1"}),
+                           hour_imaging=SimpleNamespace(ttcalx_image="/venv/bin/ttcalx-image", env={}))
+    b.cfg = SimpleNamespace(pipeline=b.pl)
+    python, env = b._engine_env()
+    assert python == "/venv/bin/python" and env["TTCALX_V5"] == "1"
+    fake = tmp_path / "fake" / "ttcalx_imager"            # records the environment use_fast_settings sees, then stops
+    fake.mkdir(parents=True)
+    (fake / "__init__.py").write_text(
+        "import json, os, sys\n"
+        "def use_fast_settings(env=None):\n"
+        "    json.dump(dict(os.environ), open(os.environ['GSI_TEST_DUMP'], 'w'))\n"
+        "    sys.exit(0)\n")
+    env = dict(env, GSI_TEST_DUMP=str(tmp_path / "env.json"),
+               PYTHONPATH=os.pathsep.join([str(fake.parent), env["PYTHONPATH"]]))
+    code = "import sys; sys.path.insert(0, %r); import gsi_v3_engine as e; e.GpuBackend()" % str(REPO / "workers")
+    r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    seen = json.loads((tmp_path / "env.json").read_text())
+    assert seen["TTCALX_V5"] == "1"
+    import ttcalx_imager
+    if not hasattr(ttcalx_imager, "v5_env"):
+        pytest.skip("imager without the v5 set (TTCalX < 0.5.0)")
+    on = ttcalx_imager.use_fast_settings({"TTCALX_V5": seen["TTCALX_V5"]})
+    assert ttcalx_imager.v5_env().items() <= on.items() and on["TTCALX_SNAP_ZEN"] == "1"

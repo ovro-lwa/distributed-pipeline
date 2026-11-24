@@ -116,6 +116,47 @@ def test_aoflag_hour_processes_give_the_same_flags(tmp_path, fake_aoflagger):
         assert np.array_equal(slots.view_slot(x).flag, slots.view_slot(y).flag)
 
 
+def _no_skip_module():
+    """aoflag_hour with the fully-flagged-baseline skip taken out (the strategy runs on every baseline)."""
+    src = Path(aoflag_hour.__file__).read_text()
+    cond = "if init[:, k, :].all():"
+    assert src.count(cond) == 1
+    m = types.ModuleType("aoflag_hour_noskip")
+    exec(compile(src.replace(cond, "if False:"), "aoflag_hour_noskip", "exec"), m.__dict__)
+    return m
+
+
+def test_aoflag_hour_skips_fully_flagged_baselines_with_the_same_flags(tmp_path, fake_aoflagger, monkeypatch):
+    calls = []
+    run = _Strategy.run
+    monkeypatch.setattr(_Strategy, "run", lambda self, iset, mask: (calls.append(1), run(self, iset, mask))[1])
+    res = {}
+    for name, mod in (("skip", aoflag_hour), ("noskip", _no_skip_module())):
+        d = tmp_path / name
+        d.mkdir()
+        paths = _hour(d)
+        s0 = slots.view_slot(paths[0], writable=False)
+        cross = np.flatnonzero(np.asarray(s0.antenna1) != np.asarray(s0.antenna2))
+        dead = int(cross[1])
+        part = int(cross[2])
+        for t, p in enumerate(paths):                       # baseline `dead` flagged everywhere; `part` in 1 snapshot
+            s = slots.view_slot(p, writable=True)
+            s.flag[dead, :, t % 4] = True                   # one correlation is enough (flags are ORed over them)
+            if t == 1:
+                s.flag[part] = True
+            del s
+        calls.clear()
+        stats = mod.flag_hour(paths, "s.lua", procs=1)
+        stats.pop("elapsed_s")
+        res[name] = (len(calls), stats, [np.array(slots.view_slot(p).flag) for p in paths], len(cross), dead)
+    (n_skip, st_skip, f_skip, ncross, dead), (n_all, st_all, f_all, _, _) = res["skip"], res["noskip"]
+    assert n_all == ncross and n_skip == ncross - 1                 # only the fully flagged baseline is skipped
+    assert st_skip == st_all
+    for a, b in zip(f_skip, f_all):
+        assert np.array_equal(a, b)
+        assert a[dead].all()
+
+
 def test_aoflag_hour_refuses_mixed_baselines(tmp_path):
     paths = _hour(tmp_path, n=2)
     slots.write_slot(tmp_path / "x.slot", make_snap(nant=7, nchan=5))
