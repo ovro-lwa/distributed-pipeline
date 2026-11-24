@@ -1,0 +1,27 @@
+# Per-subband imaging geometry. npix * scale ~= 115 deg (constant FoV all bands).
+# Derived from wsclean resolution benchmarks (March 2026). SPW for the cal tables
+# is resolved at runtime by CHAN_FREQ overlap, not listed here.
+#
+# tier -> pixels, scale (deg/px); each band maps to a tier.
+
+tiers:
+  low:  {pixels: 1507, scale: 0.0767}   # ~16' (18MHz) -> ~7'  (36MHz)
+  mid:  {pixels: 2357, scale: 0.049}    # ~6'  (41MHz) -> ~4'  (59MHz)
+  high: {pixels: 3122, scale: 0.037}    # ~3.5'(64MHz) -> ~2.7'(82MHz)
+
+bands:
+  18: low
+  23: low
+  27: low
+  32: low
+  36: low
+  41: mid
+  46: mid
+  50: mid
+  55: mid
+  59: mid
+  64: high
+  69: high
+  73: high
+  78: high
+  82: high

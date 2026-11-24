@@ -1,0 +1,31 @@
+control:
+  state_dir: /lustre/pipeline/snapshots_gpu_pipeline/_state
+defaults:
+  zest_recycle_files: 0
+  max_feeders: 8
+  wsclean_threads: 4
+  aoflagger_threads: 2
+  free_core_budget: 6
+  archive_workers: 2
+  work_root: /fast/pipeline/gsi_v4
+nodes:
+- alias: lwacalim00
+  gpus:
+  - 0
+  - 1
+- alias: lwacalim01
+  gpus:
+  - 0
+  - 1
+- alias: lwacalim02
+  gpus:
+  - 0
+  - 1
+- alias: lwacalim05
+  gpus:
+  - 0
+  - 1
+- alias: lwacalim06
+  gpus:
+  - 0
+  - 1

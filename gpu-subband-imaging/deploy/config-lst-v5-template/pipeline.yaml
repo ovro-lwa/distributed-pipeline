@@ -1,0 +1,141 @@
+# gsi-v4 PRODUCTION nightly template (2026-11-05): gsi-v3 production template + v4 keys (slot_gpu_io, prep_procs 6, prep_gain_cache, max_feeders 8)
+# gsi-v3 nightly template: production v2 template (gsi-v2/config-lst-template, 2026-11-03) + v3 in-memory band-hour,
+# main f3a49ce + TTCalX v0.3.1, production-like peeling (no sponge smoothing / restore)
+date: '2026-10-26'
+hours: all
+layout: lst
+lst_hours: []
+run_label: Run_template
+sun_cut: true
+snapshot_phase_centre: lst
+chgcentre: /opt/bin/chgcentre
+bands:
+- 18
+- 23
+- 27
+- 32
+- 36
+- 41
+- 46
+- 50
+- 55
+- 59
+- 64
+- 69
+- 73
+- 78
+- 82
+batch_size: 360
+batch_timeout_seconds: 10800
+max_retries: 1
+data_root: /lustre/pipeline/slow
+output_root: /lustre/pipeline/snapshots_gpu_pipeline
+keep_ms_root: /lustre/pipeline/snapshots_gpu_pipeline/_kept_ms
+fix_uvw: centroid
+cal:
+  bp: /lustre/pipeline/calibration/results/2026-10-25/05h/successful/20261025_130754/tables/calibration_2026-10-25_05h.B.flagged
+  xy: /lustre/gh/polcal/xyphase_delay_pos_3.8643ns.Xf
+  sources: /opt/devel/pipeline/gsi-v2/models/sources_7src_tauA.json
+  aoflagger_strategy: /lustre/ghellbourg/AOFlagger_strat_opt/LWA_opt_GH1.lua
+  rfi_sources: /lustre/gh/calibration/pipeline/reference/sources/rfi_43.2_ver20251101.json
+chanbin: 4
+do_aoflag: false
+do_badants: true
+peel:
+  maxiter: 5
+  tolerance: 0.0001
+  minuvw: 5.0
+  peeliter: 3
+  min_source_elevation_deg: 0.0
+  require_convergence: false
+  max_gain_amplitude: 100.0
+  quality_sample_rows: 1024
+  min_visibility_amplitude: 1.0e-12
+  min_visibility_nonzero_fraction: 0.01
+  solver: rk4
+  model: exact
+  uvw: geometric
+  flag_model: true
+  resubtract: true
+  fast_io: true
+  rfi: true
+  flag_zero: true
+  residual_guard: true
+  engine: sky_rfi
+  precision: mixed
+  workspace: true
+  fast_kernels: true
+  slot_gpu_io: true
+imaging:
+  imager: ttcalx
+  gpu_env:
+    GSI_SVD_QUANTUM: '0'
+  mode: clean
+  weight: briggs
+  robust: 0
+  taper_inner_tukey: 30
+  clean_niter: 50000
+  clean_mgain: 0.9999
+  clean_auto_mask: 5
+  clean_auto_threshold: 1
+  clean_local_rms: true
+  clean_horizon_mask: 10deg
+  clean_mem: 50
+  dirty_mem: 20
+  abs_mem: 20
+  retries: 1
+hour_imaging:
+  ttcalx_image: /opt/devel/pipeline/gsi-v4/venv/bin/ttcalx-image
+  products:
+  - I-Deep-Taper-Robust-0
+  - I-Deep-Taper-Robust-0.75
+  - I-Deep-NoTaper-Robust-0.75
+  - I-Deep-NoTaper-Robust-0
+  - I-Taper-10min
+  - V-Taper-Deep
+  - V-Taper-10min
+  nproc: 8
+  qa: none
+  timeout_seconds: 7200
+  delete_kept_ms: true
+  env:
+    CUPY_CACHE_DIR: /fast/pipeline/gsi_v4/cupy_cache
+    OMP_NUM_THREADS: '4'
+    NUMPY_MADVISE_HUGEPAGE: '0'
+    OPENBLAS_NUM_THREADS: '1'
+movie:
+  enabled: true
+  max_px: 512
+  fps: 20
+  crf: 28
+  scale_mode: adaptive_i
+  fixed_vmax: 20
+  rms_scale: 10.0
+  horizon_mask: true
+  horizon_radius_fraction: 0.49
+  keep_frames: false
+env:
+  conda_env: /opt/devel/pipeline/envs/py38_orca_nkosogor
+  dev_env: /opt/devel/pipeline/envs/development
+  julia_bin: /opt/devel/nkosogor/nkosogor/julia-1.10.4/bin
+  ttcalx: /opt/devel/pipeline/gsi-v4/TTCalX
+  shared_depot: /opt/devel/nkosogor/nkosogor/julia_depot
+stream_hour_images: true
+wideband_per_hour: true
+calcache_cleanup: none
+prep: numpy
+nightly_wait_all: true
+v3:
+  untar_to: /dev/shm/gsi3/untar
+  prep_inmem: 'on'
+  prep_procs: 6
+  prep_gain_cache: true
+  aoflag: hour         # 2026-11-16 gsi-v4.2: AOFlagger after peeling on the band-hour (+~14% time)
+  aoflag_procs: 10
+  peel_io: shm
+  snapshot_io: shm
+  hour_source: memory
+  write_kept_ms: false
+  archive: none
+  store: auto
+  checkpoint: local
