@@ -33,7 +33,7 @@ Tests: `tests/test_v3_dispatch_order.py`, `tests/test_deploy_v5_template.py`, th
 `tests/test_v3_engine.py`. `test_hour_op_sets_the_cache_reserve_and_reports_the_fallback` (failing on main since
 b93d4e5) fixed on the test side.
 
-TTCalX: deploy the tag `v0.5.0` (branch `release/v0.5.0`, reviewed at 7a4b931; to be pushed and tagged on GitHub
+TTCalX: deploy the tag `v0.5.0` (branch `release/v0.5.0`, reviewed at 83f56b7; to be pushed and tagged on GitHub
 first), see `deploy/README-deploy.md`, "Switching to v5", which also has the nightly switch
 (`deploy/nightly/`: the gsi-v4 `daily_guarded` / `night_guarded` drivers with the deploy dir as a variable) and
 the rollback.
