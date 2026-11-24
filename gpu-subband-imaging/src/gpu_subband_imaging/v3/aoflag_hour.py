@@ -83,6 +83,9 @@ def _work(args):
         init = f.any(axis=3)                                # (nt, nb, nf)
         new = np.empty_like(init)
         for k in range(len(r)):
+            if init[:, k, :].all():                         # fully flagged: out | init == init, skip the strategy run
+                new[:, k, :] = True
+                continue
             iset = af.make_image_set(nt, nf, 8)
             for p in range(4):                              # AOFlagger buffers are [channel][time]
                 iset.set_image_buffer(2 * p, np.ascontiguousarray(d[:, k, :, p].real.T, dtype=np.float32))
