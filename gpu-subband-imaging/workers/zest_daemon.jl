@@ -51,6 +51,10 @@
 #                      with PeelWorkspace, v0.3.0)
 #   ZEST_SLOT_GPU_IO   SHM slots with ZEST_WORKSPACE (default off): copy the slot's DATA / FLAG to the GPU
 #                      as they are and gather / scatter there (bitwise the same slot as the host loops)
+#   ZEST_PEEL_FAST     sky_rfi engine (default off): TTCalX zest_sky_rfi!(...; peel_fast=true), the same peel
+#                      rearranged on the GPU (~3x faster, equal to the default to float32 rounding), with the
+#                      visibilities kept in ComplexF32 (the MS / slot precision: the gather and scatter are
+#                      exact); needs ZEST_WORKSPACE, ZEST_FAST_KERNELS, ZEST_DEVICE=gpu and TTCalX with peel_fast
 # Anything but the defaults needs TTCalX with solve_gains!
 # (TTCalX gsi-v2 = 748884a and later).
 #
@@ -155,6 +159,19 @@ fast_kernels && !isdefined(TTCalX, :fast_kernels!) &&
     (println("CONFIG_ERROR ZEST_FAST_KERNELS needs TTCalX with fast_kernels! (TTCalX v0.3.0)");
      flush(stdout); exit(2))
 fast_kernels && (TTCalX.fast_kernels!(true); println("FAST_KERNELS on"))
+# ZEST_PEEL_FAST (default off): the keyword is only passed when on, so older TTCalX runs with it off
+peel_fast = envb("ZEST_PEEL_FAST", false)
+peel_fast && !(sky_rfi && use_workspace && fast_kernels && use_gpu) &&
+    (println("CONFIG_ERROR ZEST_PEEL_FAST needs ZEST_ENGINE=sky_rfi, ZEST_WORKSPACE, ZEST_FAST_KERNELS and ZEST_DEVICE=gpu");
+     flush(stdout); exit(2))
+peel_fast && !any(m -> :peel_fast in Base.kwarg_decl(m), methods(TTCalX.zest_sky_rfi!)) &&
+    (println("CONFIG_ERROR ZEST_PEEL_FAST needs TTCalX zest_sky_rfi!(...; peel_fast)");
+     flush(stdout); exit(2))
+peel_fast_kw = peel_fast ? (peel_fast=true,) : NamedTuple()
+peel_fast && println("PEEL_FAST on")
+# element type of the peeled visibilities: ComplexF32 with ZEST_PEEL_FAST (the MS / slot DATA type, so the
+# conversions in and out are exact), else ComplexF64 as before
+const VIS_T = peel_fast ? ComplexF32 : ComplexF64
 sky_rfi && !isdefined(TTCalX, :zest_sky_rfi!) &&
     (println("CONFIG_ERROR ZEST_ENGINE=sky_rfi needs TTCalX with zest_sky_rfi!"); flush(stdout); exit(2))
 # zest_sky_rfi! runs on host arrays as well (TTCalX host backend), so device=cpu is allowed
@@ -444,7 +461,7 @@ function run_sky_rfi!(vis, meta, mjd, initial_gains)
                       smooth_exempt_flux=smooth_exempt_flux > 0 ? smooth_exempt_flux : Inf,
                       restore=restore_sources, restore_below_mhz=restore_below_mhz,
                       restore_offset_deg=restore_offset_deg, precision=precision,
-                      initial_gains=initial_gains, exempt_kw..., peel_ws_kw...)
+                      initial_gains=initial_gains, exempt_kw..., peel_ws_kw..., peel_fast_kw...)
     @printf("PEEL_SUMMARY pass=all selected=%d accepted=%d skipped=%d flagged_zeros=%d action=sky_rfi\n",
             length(sources) - length(r.skipped) + length(rfi_sources), length(r.peeled),
             length(r.skipped), r.flagged_zeros)
@@ -545,19 +562,27 @@ end
 
 unmap!(arrays...) = foreach(finalize, arrays)    # munmap now (nothing refers to them any more)
 
+"""`vis` with element type `T` (itself when it has it already)."""
+convert_vis(::Type{T}, vis) where {T} = eltype(vis.xx) === T ? vis :
+    GPUVisibilities(T.(vis.xx), T.(vis.xy), T.(vis.yx), T.(vis.yy), vis.flags)
+
 # ZEST_WORKSPACE: one set of device visibilities, overwritten by every slot of the same shape
 # (the previous snapshot's are written back before the next read)
 const slot_device_vis = Ref{Any}(nothing)
 function reused_device_vis(xx, xy, yx, yy, flags)
     v = slot_device_vis[]
-    if v === nothing || size(v.xx) != size(xx)
+    if v === nothing || size(v.xx) != size(xx) || eltype(v.xx) != VIS_T
         # forget the old arrays before freeing them: if the allocation below fails, the next
         # slot of the old shape must not copy into freed arrays
         slot_device_vis[] = nothing
         v === nothing || foreach(f -> CUDA.unsafe_free!(getfield(v, f)), (:xx, :xy, :yx, :yy, :flags))
-        v = slot_device_vis[] = GPUVisibilities(CuArray(xx), CuArray(xy), CuArray(yx), CuArray(yy), CuArray(flags))
+        v = slot_device_vis[] = GPUVisibilities(CuArray{VIS_T}(xx), CuArray{VIS_T}(xy), CuArray{VIS_T}(yx),
+                                                CuArray{VIS_T}(yy), CuArray(flags))
     else
-        foreach(((d, h),) -> copyto!(d, h), ((v.xx, xx), (v.xy, xy), (v.yx, yx), (v.yy, yy), (v.flags, flags)))
+        # ComplexF64 host values that came from ComplexF32: converting back to VIS_T is exact
+        foreach(((d, h),) -> copyto!(d, VIS_T === eltype(h) ? h : VIS_T.(h)),
+                ((v.xx, xx), (v.xy, xy), (v.yx, yx), (v.yy, yy)))
+        copyto!(v.flags, flags)
     end
     v
 end
@@ -572,12 +597,13 @@ const slot_dev_raw = Ref{Any}(nothing)     # (path, data, flag, cross) of the sl
 function slot_gather_kernel!(xx, xy, yx, yy, flags, data, flag, cross)
     i = (Int(blockIdx().x) - 1) * Int(blockDim().x) + Int(threadIdx().x)
     nb = size(xx, 1)
+    T = eltype(xx)          # ComplexF64, or ComplexF32 (ZEST_PEEL_FAST): both exact
     if i <= nb * size(xx, 2)
         α = (i - 1) % nb + 1; f = (i - 1) ÷ nb + 1
         @inbounds begin
             r = cross[α]
-            xx[α, f] = ComplexF64(data[1, f, r]); xy[α, f] = ComplexF64(data[2, f, r])
-            yx[α, f] = ComplexF64(data[3, f, r]); yy[α, f] = ComplexF64(data[4, f, r])
+            xx[α, f] = T(data[1, f, r]); xy[α, f] = T(data[2, f, r])
+            yx[α, f] = T(data[3, f, r]); yy[α, f] = T(data[4, f, r])
             flags[α, f] = flag[1, f, r] | flag[2, f, r] | flag[3, f, r] | flag[4, f, r]
         end
     end
@@ -616,10 +642,10 @@ function gpu_slot_vis(path, data::Array{ComplexF32,3}, flag::Array{Bool,3}, cros
     dc = CuArray(cross)
     Nbase = length(cross)
     v = slot_device_vis[]
-    if v === nothing || size(v.xx) != (Nbase, Nf)
+    if v === nothing || size(v.xx) != (Nbase, Nf) || eltype(v.xx) != VIS_T
         slot_device_vis[] = nothing
         v === nothing || foreach(f -> CUDA.unsafe_free!(getfield(v, f)), (:xx, :xy, :yx, :yy, :flags))
-        v = slot_device_vis[] = GPUVisibilities((CuArray{ComplexF64}(undef, Nbase, Nf) for _ in 1:4)...,
+        v = slot_device_vis[] = GPUVisibilities((CuArray{VIS_T}(undef, Nbase, Nf) for _ in 1:4)...,
                                                 CuArray{Bool}(undef, Nbase, Nf))
     end
     n = Nbase * Nf
@@ -854,14 +880,17 @@ for line in eachline(stdin)
             col == "DATA" || error("SHM slots carry DATA only (ZEST_COLUMN=$col)")
             t_read = @elapsed (vis, cal, meta, bl, nrows, slot_mjd) = read_slot(ms; gpu=use_gpu)
         else
-            t_read = @elapsed (vis, cal, meta, bl, nrows) = read_ms(ms; gpu=use_gpu, column=col)
+            t_read = @elapsed begin
+                (vis, cal, meta, bl, nrows) = read_ms(ms; gpu=use_gpu, column=col)
+                peel_fast && (vis = convert_vis(ComplexF32, vis))      # exact: the column is ComplexF32
+            end
         end
         t_peel = @elapsed begin
             mjd = (exact_model || geometric) ? (shm ? slot_mjd : ms_mjd(ms)) : NaN
             peel_snapshot!(vis, meta, mjd)
         end
         t_write = @elapsed (shm ? write_slot!(ms, vis, bl, nrows) :
-                                  write_ms!(ms, vis, bl, nrows; column=col))
+                                  write_ms!(ms, convert_vis(ComplexF64, vis), bl, nrows; column=col))
         @printf("ZEST_TIMING read=%.2f peel=%.2f write=%.2f\n", t_read, t_peel, t_write)
         @printf("ZESTED %s %.2f%s\n", ms, time() - t0, rid)
     catch e

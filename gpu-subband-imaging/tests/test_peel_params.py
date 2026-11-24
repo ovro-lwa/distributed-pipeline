@@ -221,3 +221,29 @@ def test_fast_kernels_switch_maps_to_env_only_when_on():
     env = PeelParams(**PRODUCTION, fast_kernels=True).daemon_env("/r.json")
     assert env["ZEST_FAST_KERNELS"] == "True" and env["ZEST_ENGINE"] == "daemon"
     assert PeelParams(**PRODUCTION, fast_kernels=True).as_dict()["fast_kernels"] is True
+
+
+V4_PEEL = dict(PRODUCTION, engine="sky_rfi", precision="mixed", workspace=True, fast_kernels=True,
+               slot_gpu_io=True)                                    # the gsi-v4 nightly peel block
+
+
+def test_peel_fast_maps_to_env_only_when_on():
+    off = PeelParams(**V4_PEEL)
+    assert "ZEST_PEEL_FAST" not in off.daemon_env("/r.json") and "peel_fast" not in off.as_dict()
+    on = PeelParams(**V4_PEEL, peel_fast=True)
+    env = on.daemon_env("/r.json")
+    assert env.pop("ZEST_PEEL_FAST") == "True" and env == off.daemon_env("/r.json")
+    assert on.as_dict()["peel_fast"] is True
+    # the legacy (13405ce) environment is untouched while every new field is at its default
+    assert "ZEST_PEEL_FAST" not in PeelParams(**PRODUCTION).daemon_env("/r.json")
+
+
+@pytest.mark.parametrize("bad", [dict(workspace=False, slot_gpu_io=False), dict(fast_kernels=False),
+                                 dict(precision="double"), dict(solver="damped"), dict(maxiter=64),
+                                 dict(smooth_flux=300.0), dict(rfi_smooth_flux=100.0), dict(restore="/j.json"),
+                                 dict(reg_max_offset_deg=0.5), dict(device="cpu", slot_gpu_io=False)])
+def test_peel_fast_needs_the_validated_setup(bad):
+    PeelParams(**{**V4_PEEL, **bad})                               # fine without peel_fast
+    with pytest.raises(ConfigError, match="peel.peel_fast needs"):
+        PeelParams(**{**V4_PEEL, **bad}, peel_fast=True)
+

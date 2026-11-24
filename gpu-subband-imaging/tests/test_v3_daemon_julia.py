@@ -204,3 +204,48 @@ def test_daemon_slot_gpu_io_matches_numpy(mode, tmp_path):
         assert d.restarts == 0
     finally:
         d.close()
+
+
+def test_daemon_rejects_peel_fast_without_its_setup():
+    env = dict(os.environ, CUDA_VISIBLE_DEVICES="")
+    with pytest.raises(RuntimeError, match="ZEST_PEEL_FAST needs"):
+        ZestDaemon(_julia(), os.environ["TTCALX_DIR"], str(DAEMON_JL), SOURCES, env=env,
+                   zest_env={"ZEST_DEVICE": "cpu", "ZEST_MODEL": "exact", "ZEST_COLUMN": "DATA",
+                             "ZEST_PEEL_FAST": "true", "JULIA_NUM_THREADS": "2"},
+                   start_timeout=900)
+
+
+@pytest.mark.skipif(not _gpu_env_ok(), reason="needs GSI_TEST_GPU=1 and a visible GPU (CUDA_VISIBLE_DEVICES)")
+@pytest.mark.parametrize("mode", ["identity", "perturb"])
+def test_daemon_peel_fast_slot_io_is_bitwise_the_default(mode, tmp_path):
+    """ZEST_PEEL_FAST keeps the visibilities in ComplexF32: the slot gather / scatter (device and host paths)
+    round-trip exactly, so with the peel skipped (ZEST_TEST_IO) the slots are bitwise those of the default
+    ComplexF64 daemon (and numpy's reference for identity)."""
+    base = {"ZEST_DEVICE": "gpu", "ZEST_MODEL": "exact", "ZEST_COLUMN": "DATA", "ZEST_TEST_IO": mode,
+            "ZEST_ENGINE": "sky_rfi", "ZEST_UVW": "geometric", "ZEST_FAST_IO": "true", "ZEST_RESIDUAL_GUARD": "true",
+            "ZEST_FLAG_MODEL": "true", "ZEST_WORKSPACE": "true", "ZEST_FAST_KERNELS": "true"}
+    shapes = ((9, 6, 1), (9, 6, 2), (12, 5, 3))
+    out = {}
+    for name, extra in (("default", {"ZEST_SLOT_GPU_IO": "true"}),
+                        ("fast_gpu_io", {"ZEST_SLOT_GPU_IO": "true", "ZEST_PEEL_FAST": "true"}),
+                        ("fast_host_io", {"ZEST_PEEL_FAST": "true"})):
+        d = ZestDaemon(_julia(), os.environ["TTCALX_DIR"], str(DAEMON_JL), SOURCES, env=dict(os.environ),
+                       zest_env={**base, **extra}, start_timeout=900)
+        try:
+            for k, (nant, nchan, seed) in enumerate(shapes):
+                s = synthetic(nant, nchan, seed)
+                slot = tmp_path / f"{name}_slot{k}"
+                slots.write_slot(slot, s)
+                d.zest_slot(slot, timeout=300)
+                assert slots.get_state(slot) == slots.PEELED
+                v = slots.view_slot(slot, writable=False)
+                out[name, k] = (v.data.tobytes(), v.flag.tobytes())
+                if mode == "identity":
+                    ref_data, ref_flag = reference(s, False)
+                    assert v.data.tobytes() == ref_data.tobytes() and v.flag.tobytes() == ref_flag.tobytes()
+            assert d.restarts == 0
+        finally:
+            d.close()
+    for k in range(len(shapes)):
+        assert out["fast_gpu_io", k] == out["default", k]
+        assert out["fast_host_io", k] == out["default", k]
