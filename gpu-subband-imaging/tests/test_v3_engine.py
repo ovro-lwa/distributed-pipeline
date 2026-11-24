@@ -238,6 +238,30 @@ def test_small_of_carries_the_stored_uvw_of_a_rotated_snapshot():
     assert np.array_equal(s["uvw"], new) and s["phase_dir"] == (0.2, 0.65)
 
 
+def test_gpu_backend_band_change_clears_the_zenith_caches(monkeypatch):
+    """GpuBackend._band_change (no GPU): a new snapshot geometry without an hour stage in between drops the zenith-frame
+    gridder's tables / plans (ttcalx_imager.zenith.clear); the same geometry, the first snapshot and an imager without
+    the zenith module do nothing."""
+    import types
+    sys.path.insert(0, str(REPO / "workers"))
+    try:
+        import gsi_v3_engine as eng
+    finally:
+        sys.path.pop(0)
+    calls = []
+    monkeypatch.setitem(sys.modules, "ttcalx_imager.zenith", types.SimpleNamespace(clear=lambda: calls.append(1)))
+    b = eng.GpuBackend.__new__(eng.GpuBackend)          # no __init__: no CuPy
+    b.geom = None
+    b._band_change(4096, 0.03)
+    b._band_change(4096, 0.03)
+    assert calls == [] and b.geom == (4096, 0.03)
+    b._band_change(3072, 0.04)
+    assert calls == [1] and b.geom == (3072, 0.04)
+    monkeypatch.delitem(sys.modules, "ttcalx_imager.zenith")
+    b._band_change(4096, 0.03)
+    assert calls == [1] and b.geom == (4096, 0.03)
+
+
 @needs_v3_imager
 def test_engine_death_restart_reopens_the_store(tmp_path):
     p = tmp_path / "ck.gsiv"

@@ -127,7 +127,8 @@ def prepare(snap, req, rot, xp=np, h2d=None):
     """(small, DATA) of a slot snapshot as the imager would read them from v2's chgcentre'd MS copy:
     the rotated UVW of every row in ``small`` and DATA re-phased with rotate.rephase (on ``xp``:
     CuPy in the GPU backend, numpy in the fake one -- the same code).  h2d: the imager's host-to-device
-    copy (ttcalx_imager.snapshot.h2d: through a page-locked staging buffer with TTCALX_PINNED_H2D=1)."""
+    copy (ttcalx_imager.snapshot.h2d: through a page-locked staging buffer with TTCALX_PINNED_H2D=1, opt-in only;
+    the same bytes as cp.asarray)."""
     from ttcalx_imager import rotate
     small = small_of(snap, req, rot)
     d = h2d(snap.data)[0] if h2d is not None else xp.asarray(snap.data)
@@ -158,8 +159,19 @@ class GpuBackend:
         if quantum > 0:
             snapshot.snapshot_svd = _reuse_svd(quantum, self.pool, gridder)
         self.im = SnapshotImager()
+        self.geom = None
         import ttcalx_imager
         self.imager = ttcalx_imager.__file__
+
+    def _band_change(self, N, sc):
+        """A new snapshot geometry (another band) without an hour stage in between: the zenith-frame gridder's
+        tables / plans of the previous band go (ttcalx_imager.zenith, TTCALX_SNAP_ZEN; before_hour / after_hour clear
+        them with gridder.clear_caches).  The production gridder's caches are keyed by geometry and kept as before."""
+        if self.geom is not None and self.geom != (N, sc):
+            zen = sys.modules.get("ttcalx_imager.zenith")
+            if zen is not None and hasattr(zen, "clear"):
+                zen.clear()
+        self.geom = (N, sc)
 
     def image(self, snap, req, rot):
         """GPU part: (info, host products, t0)."""
@@ -172,6 +184,7 @@ class GpuBackend:
         cp.cuda.Device().synchronize()
         T["H2D + rephase"] = time.perf_counter() - t1
         N, sc = bands.wsclean_size(int(req["pixels"])), float(req["scale"])
+        self._band_change(N, sc)
         L = snapshot.gpu_select(small, {"DATA": d, "FLAG": snap.flag}, sc, "IV")
         del d
         L["timing"].update(T)
