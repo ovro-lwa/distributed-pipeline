@@ -897,8 +897,9 @@ class V3Batch:
                 self._run_snapshots(work)
             log.info("timing %sMHz batch%d phase=snapshots elapsed=%.2f s n=%d", self.band, self.batch,
                      time.perf_counter() - t_snap, len(work))
-            self.daemon.close()
-            self.daemon = None
+            if self.daemon is not None:              # (v3.zest_persistent + aoflag: detached after pass 1)
+                self.daemon.close()
+                self.daemon = None
             w._v3_stop_pool()
             if self.ring is not None:
                 self.ring.close()
@@ -1088,9 +1089,11 @@ class V3Batch:
         recycle = getattr(self.cfg.cluster, "zest_recycle_files", 25)
         futs: Dict[int, Future] = {}
         nxt = [0]
+        saves: List[Future] = []             # v3.aoflag_async_io: copies in flight, in order
         t_pass1 = time.perf_counter()
         try:
-            with ThreadPoolExecutor(max_workers=max(1, self.cfg.cluster.max_feeders)) as feeders:
+            with ThreadPoolExecutor(max_workers=max(1, self.cfg.cluster.max_feeders)) as feeders, \
+                    ThreadPoolExecutor(max_workers=1, thread_name_prefix="v3-aoflag-save") as saver:
                 def top_up(i: int) -> None:
                     while nxt[0] < n and nxt[0] <= i + self.lookahead:
                         try:
@@ -1117,47 +1120,69 @@ class V3Batch:
                         self.daemon.close()
                         self.daemon = self.w._start_daemon()
                     try:
-                        try:
-                            t0 = time.perf_counter()
-                            self._peel(it)
-                            n_zested += 1
-                            log.info("timing %sMHz batch%d stamp=%s phase=zest elapsed=%.2f s", self.band,
-                                     self.batch, it.stamp, time.perf_counter() - t0)
-                        except Exception as e:
-                            log.error("zest %s failed: %s", it.stamp, e)
-                            self.n_fail += 1
-                            self._fail(it.stamp, f"peel: {e}")
-                            continue
                         t0 = time.perf_counter()
-                        dst = cdir / f"{len(saved):04d}_{it.stamp}.slot"
-                        try:
-                            _copy_slot(it.slot, dst)
-                        except OSError as e:                  # disk full etc.: not the input's fault
-                            raise BatchAborted(f"V3_AOFLAG {self.band}MHz batch{self.batch}: saving the peeled "
-                                               f"slot of {it.stamp} failed: {e}") from e
-                        shutil.rmtree(f"{it.slot}.peelsol", ignore_errors=True)    # travels with the copy
-                        if not saved:                         # the first copy sizes the band-hour's
-                            need = (n - 1) * dst.stat().st_size
-                            free = shutil.disk_usage(cdir).free
-                            if free < need:
-                                raise BatchAborted(f"V3_AOFLAG {self.band}MHz batch{self.batch}: {cdir.parent} has "
-                                                   f"{free / 1e9:.0f} GB free, the slot copies need "
-                                                   f"{need / 1e9:.0f} GB more")
-                        log.info("timing %sMHz batch%d stamp=%s phase=aoflag_save elapsed=%.2f s", self.band,
+                        self._peel(it)
+                        n_zested += 1
+                        log.info("timing %sMHz batch%d stamp=%s phase=zest elapsed=%.2f s", self.band,
                                  self.batch, it.stamp, time.perf_counter() - t0)
-                    finally:
+                    except Exception as e:
+                        log.error("zest %s failed: %s", it.stamp, e)
+                        self.n_fail += 1
+                        self._fail(it.stamp, f"peel: {e}")
                         self._release(it.slot)
                         self._cleanup_item(it)
+                        continue
+                    src, dst, first = it.slot, cdir / f"{len(saved):04d}_{it.stamp}.slot", not saved
                     it.slot = dst
                     saved.append(it)
+                    if not self.v3.aoflag_async_io:
+                        self._aoflag_save(it, src, dst, first, n, cdir)
+                        continue
+                    # v3.aoflag_async_io: the copy runs while the next snapshot is peeled; at most one more
+                    # waits behind it (each holds its ring slot until written); a failed copy aborts here
+                    saves.append(saver.submit(self._aoflag_save, it, src, dst, first, n, cdir))
+                    t0 = time.perf_counter()
+                    while saves and (saves[0].done() or len(saves) > 1):
+                        saves.pop(0).result()
+                    if time.perf_counter() - t0 > 0.005:
+                        log.info("timing %sMHz batch%d stamp=%s phase=aoflag_save_wait elapsed=%.3f s", self.band,
+                                 self.batch, it.stamp, time.perf_counter() - t0)
+                while saves:
+                    saves.pop(0).result()
             log.info("timing %sMHz batch%d phase=aoflag_pass1 elapsed=%.2f s n=%d", self.band, self.batch,
                      time.perf_counter() - t_pass1, len(saved))
+            if self.v3.zest_persistent and self.daemon is not None:
+                self.daemon.close()          # v3.zest_persistent: detach (RELEASE) now, pass 2 has no peel
+                self.daemon = None
             if not saved:
                 return
             self.aoflag_stats = self._aoflag_hour(cdir, saved)
             self._image_saved(saved)
         finally:
             shutil.rmtree(cdir, ignore_errors=True)
+
+    def _aoflag_save(self, it: Item, src: Path, dst: Path, first: bool, n: int, cdir: Path) -> None:
+        """Pass 1: the peeled ring slot `src` -> its copy `dst` (with its .peelsol), then the ring slot is released."""
+        try:
+            t0 = time.perf_counter()
+            try:
+                _copy_slot(src, dst)
+            except OSError as e:                  # disk full etc.: not the input's fault
+                raise BatchAborted(f"V3_AOFLAG {self.band}MHz batch{self.batch}: saving the peeled "
+                                   f"slot of {it.stamp} failed: {e}") from e
+            shutil.rmtree(f"{src}.peelsol", ignore_errors=True)    # travels with the copy
+            if first:                             # the first copy sizes the band-hour's
+                need = (n - 1) * dst.stat().st_size
+                free = shutil.disk_usage(cdir).free
+                if free < need:
+                    raise BatchAborted(f"V3_AOFLAG {self.band}MHz batch{self.batch}: {cdir.parent} has "
+                                       f"{free / 1e9:.0f} GB free, the slot copies need "
+                                       f"{need / 1e9:.0f} GB more")
+            log.info("timing %sMHz batch%d stamp=%s phase=aoflag_save elapsed=%.2f s", self.band,
+                     self.batch, it.stamp, time.perf_counter() - t0)
+        finally:
+            self._release(src)
+            self._cleanup_item(it)
 
     def _aoflag_hour(self, cdir: Path, saved: List[Item]) -> dict:
         import subprocess
@@ -1209,26 +1234,54 @@ class V3Batch:
         guard = memory.MemoryGuard(self.v3.ram_reserve_gb, every=self.v3.mem_check_every)
         t_pass2 = time.perf_counter()
         posts: List[tuple] = []
-        with ThreadPoolExecutor(max_workers=3) as post:
+        nload = int(self.v3.aoflag_load_threads) if self.v3.aoflag_async_io else 0
+
+        def load(it: Item):
+            """A ring slot with the flagged copy of `it`: (Item, None), or (None, error)."""
+            slot = self.ring.acquire(timeout=None)
+            try:
+                t0 = time.perf_counter()
+                _copy_slot(it.slot, slot)
+                log.info("timing %sMHz batch%d stamp=%s phase=aoflag_load elapsed=%.2f s", self.band,
+                         self.batch, it.stamp, time.perf_counter() - t0)
+            except Exception as e:
+                self._release(slot)
+                return None, e
+            return Item(it.idx, it.tar, it.stamp, slot, it.replay, None, it.stats), None
+
+        def handle(it: Item, res) -> None:
+            it2, e = res
+            if e is not None:
+                log.error("aoflag reload %s failed: %s", it.stamp, e)
+                self.n_fail += 1
+                self._fail(it.stamp, f"aoflag reload: {e}")
+                return
+            posts.append((it2.stamp, post.submit(self._post, it2)))
+            if guard.check():
+                self._memory_tight()
+
+        with ThreadPoolExecutor(max_workers=3) as post, \
+                ThreadPoolExecutor(max_workers=max(1, nload), thread_name_prefix="v3-aoflag-load") as loader:
+            # v3.aoflag_async_io: nload copies back into ring slots run ahead of the engine, handed to the
+            # post threads in order (as the serial loop); without it each copy is made here, one by one
+            loads: List[tuple] = []
             for it in saved:
                 if self.fatal:
                     break
-                slot = self.ring.acquire(timeout=None)
-                try:
-                    t0 = time.perf_counter()
-                    _copy_slot(it.slot, slot)
-                    log.info("timing %sMHz batch%d stamp=%s phase=aoflag_load elapsed=%.2f s", self.band,
-                             self.batch, it.stamp, time.perf_counter() - t0)
-                except Exception as e:
-                    self._release(slot)
-                    log.error("aoflag reload %s failed: %s", it.stamp, e)
-                    self.n_fail += 1
-                    self._fail(it.stamp, f"aoflag reload: {e}")
+                if not nload:
+                    handle(it, load(it))
                     continue
-                it2 = Item(it.idx, it.tar, it.stamp, slot, it.replay, None, it.stats)
-                posts.append((it2.stamp, post.submit(self._post, it2)))
-                if guard.check():
-                    self._memory_tight()
+                loads.append((it, loader.submit(load, it)))
+                while loads and (loads[0][1].done() or len(loads) > nload):
+                    i0, f0 = loads.pop(0)
+                    handle(i0, f0.result())
+            for i0, f0 in loads:
+                if self.fatal:                         # aborted: give the loaded slots back
+                    it2, _ = f0.result()
+                    if it2 is not None:
+                        self._release(it2.slot)
+                else:
+                    handle(i0, f0.result())
             for stamp, f in posts:
                 try:
                     f.result()

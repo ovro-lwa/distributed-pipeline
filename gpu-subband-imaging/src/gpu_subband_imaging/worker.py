@@ -1034,15 +1034,26 @@ class Worker:
         workers_dir = os.environ["GSI_WORKERS"]
         v3 = getattr(self.cfg.pipeline, "v3", None)
         shm = v3 is not None and v3.peel_io == "shm"
-        return ZestDaemon(
-            start_timeout=v3.peel_start_timeout_s if shm else None,
-            julia=f"{self.cfg.pipeline.env.julia_bin}/julia",
-            project=self.cfg.pipeline.env.ttcalx,
-            daemon_jl=str(Path(workers_dir) / "zest_daemon.jl"),
-            sources=self.cfg.pipeline.cal.sources, env=self._zest_env(),
-            zest_env={"ZEST_COLUMN": "DATA",
-                      **self.cfg.pipeline.peel_for_band(self.band).daemon_env(
-                          self.cfg.pipeline.cal.rfi_sources)})
+        kw = dict(start_timeout=v3.peel_start_timeout_s if shm else None,
+                  julia=f"{self.cfg.pipeline.env.julia_bin}/julia",
+                  project=self.cfg.pipeline.env.ttcalx,
+                  daemon_jl=str(Path(workers_dir) / "zest_daemon.jl"),
+                  sources=self.cfg.pipeline.cal.sources, env=self._zest_env(),
+                  zest_env={"ZEST_COLUMN": "DATA",
+                            **self.cfg.pipeline.peel_for_band(self.band).daemon_env(
+                                self.cfg.pipeline.cal.rfi_sources)})
+        if shm and getattr(v3, "zest_persistent", False):
+            # v3.zest_persistent: the GPU's long-lived daemon (no JIT after the first batch on the GPU);
+            # a private one when another batch holds it or the server cannot be started
+            from .v3 import zest_server
+            try:
+                d = zest_server.PersistentZest.attach(self.gpu, idle_s=v3.zest_persistent_idle_s,
+                                                      release_hard=v3.zest_release_hard, **kw)
+                if d is not None:
+                    return d
+            except Exception as e:
+                log.error("V3_ZEST_PERSISTENT gpu%s: no server (%s): private daemon", self.gpu, e)
+        return ZestDaemon(**kw)
 
     def stitch(self) -> None:
         if not self.cfg.pipeline.movie.enabled:

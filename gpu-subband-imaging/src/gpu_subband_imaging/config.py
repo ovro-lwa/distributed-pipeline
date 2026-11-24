@@ -471,6 +471,21 @@ class V3Params:
     # retry_on_checkpoint_node: a pinned retry waits at most this long (from the first slot elsewhere it was kept
     # from) for its node, then goes to any node (a node that keeps failing the free-core check or does not answer)
     retry_pin_max_wait_s: float = 1800.0
+    # peel_io=shm: keep one zest daemon per GPU alive across batches (v3/zest_server.py), so only the first
+    # batch on a GPU pays the Julia JIT (~40 s of the first peel).  A batch attaches at its start and detaches
+    # at the end of its snapshot loop (aoflag=hour: after pass 1) with a RELEASE that frees the daemon's GPU
+    # memory before the GPU-heavy stages; the server exits after zest_persistent_idle_s without a batch.
+    # Default off (a daemon per batch, as v4)
+    zest_persistent: bool = False
+    zest_persistent_idle_s: float = 1800.0
+    # RELEASE also destroys the daemon's CUDA context (0 MiB while detached; the next peel reloads the
+    # kernels, ~4 s); false keeps the context (~0.3 GB held through the hour stage, next peel ~0.5 s)
+    zest_release_hard: bool = True
+    # aoflag=hour: pass 1 writes the peeled slot copies in a background thread (the next peel does not wait
+    # for the copy; a ring slot is released once its copy is written) and pass 2 reads them back in
+    # aoflag_load_threads threads ahead of the engine; the same bytes.  Default off (serial copies, as v4)
+    aoflag_async_io: bool = False
+    aoflag_load_threads: int = 2
 
     @property
     def active(self) -> bool:
@@ -545,6 +560,12 @@ class V3Params:
             raise ConfigError("v3.checkpoint=archive needs v3.archive (iv)")
         if self.stage_attempts < 1:
             raise ConfigError("v3.stage_attempts must be >= 1")
+        if self.zest_persistent and self.peel_io != "shm":
+            raise ConfigError("v3.zest_persistent needs v3.peel_io=shm")
+        if self.zest_persistent_idle_s <= 0:
+            raise ConfigError("v3.zest_persistent_idle_s must be > 0")
+        if self.aoflag_load_threads < 1:
+            raise ConfigError("v3.aoflag_load_threads must be >= 1")
         if not 0 <= self.max_given_up_fraction <= 1 or self.stale_checkpoint_hours < 0:
             raise ConfigError("v3.max_given_up_fraction must be in [0, 1] and v3.stale_checkpoint_hours >= 0")
         for d in self.spill_dirs:
