@@ -52,7 +52,7 @@
 #   ZEST_SLOT_GPU_IO   SHM slots with ZEST_WORKSPACE (default off): copy the slot's DATA / FLAG to the GPU
 #                      as they are and gather / scatter there (bitwise the same slot as the host loops)
 #   ZEST_PEEL_FAST     sky_rfi engine (default off): TTCalX zest_sky_rfi!(...; peel_fast=true), the same peel
-#                      rearranged on the GPU (~3x faster, equal to the default to float32 rounding), with the
+#                      rearranged on the GPU (~3x faster, another rounding of the default), with the
 #                      visibilities kept in ComplexF32 (the MS / slot precision: the gather and scatter are
 #                      exact); needs ZEST_WORKSPACE, ZEST_FAST_KERNELS, ZEST_DEVICE=gpu and TTCalX with peel_fast
 # Anything but the defaults needs TTCalX with solve_gains!
@@ -161,8 +161,9 @@ fast_kernels && !isdefined(TTCalX, :fast_kernels!) &&
 fast_kernels && (TTCalX.fast_kernels!(true); println("FAST_KERNELS on"))
 # ZEST_PEEL_FAST (default off): the keyword is only passed when on, so older TTCalX runs with it off
 peel_fast = envb("ZEST_PEEL_FAST", false)
-peel_fast && !(sky_rfi && use_workspace && fast_kernels && use_gpu) &&
-    (println("CONFIG_ERROR ZEST_PEEL_FAST needs ZEST_ENGINE=sky_rfi, ZEST_WORKSPACE, ZEST_FAST_KERNELS and ZEST_DEVICE=gpu");
+peel_fast && !(sky_rfi && use_workspace && fast_kernels && use_gpu && !rfi_joint && !warm_start) &&
+    (println("CONFIG_ERROR ZEST_PEEL_FAST needs ZEST_ENGINE=sky_rfi, ZEST_WORKSPACE, ZEST_FAST_KERNELS, ZEST_DEVICE=gpu, " *
+             "ZEST_RFI_MODE=after and no ZEST_WARM_START");
      flush(stdout); exit(2))
 peel_fast && !any(m -> :peel_fast in Base.kwarg_decl(m), methods(TTCalX.zest_sky_rfi!)) &&
     (println("CONFIG_ERROR ZEST_PEEL_FAST needs TTCalX zest_sky_rfi!(...; peel_fast)");

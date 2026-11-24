@@ -219,9 +219,11 @@ class PeelParams:
     # host loops, ~0.2 s less per snapshot in the daemon); needs workspace
     slot_gpu_io: bool = False
     # TTCalX zest_sky_rfi!(...; peel_fast=true) (ZEST_PEEL_FAST; TTCalX with peel_fast): the same peel rearranged on the
-    # GPU, ~3x faster, equal to the default to float32 rounding of the visibilities; the daemon then keeps the
-    # visibilities in ComplexF32.  Needs engine=sky_rfi, workspace, fast_kernels, device=gpu, solver=rk4,
-    # precision=mixed, no smoothing / restore / phase prior, maxiter <= 63.  Off: the peel is bitwise as before.
+    # GPU, ~3x faster; another rounding of the default (float32 level at 55 / 82 MHz, up to ~1e-3 relative at
+    # 23 MHz where an RFI guard decision occasionally flips, as with fast_kernels on vs off); the daemon then
+    # keeps the visibilities in ComplexF32.  Needs engine=sky_rfi, workspace, fast_kernels, device=gpu,
+    # solver=rk4, precision=mixed, rfi_mode=after, no warm_start / smoothing / restore / phase prior,
+    # maxiter <= 63.  Off: the peel is bitwise as before.
     # Not part of NEW_DEFAULTS: off = no ZEST_PEEL_FAST and no provenance key.
     peel_fast: bool = False
     # comma list of passes ("sky", "sky,rfi") whose final gains the daemon writes per snapshot
@@ -255,7 +257,9 @@ class PeelParams:
                                     ("maxiter <= 63", self.maxiter <= 63),
                                     ("reg_max_offset_deg=0", self.reg_max_offset_deg == 0),
                                     ("smooth_flux=0", self.smooth_flux == 0 and not self.rfi_smooth_flux),
-                                    ("restore unset", not self.restore)) if not ok]
+                                    ("restore unset", not self.restore),
+                                    ("rfi_mode=after", self.rfi_mode == "after"),
+                                    ("warm_start=false", not self.warm_start)) if not ok]
             if need:
                 raise ConfigError("peel.peel_fast needs " + ", ".join(need))
         for name in ("smooth_flux", "smooth_below_mhz", "smooth_exempt_flux", "rfi_smooth_flux",

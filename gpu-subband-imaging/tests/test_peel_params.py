@@ -241,7 +241,8 @@ def test_peel_fast_maps_to_env_only_when_on():
 @pytest.mark.parametrize("bad", [dict(workspace=False, slot_gpu_io=False), dict(fast_kernels=False),
                                  dict(precision="double"), dict(solver="damped"), dict(maxiter=64),
                                  dict(smooth_flux=300.0), dict(rfi_smooth_flux=100.0), dict(restore="/j.json"),
-                                 dict(reg_max_offset_deg=0.5), dict(device="cpu", slot_gpu_io=False)])
+                                 dict(reg_max_offset_deg=0.5), dict(device="cpu", slot_gpu_io=False),
+                                 dict(rfi_mode="joint"), dict(warm_start=True)])
 def test_peel_fast_needs_the_validated_setup(bad):
     PeelParams(**{**V4_PEEL, **bad})                               # fine without peel_fast
     with pytest.raises(ConfigError, match="peel.peel_fast needs"):

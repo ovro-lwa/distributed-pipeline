@@ -150,7 +150,7 @@ New options (all off / v2 behaviour by default):
 | `peel.workspace` | false | reuse GPU peel buffers across snapshots (no GC stalls) |
 | `peel.fast_kernels` | false | newer TTCalX GPU kernels (same maths, other rounding) |
 | `peel.slot_gpu_io` | false | peel reads and writes the shared-memory slot on the GPU (needs `workspace`; same slot bitwise) |
-| `peel.peel_fast` | false | TTCalX fast peel (`zest_sky_rfi!(...; peel_fast=true)`, ComplexF32 visibilities in the daemon): ~0.4x the peel time, equal to the default to float32 rounding; needs the v4 peel keys (`engine: sky_rfi`, `precision: mixed`, `workspace`, `fast_kernels`, rk4, no smoothing / restore) and TTCalX with `peel_fast` |
+| `peel.peel_fast` | false | TTCalX fast peel (`zest_sky_rfi!(...; peel_fast=true)`, ComplexF32 visibilities in the daemon): ~0.4x the peel time; another rounding of the default (float32 level at 55 / 82 MHz, up to ~1e-3 relative at 23 MHz where an RFI guard decision occasionally flips, as with `fast_kernels` on vs off); needs the v4 peel keys (`engine: sky_rfi`, `precision: mixed`, `workspace`, `fast_kernels`, rk4, `rfi_mode: after`, no warm_start / smoothing / restore) and TTCalX with `peel_fast` |
 | `v3.prep_gain_cache` | false | prep processes keep the band-hour's per-row gain products (same values; ~0.8 GB RAM per process) |
 | `v3.aoflag` | off | `hour`: AOFlagger after peeling on the whole band-hour (time x frequency per baseline, as the main pipeline's concatenated MS; same flags as the CLI), then imaging; ~+14% night time (`v3.aoflag_procs` 10, needs `hour_source: memory`) |
 | `peel.smooth_flux`, `peel.restore`, ... | off | sponge smoothing and Jupiter restore, not production yet (`docs/peel_config.md`) |
