@@ -218,6 +218,14 @@ class PeelParams:
     # gsi v3 shm slots: gather / scatter the slot on the GPU (ZEST_SLOT_GPU_IO; bitwise the same slot as the
     # host loops, ~0.2 s less per snapshot in the daemon); needs workspace
     slot_gpu_io: bool = False
+    # TTCalX zest_sky_rfi!(...; peel_fast=true) (ZEST_PEEL_FAST; TTCalX with peel_fast): the same peel rearranged on the
+    # GPU, ~3x faster; another rounding of the default (float32 level at 55 / 82 MHz, up to ~1e-3 relative at
+    # 23 MHz where an RFI guard decision occasionally flips, as with fast_kernels on vs off); the daemon then
+    # keeps the visibilities in ComplexF32.  Needs engine=sky_rfi, workspace, fast_kernels, device=gpu,
+    # solver=rk4, precision=mixed, rfi_mode=after, no warm_start / smoothing / restore / phase prior,
+    # maxiter <= 63.  Off: the peel is bitwise as before.
+    # Not part of NEW_DEFAULTS: off = no ZEST_PEEL_FAST and no provenance key.
+    peel_fast: bool = False
     # comma list of passes ("sky", "sky,rfi") whose final gains the daemon writes per snapshot
     # (stages/peel_solutions.py), merged per band-hour into <band dir>/peeling_solutions/.
     # Not part of NEW_DEFAULTS: empty = no ZEST_SAVE_SOLUTIONS and no provenance key, either engine.
@@ -242,6 +250,18 @@ class PeelParams:
             raise ConfigError("peel.slot_gpu_io needs peel.workspace and peel.device=gpu")
         if self.maxiter < 1 or self.peeliter < 1:
             raise ConfigError("peel.maxiter and peel.peeliter must be >= 1")
+        if self.peel_fast:
+            need = [k for k, ok in (("engine=sky_rfi", self.engine == "sky_rfi"), ("workspace", self.workspace),
+                                    ("fast_kernels", self.fast_kernels), ("device=gpu", self.device == "gpu"),
+                                    ("solver=rk4", self.solver == "rk4"), ("precision=mixed", self.precision == "mixed"),
+                                    ("maxiter <= 63", self.maxiter <= 63),
+                                    ("reg_max_offset_deg=0", self.reg_max_offset_deg == 0),
+                                    ("smooth_flux=0", self.smooth_flux == 0 and not self.rfi_smooth_flux),
+                                    ("restore unset", not self.restore),
+                                    ("rfi_mode=after", self.rfi_mode == "after"),
+                                    ("warm_start=false", not self.warm_start)) if not ok]
+            if need:
+                raise ConfigError("peel.peel_fast needs " + ", ".join(need))
         for name in ("smooth_flux", "smooth_below_mhz", "smooth_exempt_flux", "rfi_smooth_flux",
                      "smooth_exempt_below_el_deg"):
             value = getattr(self, name)
@@ -261,6 +281,7 @@ class PeelParams:
     # with the new fields in use: these are still never sent at their defaults
     _UNSET = {"smooth_below_mhz": 0.0, "smooth_exempt_flux": 0.0, "rfi_smooth_flux": None,
               "smooth_exempt_below_el_deg": 0.0, "workspace": False, "fast_kernels": False, "slot_gpu_io": False,
+              "peel_fast": False,
               "save_solutions": ""}
 
     @property
@@ -278,6 +299,8 @@ class PeelParams:
                 d.pop(k, None)
         if not self.save_solutions:
             d.pop("save_solutions", None)
+        if not self.peel_fast:              # provenance as before while the fast peel is off
+            d.pop("peel_fast", None)
         return d
 
     def daemon_env(self, rfi_sources: Optional[str]) -> Dict[str, str]:
