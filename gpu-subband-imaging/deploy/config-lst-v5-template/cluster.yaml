@@ -7,7 +7,7 @@ defaults:
   aoflagger_threads: 2
   free_core_budget: 6
   archive_workers: 2
-  work_root: /fast/pipeline/gsi_v4
+  work_root: /fast/pipeline/gsi_v5
 nodes:
 - alias: lwacalim00
   gpus:
