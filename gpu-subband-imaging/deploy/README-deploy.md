@@ -45,6 +45,12 @@ ssh <node> 'GSI_WARM_CUPY=1 GSI_IMAGER_PYTHON=/opt/devel/pipeline/gsi-v5/venv/bi
     GSI_CUPY_CACHE_DIR=/fast/pipeline/gsi_v5/cupy_cache bash <GSI_HOME>/deploy/setup_node.sh'
 ```
 
+On the calim nodes `setup_node.sh`'s defaults (`/opt/gsi/...`) do not exist; also pass
+`GSI_RUNTIME_ENV=/opt/devel/pipeline/envs/py38_orca_nkosogor GSI_JULIA_BIN=/opt/devel/nkosogor/nkosogor/julia-1.10.4/bin
+GSI_SHARED_DEPOT=/opt/devel/nkosogor/nkosogor/julia_depot` (as the gsi-v4 / gsi-v5 deploys were built). The warm step
+is CPU-bound: ~1.5-2 min on an idle node, up to ~8 min on a heavily loaded one (2026-11-24, calim00); a handful of
+small hour-stage kernels (< 1 s) still compile on the first real run.
+
 or the warm step alone (one GPU of each model on the node):
 
 ```bash
@@ -106,6 +112,9 @@ git run by another user stops with "detected dubious ownership" (do not add a gl
    git -C $G/TTCalX checkout --detach v0.5.0
    git -C $G/TTCalX log --oneline -1          # the reviewed v0.5.0 commit (README "Versions" row)
    ```
+
+   (Before a push, a `git bundle` works the same way; give `git -C <repo> fetch` an absolute bundle path, since a
+   relative one is resolved inside `<repo>`.)
 
    Copy `Manifest.toml` from the v4 tree (no new Julia dependencies) and precompile
    (`GSI_TTCALX_DIR=$G/TTCalX setup_node.sh` on each node).
