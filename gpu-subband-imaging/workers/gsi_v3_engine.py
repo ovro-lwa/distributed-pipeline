@@ -200,6 +200,12 @@ class GpuBackend:
         return self.im.write(info, prods, t0)
 
     def free(self):
+        """Cached GPU memory back (the engine's out-of-memory retry, the hour stage): the CuPy pools and the zenith-frame
+        gridder's tables / plans (TTCALX_SNAP_ZEN; rebuilt by the next zenith-path snapshot), which otherwise stay
+        resident while a snapshot routed to the production path runs."""
+        zen = sys.modules.get("ttcalx_imager.zenith")
+        if zen is not None and hasattr(zen, "clear"):
+            zen.clear()
         self.pool.free_all_blocks()
         self.cp.get_default_pinned_memory_pool().free_all_blocks()
 

@@ -322,6 +322,26 @@ def test_gpu_backend_band_change_clears_the_zenith_caches(monkeypatch):
     assert calls == [1] and b.geom == (4096, 0.03)
 
 
+def test_gpu_backend_free_drops_the_zenith_caches(monkeypatch):
+    """GpuBackend.free (the out-of-memory retry): the zenith-frame gridder's caches go with the CuPy pools (a snapshot
+    routed to the production path must not fail twice because the zenith tables / plans still hold the GPU)."""
+    import types
+    eng = _engine_module()
+    calls = []
+    monkeypatch.setitem(sys.modules, "ttcalx_imager.zenith", types.SimpleNamespace(clear=lambda: calls.append("zen")))
+    pool = types.SimpleNamespace(free_all_blocks=lambda: calls.append("pool"))
+    pinned = types.SimpleNamespace(free_all_blocks=lambda: calls.append("pinned"))
+    b = eng.GpuBackend.__new__(eng.GpuBackend)          # no __init__: no CuPy
+    b.pool = pool
+    b.cp = types.SimpleNamespace(get_default_pinned_memory_pool=lambda: pinned)
+    b.free()
+    assert calls == ["zen", "pool", "pinned"]
+    monkeypatch.delitem(sys.modules, "ttcalx_imager.zenith")
+    calls.clear()
+    b.free()
+    assert calls == ["pool", "pinned"]
+
+
 @needs_v3_imager
 def test_engine_death_restart_reopens_the_store(tmp_path):
     p = tmp_path / "ck.gsiv"

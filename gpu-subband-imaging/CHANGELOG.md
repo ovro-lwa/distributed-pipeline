@@ -24,7 +24,8 @@ Always on (no switch; same results):
 - `_plan_shm` counts min(lookahead + 1, max_feeders) raw MSes in tmpfs (was lookahead), so tmpfs untar is not
   turned off when it fits. No effect at the production settings (lookahead 8, max_feeders 8: min(9, 8) = 8, as
   before); it only matters after the memory guard has lowered the lookahead.
-- The v3 engine drops the zenith gridder's tables at a band change.
+- The v3 engine drops the zenith gridder's tables at a band change, and with the CuPy pools before its
+  out-of-memory retry (`GpuBackend.free`).
 - Router audit (v5 imaging): each snapshot's zenith-router decision (`K_h`, `K_z`, `routed`, `used`, `zen_far`,
   `zen_bad_R`, `zen_oom`; TTCalX `info["zen_router"]`) is in the engine's image reply and in the pilot QA row
   (`QA/.snapshot_stats/*.jsonl`, key `zen`); one INFO line per batch counts them ("zenith router: N snapshot(s),
@@ -34,7 +35,7 @@ Always on (no switch; same results):
 Not in v5 (next release): two batches per GPU (`lanes_per_gpu`, `v3.gpu_share`, `v3/gpu_arbiter.py`).
 
 Tests: `tests/test_v3_dispatch_order.py`, `tests/test_deploy_v5_template.py`, the `peel_fast` cases in
-`tests/test_peel_params.py` / `tests/test_v3_daemon_julia.py`, the engine `uvw_stored` / `zen_summary` cases in
+`tests/test_peel_params.py` / `tests/test_v3_daemon_julia.py`, the engine `uvw_stored` / `zen_summary` / `free` cases in
 `tests/test_v3_engine.py`, the router QA rows in `tests/test_v3_batch.py`. `test_hour_op_sets_the_cache_reserve_and_reports_the_fallback` (failing on main since
 b93d4e5) fixed on the test side.
 
