@@ -1,5 +1,6 @@
 # gsi-v5 nightly template (2026-11-24, release/gsi-v5 + TTCalX v0.5.0): gsi-v4 production template + v5 keys
-# (peel_fast, imaging TTCALX_V5, aoflag_procs 16, retry_on_checkpoint_node, dispatch_band_order), gsi-v5 paths
+# (peel_fast, imaging TTCALX_V5, aoflag_procs 16, retry_on_checkpoint_node + retry_pin_max_wait_s, max_retries 2,
+# dispatch_band_order), gsi-v5 paths
 # gsi-v4 PRODUCTION nightly template (2026-11-05): gsi-v3 production template + v4 keys (slot_gpu_io, prep_procs 6, prep_gain_cache, max_feeders 8)
 # gsi-v3 nightly template: production v2 template (gsi-v2/config-lst-template, 2026-11-03) + v3 in-memory band-hour,
 # main f3a49ce + TTCalX v0.3.1, production-like peeling (no sponge smoothing / restore)
@@ -31,7 +32,7 @@ batch_size: 360
 batch_timeout_seconds: 10800
 # slowest band-hours first inside each LST hour (median dispatch->done of the 2026-11-18 v4 night)
 dispatch_band_order: [78, 69, 73, 64, 55, 82, 59, 50, 46, 41, 32, 36, 27, 23, 18]
-max_retries: 1
+max_retries: 2       # v5: the first retry is pinned to the checkpoint node (v3.retry_on_checkpoint_node), the second goes anywhere
 data_root: /lustre/pipeline/slow
 output_root: /lustre/pipeline/snapshots_gpu_pipeline
 keep_ms_root: /lustre/pipeline/snapshots_gpu_pipeline/_kept_ms
@@ -146,3 +147,4 @@ v3:
   store: auto
   checkpoint: local
   retry_on_checkpoint_node: true
+  retry_pin_max_wait_s: 1800     # the pinned retry waits at most 30 min for its node, then goes anywhere

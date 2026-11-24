@@ -17,7 +17,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, Future
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from . import dispatch, worklist
 from .config import Config, Slot
@@ -236,7 +236,8 @@ class Orchestrator:
         return st
 
     def _choose(self, slot: Slot, pending: List[Job], st: Dict[Tuple[int, str], dict],
-                local: bool, order: Dict[str, int]) -> Optional[Job]:
+                local: bool, order: Dict[str, int],
+                free_cores: Optional[Callable[[str], Optional[float]]] = None) -> Optional[Job]:
         """A ready hour job for this slot, else a batch (this node's band-hours first)."""
         nodes = {s.node for s in self.slots}
 
@@ -247,9 +248,20 @@ class Orchestrator:
 
         def retry_ok(j: Job, e: dict) -> bool:
             """gsi v3 hour_source=memory with local checkpoints: a band-hour's first retry waits for the node that
-            holds its checkpoint (there only the missing snapshots and the hour are redone, not the whole batch)."""
-            return not (pin and j.status == FAILED and j.attempts == 1 and e["node"] in nodes
-                        and e["node"] != slot.node)
+            holds its checkpoint (there only the missing snapshots and the hour are redone, not the whole batch),
+            but not for a node that left the cluster or does not answer, and at most v3.retry_pin_max_wait_s
+            (from the first refusal); later retries go anywhere."""
+            home = e["node"]
+            if not (pin and j.status == FAILED and j.attempts == 1 and home in nodes and home != slot.node):
+                return True
+            if (free_cores or dispatch.node_free_cores)(home) is None:
+                self._unpin(j, home, "does not answer")
+                return True
+            since = self._pin_since_map().setdefault((j.band, j.batch), self._clock())
+            if self._clock() - since >= self._pin_max_wait_s:
+                self._unpin(j, home, f"busy for {self._pin_max_wait_s:.0f} s")
+                return True
+            return False
 
         for j in pending:
             if is_hour_job(j):
@@ -264,6 +276,27 @@ class Orchestrator:
         return min(cands, key=lambda j: (st[(j.band, self._group(j))]["node"] != slot.node,
                                          order.get(self._group(j), 99), border.get(j.band, len(border)),
                                          j.band, j.batch))
+
+    # retry_on_checkpoint_node: (band, batch) -> clock time of the first refusal of a slot elsewhere
+    _clock = staticmethod(time.monotonic)
+
+    def _pin_since_map(self) -> Dict[Tuple[int, int], float]:
+        if getattr(self, "_pin_since", None) is None:
+            self._pin_since: Dict[Tuple[int, int], float] = {}
+            self._pin_logged: set = set()
+        return self._pin_since
+
+    @property
+    def _pin_max_wait_s(self) -> float:
+        from .config import v3_params
+        return float(v3_params(self.cfg.pipeline).retry_pin_max_wait_s)
+
+    def _unpin(self, j: Job, home: str, why: str) -> None:
+        self._pin_since_map()
+        if (j.band, j.batch) not in self._pin_logged:
+            self._pin_logged.add((j.band, j.batch))
+            log.warning("%sMHz batch%d: checkpoint node %s %s; its retry may run on any node", j.band, j.batch,
+                        home, why)
 
     @property
     def _retry_on_same_node(self) -> bool:
@@ -281,6 +314,13 @@ class Orchestrator:
         free: List[Slot] = list(self.slots)
         running: Dict[Future, Slot] = {}
         while True:
+            fcs: Dict[str, Optional[float]] = {}     # node_free_cores once per node and pass
+
+            def free_cores(node: str) -> Optional[float]:
+                if node not in fcs:
+                    fcs[node] = dispatch.node_free_cores(node)
+                return fcs[node]
+
             rows = self.ledger.all()
             st = self._band_hours(rows)
             pending = []
@@ -302,15 +342,12 @@ class Orchestrator:
                 pending.append(j)
             if not pending and not running:
                 break
-            cores: Dict[str, bool] = {}
             for slot in list(free):
-                j = self._choose(slot, pending, st, local, order)
+                j = self._choose(slot, pending, st, local, order, free_cores)
                 if j is None:
                     continue
-                if slot.node not in cores:
-                    fc = dispatch.node_free_cores(slot.node)
-                    cores[slot.node] = fc is None or fc >= budget
-                if not cores[slot.node]:
+                fc = free_cores(slot.node)
+                if not (fc is None or fc >= budget):
                     continue
                 free.remove(slot)
                 pending.remove(j)

@@ -54,18 +54,132 @@ def _st(jobs, node_of=None):
             for j in jobs}
 
 
+def _up(node):            # node_free_cores of a reachable node
+    return 48.0
+
+
 def test_failed_band_hour_waits_for_its_checkpoint_node():
     o = _orch()
     failed = Job(18, 0, 358, status=FAILED, slot="n1:gpu0", attempts=1)
     queued = Job(55, 1, 358, status=QUEUED)
     st = _st([failed, queued], {18: "n1"})
     order = {"00h": 0, "01h": 1}
-    assert o._choose(Slot("n2", 0), [failed, queued], st, False, order) is queued     # not the redo elsewhere
-    assert o._choose(Slot("n1", 1), [failed, queued], st, False, order) is failed     # its node, any GPU
-    second = Job(18, 0, 358, status=FAILED, slot="n1:gpu0", attempts=2)              # 2nd retry: anywhere
-    assert o._choose(Slot("n2", 0), [second, queued], _st([second, queued], {18: "n1"}), False, order) is second
-    gone = Job(18, 0, 358, status=FAILED, slot="n9:gpu0", attempts=1)                # node left the cluster
-    assert o._choose(Slot("n2", 0), [gone, queued], _st([gone, queued], {18: "n9"}), False, order) is gone
+    assert o._choose(Slot("n2", 0), [failed, queued], st, False, order, _up) is queued     # not the redo elsewhere
+    assert o._choose(Slot("n1", 1), [failed, queued], st, False, order, _up) is failed     # its node, any GPU
+    second = Job(18, 0, 358, status=FAILED, slot="n1:gpu0", attempts=2)                   # 2nd retry: anywhere
+    assert o._choose(Slot("n2", 0), [second, queued], _st([second, queued], {18: "n1"}), False, order,
+                     _up) is second
+    gone = Job(18, 0, 358, status=FAILED, slot="n9:gpu0", attempts=1)                     # node left the cluster
+    assert o._choose(Slot("n2", 0), [gone, queued], _st([gone, queued], {18: "n9"}), False, order, _up) is gone
+
+
+def test_pinned_retry_does_not_wait_for_an_unreachable_node():
+    o = _orch()
+    failed = Job(18, 0, 358, status=FAILED, slot="n1:gpu0", attempts=1)
+    queued = Job(55, 1, 358, status=QUEUED)
+    st = _st([failed, queued], {18: "n1"})
+    fc = {"n1": None, "n2": 48.0}
+    assert o._choose(Slot("n2", 0), [failed, queued], st, False, {"00h": 0, "01h": 1}, fc.get) is failed
+
+
+def test_pinned_retry_goes_anywhere_after_the_pin_timeout():
+    o = _orch(v3={**AOF, "checkpoint": "local", "retry_on_checkpoint_node": True, "retry_pin_max_wait_s": 600})
+    now = [1000.0]
+    o._clock = lambda: now[0]
+    failed = Job(18, 0, 358, status=FAILED, slot="n1:gpu0", attempts=1)
+    queued = Job(55, 1, 358, status=QUEUED)
+    st = _st([failed, queued], {18: "n1"})
+    order = {"00h": 0, "01h": 1}
+    assert o._choose(Slot("n2", 0), [failed, queued], st, False, order, _up) is queued    # first refusal: t=1000
+    now[0] = 1599.0
+    assert o._choose(Slot("n2", 0), [failed, queued], st, False, order, _up) is queued
+    now[0] = 1600.0
+    assert o._choose(Slot("n2", 0), [failed, queued], st, False, order, _up) is failed
+
+
+# -- the streaming loop with the pin (fake ledger rows, dispatch and clock) -------------------------------------
+class _ImmediatePool:
+    def __init__(self, *a, **k):
+        pass
+
+    def submit(self, fn, *args):
+        from concurrent.futures import Future
+        f = Future()
+        f.set_result(fn(*args))
+        return f
+
+    def shutdown(self, wait=True):
+        pass
+
+
+def _stream(tmp_path, monkeypatch, max_retries, fails, fc, wait_s=1800.0):
+    """One band-hour (55 MHz 00h, batch 0) on n1 / n2 (hour_source memory, local checkpoint, pinned retry).  `fails`:
+    attempt numbers that fail; `fc(node, attempt)`: free cores (budget 10).  Returns [(attempt, node, clock)]."""
+    import threading
+    from gpu_subband_imaging import dispatch, orchestrator
+    from gpu_subband_imaging.ledger import Ledger
+    o = Orchestrator.__new__(Orchestrator)
+    pl = SimpleNamespace(layout="lst", stream_hour_images=True, keep_ms_local=None, lst_hours=[0],
+                         max_retries=max_retries, wideband_per_hour=False, calcache_cleanup="none",
+                         batch_timeout_seconds=60, dispatch_band_order=[],
+                         v3=V3Params(**AOF, checkpoint="local", retry_on_checkpoint_node=True,
+                                     retry_pin_max_wait_s=wait_s))
+    o.cfg = SimpleNamespace(pipeline=pl, cluster=SimpleNamespace(free_core_budget=10))
+    o.slots = [Slot("n1", 0), Slot("n2", 0)]
+    o.ledger = Ledger(tmp_path / "ledger.sqlite")
+    o._lock = threading.Lock()
+    o._wideband_done, o._wideband_pool = set(), None
+    o._write_metadata = lambda *a, **k: None
+    o._cleanup_manifests = lambda: None
+    o.group_of = {(55, 0): "00h"}
+    o.ledger.seed([Job(55, 0, 358)])
+    now = [0.0]
+    o._clock = lambda: now[0]
+    runs = []
+
+    def run_one(slot, j):
+        runs.append((len(runs) + 1, slot.node, now[0]))
+        if len(runs) in fails:
+            o.ledger.mark_failed(j, "boom")
+            return False
+        o.ledger.mark_done(j)
+        return True
+
+    o._run_one = run_one
+    monkeypatch.setattr(orchestrator, "ThreadPoolExecutor", _ImmediatePool)
+    monkeypatch.setattr(dispatch, "node_free_cores", lambda node: fc(node, len(runs)))
+    monkeypatch.setattr(orchestrator.time, "sleep", lambda s: now.__setitem__(0, now[0] + 60.0))
+    o.run(poll=1)
+    return runs, {(j.band, j.batch): j.status for j in Ledger(tmp_path / "ledger.sqlite").all()}
+
+
+def test_stream_pinned_retry_waits_for_its_node_then_goes_elsewhere(tmp_path, monkeypatch):
+    # n1 is over its core budget after the first attempt failed there: the retry waits 1800 s, then runs on n2
+    runs, st = _stream(tmp_path, monkeypatch, 2, {1}, lambda node, n: 2.0 if (node == "n1" and n >= 1) else 48.0)
+    assert [r[:2] for r in runs] == [(1, "n1"), (2, "n2")]
+    assert runs[1][2] >= 1800.0 and st[(55, 0)] == "done"
+
+
+def test_stream_pinned_retry_runs_on_its_node_when_it_is_free(tmp_path, monkeypatch):
+    runs, st = _stream(tmp_path, monkeypatch, 2, {1}, lambda node, n: 48.0)
+    assert [r[:2] for r in runs] == [(1, "n1"), (2, "n1")] and runs[1][2] == 0.0 and st[(55, 0)] == "done"
+
+
+def test_stream_pinned_retry_skips_an_unreachable_node(tmp_path, monkeypatch):
+    runs, st = _stream(tmp_path, monkeypatch, 2, {1}, lambda node, n: None if (node == "n1" and n >= 1) else 48.0)
+    assert [r[:2] for r in runs] == [(1, "n1"), (2, "n2")] and runs[1][2] == 0.0 and st[(55, 0)] == "done"
+
+
+def test_stream_two_retries_first_pinned_second_anywhere(tmp_path, monkeypatch):
+    # attempt 2 (first retry) on n1; n1 then over budget: attempt 3 (second retry) goes to n2 without waiting
+    runs, st = _stream(tmp_path, monkeypatch, 2, {1, 2},
+                       lambda node, n: 2.0 if (node == "n1" and n >= 2) else 48.0)
+    assert [r[:2] for r in runs] == [(1, "n1"), (2, "n1"), (3, "n2")] and runs[2][2] == 0.0
+    assert st[(55, 0)] == "done"
+    # max_retries 1 (one retry): the band-hour is given up after the pinned retry failed
+    (tmp_path / "r1").mkdir()
+    runs, st = _stream(tmp_path / "r1", monkeypatch, 1, {1, 2}, lambda node, n: 48.0)
+    assert [r[:2] for r in runs] == [(1, "n1"), (2, "n1")] and st[(55, 0)] == "skipped"
 
 
 @pytest.mark.parametrize("v3", [dict(AOF, checkpoint="local"),                       # default: off, as before
@@ -76,7 +190,7 @@ def test_no_pinning_by_default_or_without_local_checkpoints(v3):
     failed = Job(18, 0, 358, status=FAILED, slot="n1:gpu0", attempts=1)
     queued = Job(55, 1, 358, status=QUEUED)
     assert o._choose(Slot("n2", 0), [failed, queued], _st([failed, queued], {18: "n1"}), False,
-                     {"00h": 0, "01h": 1}) is failed
+                     {"00h": 0, "01h": 1}, _up) is failed
 
 
 def test_dispatch_band_order_inside_an_lst_hour():
@@ -86,7 +200,7 @@ def test_dispatch_band_order_inside_an_lst_hour():
     def seq(o):
         left, out = list(jobs), []
         while left:
-            j = o._choose(Slot("n1", 0), left, _st(left), False, order)
+            j = o._choose(Slot("n1", 0), left, _st(left), False, order, _up)
             out.append((j.band, j.batch))
             left.remove(j)
         return out

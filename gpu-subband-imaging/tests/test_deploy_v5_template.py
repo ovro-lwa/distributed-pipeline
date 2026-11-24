@@ -23,6 +23,7 @@ def test_v5_template_loads_with_the_v5_switches(monkeypatch):
     assert v3.aoflag == "hour" and v3.aoflag_procs == 16 and v3.retry_on_checkpoint_node
     assert v3.checkpoint == "local" and v3.archive == "none" and v3.hour_source == "memory"   # where the pin applies
     assert sorted(pl.dispatch_band_order) == sorted(pl.bands) and pl.dispatch_band_order[0] == 78
+    assert pl.max_retries == 2 and v3.retry_pin_max_wait_s == 1800    # one pinned retry, then one anywhere
 
 
 def _strings(x):

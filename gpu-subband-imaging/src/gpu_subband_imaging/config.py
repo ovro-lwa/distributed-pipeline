@@ -466,6 +466,9 @@ class V3Params:
     # hour_source=memory, checkpoint=local: a band-hour's first retry waits for the node with its checkpoint (only
     # the missing snapshots + the hour are redone there, not the whole batch elsewhere); off = any node, as before
     retry_on_checkpoint_node: bool = False
+    # retry_on_checkpoint_node: a pinned retry waits at most this long (from the first slot elsewhere it was kept
+    # from) for its node, then goes to any node (a node that keeps failing the free-core check or does not answer)
+    retry_pin_max_wait_s: float = 1800.0
 
     @property
     def active(self) -> bool:

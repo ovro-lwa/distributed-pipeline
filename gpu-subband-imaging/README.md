@@ -146,7 +146,9 @@ v5 = the v4 setup with TTCalX `v0.5.0` and (the deployed template, as a diff aga
 peel:    {engine: sky_rfi, precision: mixed, workspace: true, fast_kernels: true, slot_gpu_io: true,
           solver: rk4, maxiter: 5, peel_fast: true}           # v4 peel keys + peel_fast
 imaging: {gpu_env: {TTCALX_V5: "1"}}                           # next to v4's GSI_SVD_QUANTUM: '0'
-v3:      {aoflag_procs: 16, retry_on_checkpoint_node: true}    # with v4's aoflag: hour, checkpoint: local
+v3:      {aoflag_procs: 16, retry_on_checkpoint_node: true,    # with v4's aoflag: hour, checkpoint: local
+          retry_pin_max_wait_s: 1800}
+max_retries: 2                                                 # v4: 1; retry 1 pinned, retry 2 anywhere
 dispatch_band_order: [78, 69, 73, 64, 55, 82, 59, 50, 46, 41, 32, 36, 27, 23, 18]   # slowest first (2026-11-18)
 ```
 
