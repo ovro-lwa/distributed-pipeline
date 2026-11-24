@@ -176,10 +176,11 @@ def serve(spec: dict) -> int:
                         break
             finally:
                 logging.getLogger("gsi.peel").removeHandler(coll)
-                try:
-                    conn.close()
-                except OSError:
-                    pass
+                for f in (rf.close, conn.close):
+                    try:
+                        f()
+                    except (OSError, NameError):
+                        pass
             if not released and not stop:     # the client went away without detaching (killed worker)
                 log.warning("ZEST_SERVER client %d left without RELEASE: releasing", n_clients)
                 try:
@@ -296,7 +297,7 @@ class PersistentZest:
     @classmethod
     def attach(cls, gpu, julia: str, project: str, daemon_jl: str, sources: str, env: Dict[str, str],
                zest_env: Dict[str, str], start_timeout: Optional[float] = 600.0, idle_s: float = 1800.0,
-               release_hard: bool = False, python: Optional[str] = None,
+               release_hard: bool = True, python: Optional[str] = None,
                io_margin_s: float = 120.0) -> Optional["PersistentZest"]:
         """The GPU's server (reused or started); None when another batch holds it (use a private daemon)."""
         d = base_dir()
@@ -388,7 +389,8 @@ class PersistentZest:
     def _hello(c: socket.socket) -> Optional[dict]:
         try:
             c.sendall(b'{"op": "hello"}\n')
-            line = c.makefile("r").readline()
+            with c.makefile("r") as rf:
+                line = rf.readline()
             r = json.loads(line)
             return r if r.get("ok") else None
         except (OSError, ValueError):
@@ -399,7 +401,8 @@ class PersistentZest:
         try:
             c.settimeout(60.0)
             c.sendall(b'{"op": "quit"}\n')
-            c.makefile("r").readline()
+            with c.makefile("r") as rf:
+                rf.readline()
         except OSError:
             pass
         finally:
@@ -451,10 +454,13 @@ class PersistentZest:
         if self.closed:
             return
         self.closed = True
-        try:
-            self._sock.close()
-        except OSError:
-            pass
+        # the reader made by makefile() keeps the socket's fd open: close it too, and shut the connection down,
+        # so the server sees the end of this client at once (else it waits for it forever)
+        for f in (lambda: self._rf.close(), lambda: self._sock.shutdown(socket.SHUT_RDWR), lambda: self._sock.close()):
+            try:
+                f()
+            except OSError:
+                pass
         try:
             os.close(self._lock_fd)
         except OSError:
