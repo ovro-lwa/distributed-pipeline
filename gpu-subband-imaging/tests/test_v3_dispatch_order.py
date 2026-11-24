@@ -27,13 +27,70 @@ def test_defaults_are_off():
     assert pl.dispatch_band_order == []
 
 
-def test_dispatch_band_order_is_read(tmp_path):
+def _load(tmp_path, **keys):
     c = tmp_path / "cfg"
-    shutil.copytree(CONFIG, c)
-    d = yaml.safe_load((c / "pipeline.yaml").read_text())
-    d["dispatch_band_order"] = [73, "55", 82]
+    if not c.exists():
+        shutil.copytree(CONFIG, c)
+    d = yaml.safe_load((CONFIG / "pipeline.yaml").read_text())
+    for k, v in keys.items():
+        if "." in k:
+            sec, name = k.split(".")
+            d.setdefault(sec, {})[name] = v
+        else:
+            d[k] = v
     (c / "pipeline.yaml").write_text(yaml.safe_dump(d))
-    assert config_mod.load_pipeline(c / "pipeline.yaml").dispatch_band_order == [73, 55, 82]
+    return config_mod.load_pipeline(c / "pipeline.yaml")
+
+
+def test_dispatch_band_order_is_read(tmp_path):
+    assert _load(tmp_path, dispatch_band_order=[73, 55, 82]).dispatch_band_order == [73, 55, 82]
+    assert _load(tmp_path, dispatch_band_order=None).dispatch_band_order == []
+    assert _load(tmp_path, dispatch_band_order=[]).dispatch_band_order == []
+
+
+@pytest.mark.parametrize("bad,match", [([73, "55", 82], "list of integer"), ([73, True], "list of integer"),
+                                       ("73", "list of integer"), ([73, 18], "not in bands"),
+                                       ([73, 55, 73], "twice")])
+def test_dispatch_band_order_is_checked(tmp_path, bad, match):
+    with pytest.raises(config_mod.ConfigError, match=match):
+        _load(tmp_path, dispatch_band_order=bad)
+
+
+def test_band_order_helper():
+    assert config_mod._band_order(None, [55, 73]) == [] and config_mod._band_order([73], [55, 73]) == [73]
+    with pytest.raises(config_mod.ConfigError):
+        config_mod._band_order([55.0], [55, 73])
+
+
+@pytest.mark.parametrize("key", ["peel.peel_fast", "v3.retry_on_checkpoint_node"])
+@pytest.mark.parametrize("bad", ["yes", 1, "true"])
+def test_switches_must_be_bool(tmp_path, key, bad):
+    with pytest.raises(config_mod.ConfigError, match=key):
+        _load(tmp_path, **{key: bad})
+
+
+@pytest.mark.parametrize("bad", [-1, "600", True])
+def test_retry_pin_max_wait_is_checked(bad):
+    with pytest.raises(config_mod.ConfigError, match="retry_pin_max_wait_s"):
+        V3Params(retry_pin_max_wait_s=bad)
+
+
+def test_retry_on_checkpoint_node_without_its_setup_warns(caplog):
+    with caplog.at_level("WARNING", logger="gsi.config"):
+        V3Params(**AOF, checkpoint="local", retry_on_checkpoint_node=True)
+    assert not caplog.records
+    for v3 in (dict(retry_on_checkpoint_node=True),                                       # v2 path
+               dict(AOF, checkpoint="local", archive="iv", archive_root="/tmp/a", retry_on_checkpoint_node=True)):
+        caplog.clear()
+        with caplog.at_level("WARNING", logger="gsi.config"):
+            V3Params(**v3)
+        assert any("retry_on_checkpoint_node only acts" in r.getMessage() for r in caplog.records)
+
+
+def test_metadata_has_dispatch_band_order_only_when_set(tmp_path):
+    from gpu_subband_imaging.metadata import pipeline_dict
+    assert "dispatch_band_order" not in pipeline_dict(config_mod.load_pipeline(CONFIG / "pipeline.yaml"))
+    assert pipeline_dict(_load(tmp_path, dispatch_band_order=[82, 23]))["dispatch_band_order"] == [82, 23]
 
 
 # -- orchestrator -----------------------------------------------------------------------------------------------

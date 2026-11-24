@@ -61,7 +61,7 @@ def test_run_metadata_pipeline_block_is_13405ce_at_defaults(tmp_path, monkeypatc
     cfg = replace(cfg, pipeline=replace(cfg.pipeline, output_root=str(tmp_path)))
     monkeypatch.setenv("GSI_CODE_VERSION", "abc123")
     data = json.loads(write_run_metadata(cfg, str(CONFIG), "running").read_text())
-    assert set(data["pipeline"]) == {f.name for f in fields(PipelineConfig)} - {"v3"}
+    assert set(data["pipeline"]) == {f.name for f in fields(PipelineConfig)} - {"v3", "dispatch_band_order"}
     assert list(data["pipeline"]["peel"]) == sorted(PEEL_13405CE)          # sort_keys
     assert data["pipeline"]["peel"] == json.loads(json.dumps(cfg.pipeline.peel.as_dict()))
     peel = PeelParams(**dict(vars(cfg.pipeline.peel), fast_kernels=True))
@@ -70,3 +70,6 @@ def test_run_metadata_pipeline_block_is_13405ce_at_defaults(tmp_path, monkeypatc
     assert data["pipeline"]["v3"]["stage_attempts"] == 2
     assert set(PeelParams.NEW_DEFAULTS) <= set(data["pipeline"]["peel"])
     assert data["pipeline"]["peel"]["fast_kernels"] is True
+    cfg3 = replace(cfg, pipeline=replace(cfg.pipeline, dispatch_band_order=[82, 23]))
+    assert json.loads(write_run_metadata(cfg3, str(CONFIG), "running").read_text())["pipeline"][
+        "dispatch_band_order"] == [82, 23]

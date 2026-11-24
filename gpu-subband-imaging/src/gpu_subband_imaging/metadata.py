@@ -142,11 +142,14 @@ def _config_hashes(config_dir: Path) -> Dict[str, str]:
 
 def pipeline_dict(p: PipelineConfig) -> Dict[str, object]:
     """The run record's "pipeline" block: 13405ce's keys while the new settings are at their defaults
-    (as provenance.json): "peel" is PeelParams.as_dict, and "v3" is left out while it equals V3Params()."""
+    (as provenance.json): "peel" is PeelParams.as_dict, and "v3" is left out while it equals V3Params(), and
+    "dispatch_band_order" while it is empty."""
     d = asdict(p)
     d["peel"] = p.peel.as_dict()
     if p.v3 == V3Params():
         d.pop("v3", None)
+    if not p.dispatch_band_order:            # default dispatch: no key, as before the switch existed
+        d.pop("dispatch_band_order", None)
     return d
 
 

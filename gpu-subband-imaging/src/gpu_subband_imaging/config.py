@@ -250,6 +250,8 @@ class PeelParams:
             raise ConfigError("peel.slot_gpu_io needs peel.workspace and peel.device=gpu")
         if self.maxiter < 1 or self.peeliter < 1:
             raise ConfigError("peel.maxiter and peel.peeliter must be >= 1")
+        if not isinstance(self.peel_fast, bool):
+            raise ConfigError(f"peel.peel_fast must be true or false, not {self.peel_fast!r}")
         if self.peel_fast:
             need = [k for k, ok in (("engine=sky_rfi", self.engine == "sky_rfi"), ("workspace", self.workspace),
                                     ("fast_kernels", self.fast_kernels), ("device=gpu", self.device == "gpu"),
@@ -548,6 +550,17 @@ class V3Params:
         for d in self.spill_dirs:
             if Path(d).parts[:2] == ("/", "lustre"):
                 raise ConfigError("v3.spill_dirs must be node-local (the archive is the Lustre copy)")
+        if not isinstance(self.retry_on_checkpoint_node, bool):
+            raise ConfigError(f"v3.retry_on_checkpoint_node must be true or false, not {self.retry_on_checkpoint_node!r}")
+        if (isinstance(self.retry_pin_max_wait_s, bool) or not isinstance(self.retry_pin_max_wait_s, (int, float))
+                or not self.retry_pin_max_wait_s >= 0):
+            raise ConfigError(f"v3.retry_pin_max_wait_s must be >= 0, not {self.retry_pin_max_wait_s!r}")
+        if self.retry_on_checkpoint_node and not (self.hour_source == "memory" and self.checkpoint == "local"
+                                                  and self.archive == "none"):
+            import logging
+            logging.getLogger("gsi.config").warning(
+                "v3.retry_on_checkpoint_node only acts with hour_source: memory, checkpoint: local and archive: none "
+                "(here %s, %s, %s); ignored", self.hour_source, self.checkpoint, self.archive)
 
 
 def v3_params(pipeline) -> V3Params:
@@ -829,9 +842,24 @@ def load_pipeline(path: Union[str, Path]) -> PipelineConfig:
         max_files_per_hour=(int(d["max_files_per_hour"])
                             if d.get("max_files_per_hour") else None),
         description=str(d.get("description") or ""),
-        dispatch_band_order=[int(b) for b in (d.get("dispatch_band_order") or [])],
+        dispatch_band_order=_band_order(d.get("dispatch_band_order"), d["bands"]),
         v3=V3Params(**(d.get("v3") or {})),
     )
+
+
+def _band_order(value, bands) -> List[int]:
+    """pipeline.yaml dispatch_band_order: a list of distinct integer bands, each one of `bands` (None / [] = [])."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or any(isinstance(b, bool) or not isinstance(b, int) for b in value):
+        raise ConfigError(f"dispatch_band_order must be a list of integer bands (MHz), got {value!r}")
+    configured = {int(b) for b in bands}
+    unknown = [b for b in value if b not in configured]
+    if unknown:
+        raise ConfigError(f"dispatch_band_order has bands that are not in bands: {unknown}")
+    if len(set(value)) != len(value):
+        raise ConfigError(f"dispatch_band_order lists a band twice: {value}")
+    return list(value)
 
 
 def _date(value) -> str:
