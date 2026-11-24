@@ -274,6 +274,45 @@ def test_memory_batch_end_to_end(env, caplog):
 
 
 @needs_v3_imager
+def test_zen_router_decisions_in_the_qa_rows_and_the_batch_log(env, caplog):
+    """v5 imaging (the imager's zenith router ran; fake backend GSI_V3_FAKE_ZEN): each pilot QA row in
+    QA/.snapshot_stats carries the engine's "zen" decision and the batch logs one INFO line with the counts; the
+    rows keep every key of a v4 row.  Without the router (the default above) the rows have no "zen" key."""
+    tmp = env.tmp
+    cfg = _config(tmp, delete_checkpoint=False)
+    cfg.pipeline.imaging.gpu_env.update(GSI_V3_FAKE_ZEN="1", GSI_V3_FAKE_ZEN_FAR=STAMPS[2])
+    with caplog.at_level(logging.INFO, logger="gsi"):
+        _worker(cfg, FakeDaemon()).run_batch(env.tars)
+    b = _bdir(tmp)
+    rows = [json.loads(ln) for f in (b / "QA" / ".snapshot_stats").glob("*.jsonl") for ln in f.read_text().splitlines()]
+    assert len(rows) == 5
+    by = {r["stamp"]: r for r in rows}
+    for s in STAMPS:
+        z = by[s]["zen"]
+        assert {"stamp", "ts", "file", "t", "rms", "peak"} <= set(by[s])
+        assert z["K_h"] == 20 and z["K_z"] == 11 and z["routed"] is True
+        assert z["used"] is (s != STAMPS[2]) and (z["zen_far"] == -0.2) is (s == STAMPS[2])
+    lines = [ln for ln in caplog.text.splitlines() if "zenith router:" in ln]
+    assert len(lines) == 1
+    assert "5 snapshot(s), 4 zenith path, 1 production path (1 fallback: far 1, bad_R 0, oom 0)" in lines[0]
+    # the hour step reads the rows as before
+    from gpu_subband_imaging import hour_lst
+    assert len(hour_lst.read_stats(b / "QA", newest=True)) == 5
+
+
+@needs_v3_imager
+def test_no_zen_key_without_the_router(env, caplog):
+    tmp = env.tmp
+    cfg = _config(tmp, delete_checkpoint=False)
+    with caplog.at_level(logging.INFO, logger="gsi"):
+        _worker(cfg, FakeDaemon()).run_batch(env.tars)
+    rows = [json.loads(ln) for f in (_bdir(tmp) / "QA" / ".snapshot_stats").glob("*.jsonl")
+            for ln in f.read_text().splitlines()]
+    assert len(rows) == 5 and all("zen" not in r for r in rows)
+    assert "zenith router:" not in caplog.text
+
+
+@needs_v3_imager
 def test_rerun_replays_missing_records_and_redoes_the_hour(env, caplog):
     tmp = env.tmp
     cfg = _config(tmp, delete_checkpoint=False)

@@ -169,6 +169,7 @@ class V3Batch:
         self.fatal: Optional[str] = None     # set -> the batch is aborted at once
         self.deadline: Optional[float] = None
         self.n_guard = 0                     # memory guard escalation level
+        self.zen_counts: Dict[str, int] = {}  # zenith-router decisions of this batch's images (zen_tally)
 
     # -- names ------------------------------------------------------------------------------------
     def kept_stem(self, stamp: str) -> str:
@@ -683,7 +684,10 @@ class V3Batch:
                 missing = [str(f) for f in files if not f.exists()]
                 if missing:
                     raise RuntimeError(f"engine reported ok but {missing} are missing")
-                w._post_image(it.stamp, files)
+                zen = (r.get("image") or {}).get("zen")
+                if zen:
+                    self._zen_tally(zen)
+                w._post_image(it.stamp, files, qa_extra={"zen": zen} if zen else None)
                 if self.v3.archive != "none":
                     w._archive_expected(it.stamp)
             return True
@@ -753,6 +757,26 @@ class V3Batch:
                 log.error("V3_ENGINE_CULPRIT %sMHz stamp=%s: the engine died again with only this snapshot "
                           "in it: %s", self.band, it.stamp, e)
                 raise
+
+    def _zen_tally(self, zen: dict) -> None:
+        """Count one snapshot's zenith-router decision (the engine's image reply "zen", gsi_v3_engine.zen_summary)."""
+        keys = ["n", "zen" if zen.get("used") else "production"]
+        if zen.get("routed") and not zen.get("used"):
+            keys.append("fallback")
+        keys += [k for k in ("zen_far", "zen_bad_R", "zen_oom") if zen.get(k) is not None]
+        with self._lock:
+            for k in keys:
+                self.zen_counts[k] = self.zen_counts.get(k, 0) + 1
+
+    def _log_zen_counts(self) -> None:
+        """One INFO line per batch with the zenith-router counts (only when the router ran: v5 imaging)."""
+        c = dict(self.zen_counts)
+        if not c:
+            return
+        log.info("batch %sMHz/%d: zenith router: %d snapshot(s), %d zenith path, %d production path "
+                 "(%d fallback: far %d, bad_R %d, oom %d)", self.band, self.batch, c.get("n", 0), c.get("zen", 0),
+                 c.get("production", 0), c.get("fallback", 0), c.get("zen_far", 0), c.get("zen_bad_R", 0),
+                 c.get("zen_oom", 0))
 
     def _abort(self, why: str) -> None:
         if self.fatal is None:
@@ -932,6 +956,7 @@ class V3Batch:
                 w._write_qa_stats()
             if hour_ok and self.store_path is not None and self.v3.archive == "none" and self.v3.delete_checkpoint:
                 self._delete_checkpoint()
+        self._log_zen_counts()
         log.info("batch %sMHz/%d: total elapsed %.2f s for %d files (%d failed)", self.band, self.batch,
                  time.perf_counter() - batch_start, self.n_ok, self.n_fail)
         if self.n_fail:

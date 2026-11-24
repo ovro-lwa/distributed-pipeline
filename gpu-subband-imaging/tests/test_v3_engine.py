@@ -37,7 +37,7 @@ def _env(**kw):
     env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(REPO / "src"), IMAGER_SRC or ""]),
                GSI_V3_ENGINE_BACKEND="fake", CUDA_VISIBLE_DEVICES="")
     for k in ("GSI_V3_FAKE_SLEEP", "GSI_V3_FAKE_FAIL", "GSI_V3_FAKE_DIE", "GSI_V3_FAKE_FATAL", "GSI_V3_FAKE_HOUR",
-              "GSI_V3_FAKE_DEGENERATE"):
+              "GSI_V3_FAKE_DEGENERATE", "GSI_V3_FAKE_ZEN", "GSI_V3_FAKE_ZEN_FAR"):
         env.pop(k, None)
     env.update({k: str(v) for k, v in kw.items()})
     return env
@@ -236,6 +236,66 @@ def test_small_of_carries_the_stored_uvw_of_a_rotated_snapshot():
     s = eng.small_of(snap, req, dict(uvw_new=new, pd_image=(0.2, 0.65), R=None, pd_record=None))
     assert np.array_equal(s["uvw_stored"], uvw) and s["uvw_stored"].dtype == np.float64
     assert np.array_equal(s["uvw"], new) and s["phase_dir"] == (0.2, 0.65)
+
+
+def _engine_module():
+    sys.path.insert(0, str(REPO / "workers"))
+    try:
+        import gsi_v3_engine as eng
+    finally:
+        sys.path.pop(0)
+    return eng
+
+
+def test_zen_summary_of_the_imager_info():
+    """zen_summary: the router's K_h / K_z, its choice and whether the zenith path ran, with the fallback reasons;
+    None (no "zen" key in the reply) when the router did not run, as with the v5 switches off."""
+    eng = _engine_module()
+    assert eng.zen_summary(dict(status="ok", K=20)) is None
+    assert eng.zen_summary(dict(status="empty")) is None
+    used = eng.zen_summary(dict(zen_router=dict(K_h=20, K_z=11, routed=True, used=True), zen=dict(K=11, Nz=1528)))
+    assert used == dict(K_h=20, K_z=11, routed=True, used=True, zen_far=None, zen_bad_R=None, zen_oom=None)
+    prod = eng.zen_summary(dict(zen_router=dict(K_h=14, K_z=11, routed=False, used=False)))
+    assert prod["routed"] is False and prod["used"] is False and prod["K_h"] == 14
+    far = eng.zen_summary(dict(zen_router=dict(K_h=40, K_z=11, routed=True, used=False), zen_far_n_min=-0.2))
+    assert far["routed"] and not far["used"] and far["zen_far"] == -0.2 and far["zen_oom"] is None
+    oom = eng.zen_summary(dict(zen_router=dict(K_h=40, K_z=11, routed=True, used=False), zen_oom="out of memory"))
+    assert oom["zen_oom"] == "out of memory" and not oom["used"]
+    bad = eng.zen_summary(dict(zen_router=dict(K_h=40, K_z=11, routed=True, used=False), zen_bad_R_rel=3e-5))
+    assert bad["zen_bad_R"] == 3e-5
+    # an imager reporting only the zenith info (no router keys): used, K_z from it
+    old = eng.zen_summary(dict(zen=dict(K=9, Nz=100)))
+    assert old["used"] and old["K_z"] == 9 and old["K_h"] is None
+    # the reply summary: "zen" only when the router ran (key added, the others unchanged)
+    s0 = eng._image_summary(dict(status="ok", files=["a"], K=20))
+    assert "zen" not in s0 and set(s0) == {"status", "files", "timing", "niter", "beam", "gpu_pool_GB", "V_rms_box"}
+    s1 = eng._image_summary(dict(status="ok", files=["a"], zen_router=dict(K_h=20, K_z=11, routed=True, used=True)))
+    assert s1["zen"]["used"] and set(s1) - set(s0) == {"zen"}
+    json.dumps(s1)
+
+
+@needs_v3_imager
+def test_image_slot_reply_carries_the_router_decision(tmp_path):
+    """The engine's image_slot reply has image.zen when the imager's router ran (fake backend GSI_V3_FAKE_ZEN), and
+    no zen key otherwise."""
+    for zen in (False, True):
+        c = _client(**({"GSI_V3_FAKE_ZEN": "1", "GSI_V3_FAKE_ZEN_FAR": "20261031_101701_23MHz"} if zen else {}))
+        try:
+            c.request("store_open", path=None, backend="ram", header=None)
+            got = []
+            for k in range(2):
+                stem = f"20261031_10170{k}_23MHz"
+                _peeled_slot(tmp_path / f"s{zen}{k}", seed=k, stem=stem)
+                r = c.request("image_slot", timeout=60, **_req(tmp_path / f"s{zen}{k}", tmp_path / f"i{zen}{k}", stem))
+                assert r["status"] == "ok"
+                got.append(r["image"].get("zen"))
+        finally:
+            c.close()
+        if not zen:
+            assert got == [None, None]
+        else:
+            assert got[0]["used"] and got[0]["K_h"] == 20 and got[0]["K_z"] == 11 and got[0]["zen_far"] is None
+            assert got[1]["routed"] and not got[1]["used"] and got[1]["zen_far"] == -0.2
 
 
 def test_gpu_backend_band_change_clears_the_zenith_caches(monkeypatch):

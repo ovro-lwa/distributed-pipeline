@@ -269,7 +269,9 @@ class FakeBackend:
     """Tests: no GPU.  'Images' the selected Stokes I / V sums into 8 x 8 FITS files.  Test hooks
     by environment: GSI_V3_FAKE_SLEEP (s per image), GSI_V3_FAKE_FAIL (stem: error reply),
     GSI_V3_FAKE_DIE (stem: the process exits), GSI_V3_FAKE_FATAL (stem: a fatal CUDA-like error),
-    GSI_V3_FAKE_DEGENERATE (stem: the imager's DegeneratePSFError, a permanent input failure)."""
+    GSI_V3_FAKE_DEGENERATE (stem: the imager's DegeneratePSFError, a permanent input failure),
+    GSI_V3_FAKE_ZEN (any value: the info keys of the v5 imager's zenith router, every snapshot on the zenith path
+    except stem GSI_V3_FAKE_ZEN_FAR, a ZenFar fallback)."""
     name = "fake"
     imager = "fake"
 
@@ -295,6 +297,13 @@ class FakeBackend:
         v_img = np.full((8, 8), float(np.abs(0.5j * (d[:, :, 2] - d[:, :, 1]))[ok].sum()), np.float32)
         info = dict(ms=small["path"], stem=small["stem"], status="ok", timing={"fake": 0.0},
                     phase_dir=list(small["phase_dir"]), uvw_new_sum=float(np.abs(small["uvw"]).sum()))
+        if os.environ.get("GSI_V3_FAKE_ZEN"):             # as ttcalx_imager.snapshot.image_arrays with TTCALX_SNAP_ZEN
+            far = os.environ.get("GSI_V3_FAKE_ZEN_FAR") == stem
+            info["zen_router"] = dict(K_h=20, K_z=11, routed=True, used=not far)
+            if far:
+                info["zen_far_n_min"] = -0.2
+            else:
+                info["zen"] = dict(K=11, Nz=1528, Nz_psf=2274)
         prods = [(f"{req['prefix']}-I-image.fits", i_img, "I"), (f"{req['prefix']}-V-image.fits", v_img, "V")]
         return info, prods, t0
 
@@ -665,10 +674,34 @@ def _break_abandoned_lock(path, pids):
             pass
 
 
+def zen_summary(info):
+    """The zenith-frame router's decision of one snapshot (ttcalx_imager >= 0.5.0 with TTCALX_SNAP_ZEN on, i.e.
+    imaging.gpu_env TTCALX_V5=1): dict(K_h, K_z, routed (the router chose the zenith path), used (it ran),
+    zen_far (n_min of a ZenFar fallback), zen_bad_R (relative R-fit residual of a ZenBadR fallback), zen_oom
+    (the out-of-memory message of an OOM fallback)); None when the router did not run (v5 switches off, an
+    older imager, an empty snapshot), so replies and QA rows of such snapshots are unchanged."""
+    r = info.get("zen_router")
+    fallback = {k: info.get(src) for k, src in (("zen_far", "zen_far_n_min"), ("zen_bad_R", "zen_bad_R_rel"),
+                                                ("zen_oom", "zen_oom"))}
+    if not isinstance(r, dict):
+        if not info.get("zen") and all(v is None for v in fallback.values()):
+            return None
+        # an imager that reports the path but not the router's K (zenith info / fallback keys only)
+        z = info.get("zen") if isinstance(info.get("zen"), dict) else {}
+        r = dict(K_h=None, K_z=z.get("K"), routed=True, used=bool(z))
+    out = dict(K_h=r.get("K_h"), K_z=r.get("K_z"), routed=bool(r.get("routed")), used=bool(r.get("used")))
+    out.update(fallback)
+    return out
+
+
 def _image_summary(info):
-    return dict(status=info.get("status"), files=info.get("files", []), timing=info.get("timing"),
-                niter=info.get("niter"), beam=info.get("beam"), gpu_pool_GB=info.get("gpu_pool_GB"),
-                V_rms_box=info.get("V_rms_box"))
+    s = dict(status=info.get("status"), files=info.get("files", []), timing=info.get("timing"),
+             niter=info.get("niter"), beam=info.get("beam"), gpu_pool_GB=info.get("gpu_pool_GB"),
+             V_rms_box=info.get("V_rms_box"))
+    z = zen_summary(info)
+    if z is not None:                         # key added only when the zenith router ran
+        s["zen"] = z
+    return s
 
 
 def main() -> int:

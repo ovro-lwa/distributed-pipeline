@@ -744,8 +744,10 @@ class Worker:
                     bp_table=pl.cal.bp, xy_table=pl.cal.xy,
                     peel=peel.as_dict() if hasattr(peel, "as_dict") else vars(peel))
 
-    def _post_image(self, stamp: str, fits_files: List[Path]) -> None:
-        """Frame, pilot QA row, fpack and archive move of one snapshot's [I, V] FITS (v2 and v3)."""
+    def _post_image(self, stamp: str, fits_files: List[Path], qa_extra: Optional[dict] = None) -> None:
+        """Frame, pilot QA row, fpack and archive move of one snapshot's [I, V] FITS (v2 and v3).
+        qa_extra: keys added to the v3 pilot QA row (QA/.snapshot_stats; e.g. the engine's zenith-router
+        decision "zen"); the row's other keys are unchanged."""
         vmax = self.cfg.pipeline.movie.fixed_vmax
         if (self.cfg.pipeline.movie.enabled and
                 self.cfg.pipeline.movie.scale_mode == "adaptive_i"):
@@ -777,6 +779,8 @@ class Worker:
             if v3:      # v3: the row time (newest-row QA semantics) and the row persisted at once
                 row = dict(stamp=stamp, ts=lst.timestamp(stamp), file=self._archive_paths(stamp)[1].name,
                            t=time.time(), **image.v_stats(fits_files[1]))
+                for k, v in (qa_extra or {}).items():
+                    row.setdefault(k, v)
                 self._qa.append(row)
                 self._append_qa_row(row)
             else:

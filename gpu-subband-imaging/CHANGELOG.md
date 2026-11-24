@@ -25,15 +25,21 @@ Always on (no switch; same results):
   turned off when it fits. No effect at the production settings (lookahead 8, max_feeders 8: min(9, 8) = 8, as
   before); it only matters after the memory guard has lowered the lookahead.
 - The v3 engine drops the zenith gridder's tables at a band change.
+- Router audit (v5 imaging): each snapshot's zenith-router decision (`K_h`, `K_z`, `routed`, `used`, `zen_far`,
+  `zen_bad_R`, `zen_oom`; TTCalX `info["zen_router"]`) is in the engine's image reply and in the pilot QA row
+  (`QA/.snapshot_stats/*.jsonl`, key `zen`); one INFO line per batch counts them ("zenith router: N snapshot(s),
+  Z zenith path, P production path (F fallback: ...)"). Rows and replies of snapshots without the router (v5
+  imaging off, an older imager) are unchanged.
 
 Not in v5 (next release): two batches per GPU (`lanes_per_gpu`, `v3.gpu_share`, `v3/gpu_arbiter.py`).
 
 Tests: `tests/test_v3_dispatch_order.py`, `tests/test_deploy_v5_template.py`, the `peel_fast` cases in
-`tests/test_peel_params.py` / `tests/test_v3_daemon_julia.py`, the engine `uvw_stored` cases in
-`tests/test_v3_engine.py`. `test_hour_op_sets_the_cache_reserve_and_reports_the_fallback` (failing on main since
+`tests/test_peel_params.py` / `tests/test_v3_daemon_julia.py`, the engine `uvw_stored` / `zen_summary` cases in
+`tests/test_v3_engine.py`, the router QA rows in `tests/test_v3_batch.py`. `test_hour_op_sets_the_cache_reserve_and_reports_the_fallback` (failing on main since
 b93d4e5) fixed on the test side.
 
-TTCalX: deploy the tag `v0.5.0` (branch `release/v0.5.0`, reviewed at 83f56b7; to be pushed and tagged on GitHub
+TTCalX: deploy the tag `v0.5.0` (branch `release/v0.5.0`, reviewed at 83f56b7, final f363db6 = 83f56b7 + the zenith
+router's SVD prefetch fix and `zen_router` info; to be pushed and tagged on GitHub
 first), see `deploy/README-deploy.md`, "Switching to v5", which also has the nightly switch
 (`deploy/nightly/`: the gsi-v4 `daily_guarded` / `night_guarded` drivers with the deploy dir as a variable) and
 the rollback.
