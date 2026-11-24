@@ -159,6 +159,9 @@ fast_kernels && !isdefined(TTCalX, :fast_kernels!) &&
     (println("CONFIG_ERROR ZEST_FAST_KERNELS needs TTCalX with fast_kernels! (TTCalX v0.3.0)");
      flush(stdout); exit(2))
 fast_kernels && (TTCalX.fast_kernels!(true); println("FAST_KERNELS on"))
+# (before the ZEST_PEEL_FAST checks: those look at zest_sky_rfi!'s methods)
+sky_rfi && !isdefined(TTCalX, :zest_sky_rfi!) &&
+    (println("CONFIG_ERROR ZEST_ENGINE=sky_rfi needs TTCalX with zest_sky_rfi!"); flush(stdout); exit(2))
 # ZEST_PEEL_FAST (default off): the keyword is only passed when on, so older TTCalX runs with it off
 peel_fast = envb("ZEST_PEEL_FAST", false)
 peel_fast && !(sky_rfi && use_workspace && fast_kernels && use_gpu && !rfi_joint && !warm_start) &&
@@ -173,8 +176,6 @@ peel_fast && println("PEEL_FAST on")
 # element type of the peeled visibilities: ComplexF32 with ZEST_PEEL_FAST (the MS / slot DATA type, so the
 # conversions in and out are exact), else ComplexF64 as before
 const VIS_T = peel_fast ? ComplexF32 : ComplexF64
-sky_rfi && !isdefined(TTCalX, :zest_sky_rfi!) &&
-    (println("CONFIG_ERROR ZEST_ENGINE=sky_rfi needs TTCalX with zest_sky_rfi!"); flush(stdout); exit(2))
 # zest_sky_rfi! runs on host arrays as well (TTCalX host backend), so device=cpu is allowed
 sky_rfi && !(fast_io && exact_model && geometric && residual_guard && flag_model) &&
     error("ZEST_ENGINE=sky_rfi is the exact-model, geometric-UVW, guarded zest: " *
