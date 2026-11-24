@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Precompile TTCalX and probe each GPU on one worker node.
+# GSI_WARM_CUPY=1: also pre-warm the imager's CuPy kernel cache (deploy/warm_cupy_cache.py, synthetic data) with
+# GSI_IMAGER_PYTHON (the deploy's venv python) into GSI_CUPY_CACHE_DIR (the config's hour_imaging.env
+# CUPY_CACHE_DIR), once per GPU model of the node.
 set -eo pipefail
 CONDA_SH=${GSI_CONDA_SH:-/opt/miniconda3/etc/profile.d/conda.sh}
 RUNTIME_ENV=${GSI_RUNTIME_ENV:-/opt/gsi/envs/runtime}
@@ -31,3 +34,19 @@ for g in $(seq 0 $((NGPU-1))); do
     fi
 done
 echo "[$(hostname)] capabilities -> $CAPS"
+
+if [ "${GSI_WARM_CUPY:-0}" = "1" ]; then
+    : "${GSI_IMAGER_PYTHON:?GSI_WARM_CUPY=1 needs GSI_IMAGER_PYTHON (e.g. /opt/devel/pipeline/gsi-v5/venv/bin/python)}"
+    : "${GSI_CUPY_CACHE_DIR:?GSI_WARM_CUPY=1 needs GSI_CUPY_CACHE_DIR (the hour_imaging.env CUPY_CACHE_DIR of the config)}"
+    HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    WARMED="|"
+    for g in $(seq 0 $((NGPU-1))); do
+        grep -qx "gpu $g OK" "$CAPS" || continue
+        model=$(nvidia-smi -i "$g" --query-gpu=name --format=csv,noheader 2>/dev/null)
+        case "$WARMED" in *"|$model|"*) continue ;; esac
+        echo "[$(hostname)] warming the CuPy kernel cache on gpu $g ($model) -> $GSI_CUPY_CACHE_DIR"
+        (cd /tmp && CUDA_VISIBLE_DEVICES=$g CUPY_CACHE_DIR="$GSI_CUPY_CACHE_DIR" \
+            ${GSI_TASKSET_CPUS:+taskset -c $GSI_TASKSET_CPUS} nice -n "${GSI_NICE:-10}" \
+            "$GSI_IMAGER_PYTHON" "$HERE/warm_cupy_cache.py" ${GSI_WARM_CUPY_ARGS:-}) && WARMED="$WARMED$model|"
+    done
+fi

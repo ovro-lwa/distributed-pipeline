@@ -31,6 +31,8 @@ Always on (no switch; same results):
   (`QA/.snapshot_stats/*.jsonl`, key `zen`); one INFO line per batch counts them ("zenith router: N snapshot(s),
   Z zenith path, P production path (F fallback: ...)"). Rows and replies of snapshots without the router (v5
   imaging off, an older imager) are unchanged.
+- `deploy/warm_cupy_cache.py` (`setup_node.sh` with `GSI_WARM_CUPY=1`): pre-warms a node's CuPy kernel cache on
+  synthetic data, so the first snapshot of a batch does not compile ~220 kernels (~36 s in the v5 e2e).
 
 Not in v5 (next release): two batches per GPU (`lanes_per_gpu`, `v3.gpu_share`, `v3/gpu_arbiter.py`).
 

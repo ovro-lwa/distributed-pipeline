@@ -32,6 +32,34 @@ ssh <node> 'bash <GSI_HOME>/deploy/setup_node.sh'
 
 It writes `/tmp/gsi_caps_$USER.txt`; put failed GPUs in `cluster.yaml` `disabled_gpus`.
 
+### CuPy kernel cache (new imager release)
+
+The snapshot / hour imager compiles each new CuPy kernel once per GPU architecture into `CUPY_CACHE_DIR`
+(`hour_imaging.env` of the config; node-local, e.g. `/fast/pipeline/gsi_v5/cupy_cache`). Without a warm cache the
+first snapshot of every batch on a node compiles them (v5 e2e test: ~36 s, ~220 kernels, although the cache had
+been seeded from v4's). Pre-warm it on each GPU node after the imager venv is built, as the user that runs the
+pipeline (the cache files must be readable and writable by it):
+
+```bash
+ssh <node> 'GSI_WARM_CUPY=1 GSI_IMAGER_PYTHON=/opt/devel/pipeline/gsi-v5/venv/bin/python \
+    GSI_CUPY_CACHE_DIR=/fast/pipeline/gsi_v5/cupy_cache bash <GSI_HOME>/deploy/setup_node.sh'
+```
+
+or the warm step alone (one GPU of each model on the node):
+
+```bash
+CUPY_CACHE_DIR=/fast/pipeline/gsi_v5/cupy_cache CUDA_VISIBLE_DEVICES=0 taskset -c 0-23 nice -n 10 \
+    /opt/devel/pipeline/gsi-v5/venv/bin/python <GSI_HOME>/deploy/warm_cupy_cache.py
+```
+
+`warm_cupy_cache.py` needs no data: it images synthetic visibilities at each band-geometry tier (18-36, 41-59,
+64-82 MHz) through the engine's snapshot path (GPU re-phase, `gpu_select` with the stored-frame UVW, the zenith and
+the production gridding, DFT and degridding major cycles) and one small hour stage per tier, with `TTCALX_V5=1`
+(`--no-v5` for the v4 settings, `--no-hour` for snapshots only); ~1.5 min on an empty cache (216 kernel files on
+an A4000), ~40 s on a warm one. It ends with "N kernel file(s) added"; a second run adds none, and real 32 / 82 MHz
+snapshots (zenith and production path) imaged after it added none either (2026-11-24, calim07). Do it while no
+pipeline runs on the node (it uses up to 10 GB of the GPU, and the whole GPU in the hour stage).
+
 ## Updating a copy
 
 `deploy/sync_to_server.sh <host> <dest>` rsyncs the committed subproject (not `config*/`) and
@@ -92,6 +120,8 @@ git run by another user stops with "detected dubious ownership" (do not add a gl
    ```
 3. gsi: `release/gsi-v5` (or its tag) checked out as `$G/distributed-pipeline`, and `$G/gsi_env.sh` =
    `deploy/nightly/gsi_env.sh` (gsi-v4's with `gsi-v4` -> `gsi-v5`).
+   Then pre-warm the CuPy kernel cache on every GPU node ("CuPy kernel cache" above:
+   `GSI_WARM_CUPY=1 GSI_IMAGER_PYTHON=$G/venv/bin/python GSI_CUPY_CACHE_DIR=/fast/pipeline/gsi_v5/cupy_cache`).
 4. Template: `cp -r $G/distributed-pipeline/gpu-subband-imaging/deploy/config-lst-v5-template
    $G/config-lst-v5-template` (the v4 nightly template + the v5 keys; `git log -p` of the directory shows the
    change). Its paths assume `$G` and `/fast/pipeline/gsi_v5`.
