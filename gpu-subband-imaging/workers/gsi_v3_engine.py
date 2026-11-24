@@ -106,7 +106,9 @@ def rotation(snap, image_centre, record_centre):
 
 
 def small_of(snap, req, rot):
-    """The RawLoader 'small' dict of a slot snapshot (snapload._raw_to_shm's values), rotated."""
+    """The RawLoader 'small' dict of a slot snapshot (snapload._raw_to_shm's values), rotated.
+    A rotated snapshot also carries its stored UVW (``uvw_stored``): an imager with zenith-frame snapshot
+    gridding (ttcalx_imager.zenith, TTCALX_SNAP_ZEN=1 in imaging.gpu_env) grids in that frame; others ignore it."""
     m = snap.meta
     t = np.asarray(snap.time)
     rotated = rot is not None and rot["uvw_new"] is not None
@@ -117,16 +119,19 @@ def small_of(snap, req, rot):
                 freqs=np.array(m["freqs"], np.float64), chan_width=np.array(m["chan_width"], np.float64),
                 phase_dir=(float(pd[0]), float(pd[1])), telescope=str(m.get("telescope") or "OVRO-LWA"),
                 observer=str(m.get("observer") or ""), field_name=str(m.get("field_name") or ""),
-                path=str(req.get("path") or req.get("slot")), stem=str(req.get("stem") or snap.stem), column="DATA")
+                path=str(req.get("path") or req.get("slot")), stem=str(req.get("stem") or snap.stem), column="DATA",
+                uvw_stored=np.asarray(snap.uvw, np.float64) if rotated else None)
 
 
-def prepare(snap, req, rot, xp=np):
+def prepare(snap, req, rot, xp=np, h2d=None):
     """(small, DATA) of a slot snapshot as the imager would read them from v2's chgcentre'd MS copy:
     the rotated UVW of every row in ``small`` and DATA re-phased with rotate.rephase (on ``xp``:
-    CuPy in the GPU backend, numpy in the fake one -- the same code)."""
+    CuPy in the GPU backend, numpy in the fake one -- the same code).  h2d: the imager's host-to-device
+    copy (ttcalx_imager.snapshot.h2d: through a page-locked staging buffer with TTCALX_PINNED_H2D=1, opt-in only;
+    the same bytes as cp.asarray)."""
     from ttcalx_imager import rotate
     small = small_of(snap, req, rot)
-    d = xp.asarray(snap.data)
+    d = h2d(snap.data)[0] if h2d is not None else xp.asarray(snap.data)
     if rot is not None and rot["uvw_new"] is not None:
         d = rotate.rephase(d, np.asarray(snap.uvw)[:, 2], rot["uvw_new"][:, 2], small["freqs"], xp=xp)
     return small, d
@@ -154,8 +159,19 @@ class GpuBackend:
         if quantum > 0:
             snapshot.snapshot_svd = _reuse_svd(quantum, self.pool, gridder)
         self.im = SnapshotImager()
+        self.geom = None
         import ttcalx_imager
         self.imager = ttcalx_imager.__file__
+
+    def _band_change(self, N, sc):
+        """A new snapshot geometry (another band) without an hour stage in between: the zenith-frame gridder's
+        tables / plans of the previous band go (ttcalx_imager.zenith, TTCALX_SNAP_ZEN; before_hour / after_hour clear
+        them with gridder.clear_caches).  The production gridder's caches are keyed by geometry and kept as before."""
+        if self.geom is not None and self.geom != (N, sc):
+            zen = sys.modules.get("ttcalx_imager.zenith")
+            if zen is not None and hasattr(zen, "clear"):
+                zen.clear()
+        self.geom = (N, sc)
 
     def image(self, snap, req, rot):
         """GPU part: (info, host products, t0)."""
@@ -164,10 +180,11 @@ class GpuBackend:
         t0 = time.perf_counter()
         T = {}
         t1 = time.perf_counter()
-        small, d = prepare(snap, req, rot, xp=cp)
+        small, d = prepare(snap, req, rot, xp=cp, h2d=getattr(snapshot, "h2d", None))
         cp.cuda.Device().synchronize()
         T["H2D + rephase"] = time.perf_counter() - t1
         N, sc = bands.wsclean_size(int(req["pixels"])), float(req["scale"])
+        self._band_change(N, sc)
         L = snapshot.gpu_select(small, {"DATA": d, "FLAG": snap.flag}, sc, "IV")
         del d
         L["timing"].update(T)
