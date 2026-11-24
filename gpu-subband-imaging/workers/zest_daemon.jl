@@ -52,9 +52,9 @@
 #   ZEST_SLOT_GPU_IO   SHM slots with ZEST_WORKSPACE (default off): copy the slot's DATA / FLAG to the GPU
 #                      as they are and gather / scatter there (bitwise the same slot as the host loops)
 #   ZEST_PEEL_FAST     sky_rfi engine (default off): TTCalX zest_sky_rfi!(...; peel_fast=true), the same peel
-#                      rearranged on the GPU (~3x faster, another rounding of the default), with the
-#                      visibilities kept in ComplexF32 (the MS / slot precision: the gather and scatter are
-#                      exact); needs ZEST_WORKSPACE, ZEST_FAST_KERNELS, ZEST_DEVICE=gpu and TTCalX with peel_fast
+#                      rearranged on the GPU (~2.6x faster, 0.38x the peel time; another rounding of the
+#                      default), with the visibilities kept in ComplexF32 (the MS / slot precision: the
+#                      gather and scatter are exact); needs ZEST_WORKSPACE, ZEST_FAST_KERNELS, ZEST_DEVICE=gpu and TTCalX with peel_fast
 # Anything but the defaults needs TTCalX with solve_gains!
 # (TTCalX gsi-v2 = 748884a and later).
 #
@@ -671,7 +671,11 @@ end
 
 `read_ms_fast` on a slot: baselines in order of first appearance as (min, max) antenna
 pairs, autocorrelations dropped, flags OR'd over the polarizations, the UVW of the
-baseline's row, identity calibration, ComplexF32 -> ComplexF64.
+baseline's row, identity calibration.  The slot's ComplexF32 DATA is gathered on the host into
+ComplexF64 matrices (exact), or on the GPU with ZEST_SLOT_GPU_IO (`gpu_slot_vis`); with
+ZEST_WORKSPACE on the GPU the visibilities are the reused device arrays (`slot_device_vis`) of
+element type `VIS_T`: ComplexF64, or ComplexF32 with ZEST_PEEL_FAST (the slot's own type; every
+conversion is exact).  Without ZEST_WORKSPACE they stay ComplexF64 (ZEST_PEEL_FAST needs it).
 """
 function read_slot(path::String; gpu::Bool=true)
     open(path, "r") do io
