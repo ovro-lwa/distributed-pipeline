@@ -214,6 +214,30 @@ def test_permanent_input_failure_contract():
     assert not eng.is_permanent_input_failure(RuntimeError("cudaErrorIllegalAddress"))
 
 
+def test_small_of_carries_the_stored_uvw_of_a_rotated_snapshot():
+    """small_of hands the imager the stored-frame UVW of a rotated snapshot (uvw_stored, for the zenith-frame
+    snapshot gridding of ttcalx_imager.zenith; ignored by an imager without it or with it off) and None when
+    the snapshot is not rotated; the rotated UVW stay in 'uvw'."""
+    from types import SimpleNamespace
+    sys.path.insert(0, str(REPO / "workers"))
+    try:
+        import gsi_v3_engine as eng
+    finally:
+        sys.path.pop(0)
+    rng = np.random.default_rng(0)
+    uvw = rng.normal(size=(6, 3)) * 100
+    snap = SimpleNamespace(antenna1=np.arange(6), antenna2=np.arange(6)[::-1].copy(), uvw=uvw, weight=np.ones((6, 4)),
+                           time=np.full(6, 5.3e9), stem="20261031_101007_23MHz",
+                           meta=dict(freqs=[5e7], chan_width=[1e5], phase_dir=[0.1, 0.6]))
+    req = dict(path="/kept/x.ms", stem="20261031_101007_23MHz")
+    s = eng.small_of(snap, req, None)
+    assert s["uvw_stored"] is None and np.array_equal(s["uvw"], uvw)
+    new = uvw + 1.0
+    s = eng.small_of(snap, req, dict(uvw_new=new, pd_image=(0.2, 0.65), R=None, pd_record=None))
+    assert np.array_equal(s["uvw_stored"], uvw) and s["uvw_stored"].dtype == np.float64
+    assert np.array_equal(s["uvw"], new) and s["phase_dir"] == (0.2, 0.65)
+
+
 @needs_v3_imager
 def test_engine_death_restart_reopens_the_store(tmp_path):
     p = tmp_path / "ck.gsiv"
