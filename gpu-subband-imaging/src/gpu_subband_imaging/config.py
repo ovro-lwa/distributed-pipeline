@@ -486,6 +486,9 @@ class V3Params:
     # aoflag_load_threads threads ahead of the engine; the same bytes.  Default off (serial copies, as v4)
     aoflag_async_io: bool = False
     aoflag_load_threads: int = 2
+    # prep processes calibrate + average this many rows at a time (cache-sized passes; every value comes from the
+    # same per-row operations, so the slot is bitwise the same; ~-0.5 s CPU per 55 MHz snapshot); 0 = whole arrays
+    prep_block_rows: int = 0
 
     @property
     def active(self) -> bool:
@@ -566,6 +569,8 @@ class V3Params:
             raise ConfigError("v3.zest_persistent_idle_s must be > 0")
         if self.aoflag_load_threads < 1:
             raise ConfigError("v3.aoflag_load_threads must be >= 1")
+        if isinstance(self.prep_block_rows, bool) or not isinstance(self.prep_block_rows, int) or self.prep_block_rows < 0:
+            raise ConfigError(f"v3.prep_block_rows must be an integer >= 0, not {self.prep_block_rows!r}")
         if not 0 <= self.max_given_up_fraction <= 1 or self.stale_checkpoint_hours < 0:
             raise ConfigError("v3.max_given_up_fraction must be in [0, 1] and v3.stale_checkpoint_hours >= 0")
         for d in self.spill_dirs:

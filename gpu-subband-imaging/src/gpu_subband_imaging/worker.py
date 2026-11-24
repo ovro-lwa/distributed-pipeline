@@ -361,6 +361,8 @@ class Worker:
         from .v3 import fastprep
         # v3.prep_gain_cache: the prep processes keep the per-row gain products of the band-hour (fastcal)
         env = {"GSI_PREP_GAIN_CACHE": "1"} if getattr(self.cfg.pipeline.v3, "prep_gain_cache", False) else {}
+        if getattr(self.cfg.pipeline.v3, "prep_block_rows", 0):          # v3.prep_block_rows (bitwise the same)
+            env["GSI_PREP_BLOCK_ROWS"] = str(int(self.cfg.pipeline.v3.prep_block_rows))
         self._v3_pool = ProcessPoolExecutor(max_workers=n,
                                             mp_context=multiprocessing.get_context("spawn"),
                                             initializer=fastprep.set_env, initargs=(env,))

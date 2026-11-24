@@ -187,6 +187,28 @@ def read_raw(raw_ms: str) -> Dict[str, Any]:
     return out
 
 
+def _cal_average_blocked(data, flag, flag_row, a1, a2, freq, J, dead, badants: str, sigma_in, chanbin: int,
+                         block: int):
+    """fastcal.calibrate_arrays then average_like_mstransform, on `block` rows at a time (both work per row).
+    The gain products come from the band-hour cache when prep_gain_cache is on (sliced per block)."""
+    n, c, p = data.shape
+    m = c // chanbin
+    if c % chanbin:
+        raise ValueError(f"{c} channels are not a multiple of chanbin {chanbin}")
+    gains = fastcal._gain_products(J, a1, a2) if os.environ.get("GSI_PREP_GAIN_CACHE", "0") == "1" else None
+    avg = np.empty((n, m, p), np.complex64)
+    aflag = np.empty((n, m, p), bool)
+    weight = np.empty((n, p), np.float32)
+    sigma = np.empty((n, p), np.float32)
+    for s in range(0, n, block):
+        e = min(n, s + block)
+        fastcal.calibrate_arrays(data[s:e], flag[s:e], flag_row[s:e], a1[s:e], a2[s:e], freq, J, dead, badants,
+                                 gains=None if gains is None else [g[s:e] for g in gains])
+        avg[s:e], aflag[s:e], weight[s:e], sigma[s:e] = average_like_mstransform(data[s:e], flag[s:e],
+                                                                                 sigma_in[s:e], chanbin)
+    return avg, aflag, weight, sigma
+
+
 def set_env(env: Dict[str, str]) -> None:
     """Prep pool initializer: extra environment of a prep process (e.g. GSI_PREP_GAIN_CACHE)."""
     os.environ.update(env)
@@ -209,15 +231,22 @@ def prep_arrays(raw_ms: str, bp: str, xy: str, badants: str, chanbin: int,
     a1, a2 = r.pop("ANTENNA1"), r.pop("ANTENNA2")
     freq = r["chan_freq_in"]
     J, dead = fastcal.jones(str(raw_ms), bp, xy, r["nant"], freq)
-    fastcal.calibrate_arrays(data, flag, flag_row, a1, a2, freq, J, dead, badants)
     r["WEIGHT_IN"] = r.pop("WEIGHT")
     sigma_in = fastcal.sigma_from_weight(r["WEIGHT_IN"])
-    t = _lap(timings, "cal", t)
-
-    if chanbin == 1:    # input already averaged (night-time backlog): v2 renames the calibrated MS
-        avg, aflag, weight, sigma = data, flag, r.pop("WEIGHT_IN"), sigma_in
+    block = int(os.environ.get("GSI_PREP_BLOCK_ROWS", "0") or 0)
+    if block > 0 and chanbin > 1:
+        # v3.prep_block_rows: calibrate + average row block by row block (cache-sized passes); every value is
+        # computed per row by the same operations, so the arrays are bitwise those of the whole-array passes
+        avg, aflag, weight, sigma = _cal_average_blocked(data, flag, flag_row, a1, a2, freq, J, dead, badants,
+                                                         sigma_in, chanbin, block)
+        t = _lap(timings, "cal", t)
     else:
-        avg, aflag, weight, sigma = average_like_mstransform(data, flag, sigma_in, chanbin)
+        fastcal.calibrate_arrays(data, flag, flag_row, a1, a2, freq, J, dead, badants)
+        t = _lap(timings, "cal", t)
+        if chanbin == 1:    # input already averaged (night-time backlog): v2 renames the calibrated MS
+            avg, aflag, weight, sigma = data, flag, r.pop("WEIGHT_IN"), sigma_in
+        else:
+            avg, aflag, weight, sigma = average_like_mstransform(data, flag, sigma_in, chanbin)
     del data, flag
     freqs, widths = average_channels(freq, r["chan_width_in"], chanbin)
     t = _lap(timings, "average", t)

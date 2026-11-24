@@ -21,7 +21,7 @@ from __future__ import annotations
 import os
 import threading
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Optional, Dict, Tuple
 
 import numpy as np
 
@@ -87,10 +87,11 @@ def band_info(ms: str) -> Tuple[np.ndarray, int]:
 
 def calibrate_arrays(data: np.ndarray, flag: np.ndarray, flag_row: np.ndarray,
                      a1: np.ndarray, a2: np.ndarray, freq: np.ndarray, J: np.ndarray,
-                     dead: np.ndarray, badants_csv: str) -> None:
+                     dead: np.ndarray, badants_csv: str, gains: Optional[list] = None) -> None:
     """Bad-antenna/85-100 MHz flags and B*Xf calibration of DATA, all in place.
 
-    Shared by flag_calibrate (v2, MS in place) and v3.fastprep (arrays only).
+    Shared by flag_calibrate (v2, MS in place) and v3.fastprep (arrays only).  `gains`: the four per-row
+    gain products J[a1, :, p] * conj(J[a2, :, q]) of these rows, when the caller has them (v3.prep_block_rows).
     """
     if badants_csv:
         bad = [int(x) for x in badants_csv.split(",") if x.strip()]
@@ -99,7 +100,8 @@ def calibrate_arrays(data: np.ndarray, flag: np.ndarray, flag_row: np.ndarray,
         flag_row |= rows
     if freq.max() > 85e6:
         flag[:, (freq >= 85e6) & (freq <= 100e6), :] = True
-    cached = _gain_products(J, a1, a2) if os.environ.get("GSI_PREP_GAIN_CACHE", "0") == "1" else None
+    cached = gains if gains is not None else \
+        _gain_products(J, a1, a2) if os.environ.get("GSI_PREP_GAIN_CACHE", "0") == "1" else None
     for k, (p, q) in enumerate(_CORR):
         g = cached[k] if cached is not None else J[a1, :, p] * np.conj(J[a2, :, q])
         data[:, :, k] = (data[:, :, k] / g).astype(data.dtype)

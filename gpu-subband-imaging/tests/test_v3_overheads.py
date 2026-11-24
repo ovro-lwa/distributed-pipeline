@@ -249,3 +249,41 @@ def test_aoflag_async_io_gives_the_same_bytes(env, monkeypatch):
         [f"{k:04d}_{s}.slot" for k, s in enumerate(STAMPS)]
     assert res[True][1] == res[False][1] and sorted(res[True][1]) == STAMPS
     assert res[True][2] == res[False][2] == STAMPS
+
+
+# -- v3.prep_block_rows: the same arrays --------------------------------------------------------------------
+
+@pytest.mark.parametrize("cache", ["0", "1"])
+@pytest.mark.parametrize("block", [1, 7, 64, 10_000])
+def test_blocked_cal_average_is_bitwise_the_whole_array_prep(monkeypatch, cache, block):
+    from gpu_subband_imaging.stages import fastcal
+    from gpu_subband_imaging.v3 import fastprep
+    monkeypatch.setenv("GSI_PREP_GAIN_CACHE", cache)
+    rng = np.random.default_rng(3)
+    nant, nchan, chanbin = 12, 16, 4
+    a1, a2 = (x.astype(np.int32) for x in np.triu_indices(nant))
+    n = a1.size
+    data = (rng.normal(size=(n, nchan, 4)) + 1j * rng.normal(size=(n, nchan, 4))).astype(np.complex64)
+    flag = rng.random((n, nchan, 4)) < 0.2
+    flag[5] = True                                            # a fully flagged row
+    flag_row = np.zeros(n, bool)
+    freq = np.linspace(80e6, 104e6, nchan)                     # some channels in 85-100 MHz
+    J = (rng.normal(size=(nant, nchan, 2)) + 1j * rng.normal(size=(nant, nchan, 2))).astype(np.complex128)
+    dead = rng.random((nant, 2)) < 0.15
+    sigma = rng.uniform(0.5, 2.0, (n, 4)).astype(np.float32)
+    ref_in = [x.copy() for x in (data, flag, flag_row)]
+    fastcal._gp_cache.clear()
+    fastcal.calibrate_arrays(*ref_in, a1, a2, freq, J, dead, "3,7")
+    ref = fastprep.average_like_mstransform(ref_in[0], ref_in[1], sigma, chanbin)
+    fastcal._gp_cache.clear()
+    got_in = [x.copy() for x in (data, flag, flag_row)]
+    got = fastprep._cal_average_blocked(*got_in, a1, a2, freq, J, dead, "3,7", sigma, chanbin, block)
+    for r, g in zip(ref, got):
+        assert r.dtype == g.dtype and r.tobytes() == g.tobytes()
+    assert got_in[2].tobytes() == ref_in[2].tobytes()          # FLAG_ROW as well
+
+
+def test_prep_block_rows_config():
+    assert V3Params().prep_block_rows == 0
+    with pytest.raises(ConfigError, match="prep_block_rows"):
+        V3Params(prep_block_rows=-1)
