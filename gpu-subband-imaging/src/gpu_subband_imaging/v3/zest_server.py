@@ -10,8 +10,8 @@ to over a UNIX socket and detaches from at the end of its snapshot loop:
   told to quit and a new one is started.  The flock is held while attached; a second batch on the
   same GPU (lanes, prefetch) does not wait for it but gets a private daemon (``None``).
 * detach (``close``): RELEASE -- the daemon frees its workspace, device slot buffers and warm-start
-  gains, collects and gives the pool back to the driver (``release_hard``: also destroys the CUDA
-  context, so the idle daemon holds no GPU memory at all during the hour stage), then the
+  gains, collects and gives the pool back to the driver (an idle daemon then holds only its CUDA
+  context, ~0.27 GB; destroying the context too crashes the next peel with TTCalX v0.5.0), then the
   connection is closed.  A client that disconnects without it (a killed worker) is released by
   the server.
 * the server quits its daemon and exits after ``idle_s`` without a client, and on ``quit``.
@@ -99,11 +99,10 @@ def _send(conn: socket.socket, obj: dict) -> bool:
 
 def serve(spec: dict) -> int:
     """Run the server described by `spec` (keys: sock, key, julia, project, daemon_jl, sources, env,
-    zest_env, start_timeout, idle_s, release_hard)."""
+    zest_env, start_timeout, idle_s, pidfile)."""
     from ..stages.peel import ZestDaemon
     sock_path = spec["sock"]
     idle_s = float(spec.get("idle_s", 1800.0))
-    hard = bool(spec.get("release_hard", False))
     t0 = time.time()
     if spec.get("pidfile"):
         Path(spec["pidfile"]).write_text(f"{os.getpid()}\n")
@@ -122,9 +121,9 @@ def serve(spec: dict) -> int:
     n_clients = n_slots = 0
     stop = False
 
-    def release(rid_hard: bool) -> None:
+    def release() -> None:
         rid = next(d._ids)
-        d._reply(f"RELEASE {rid}" + (" hard" if rid_hard else ""), rid, 300.0, ok_token="RELEASE_OK")
+        d._reply(f"RELEASE {rid}", rid, 300.0, ok_token="RELEASE_OK")
 
     try:
         while not stop:
@@ -159,7 +158,7 @@ def serve(spec: dict) -> int:
                             d.reset_warm(timeout=req.get("timeout", 60.0))
                         elif op == "release":
                             t = time.time()
-                            release(bool(req.get("hard", hard)))
+                            release()
                             released = True
                             rep["s"] = time.time() - t
                         elif op == "quit":
@@ -184,7 +183,7 @@ def serve(spec: dict) -> int:
             if not released and not stop:     # the client went away without detaching (killed worker)
                 log.warning("ZEST_SERVER client %d left without RELEASE: releasing", n_clients)
                 try:
-                    release(hard)
+                    release()
                 except Exception as e:          # noqa: BLE001
                     log.error("ZEST_SERVER release after a lost client failed: %s; exiting", e)
                     break
@@ -277,13 +276,12 @@ class _ServerProc:
 class PersistentZest:
     """ZestDaemon's interface (zest_slot, reset_warm, close, pid, _p) on a per-GPU server."""
 
-    def __init__(self, sock: socket.socket, lock_fd: int, hello: dict, io_margin_s: float, release_hard: bool):
+    def __init__(self, sock: socket.socket, lock_fd: int, hello: dict, io_margin_s: float):
         self._sock = sock
         self._rf = sock.makefile("r")
         self._lock_fd = lock_fd
         self.hello = hello
         self._margin = io_margin_s
-        self._hard = release_hard
         self._p = _ServerProc(int(hello["pid"]))
         self.restarts = 0
         self.abandoned: List[int] = []
@@ -297,7 +295,7 @@ class PersistentZest:
     @classmethod
     def attach(cls, gpu, julia: str, project: str, daemon_jl: str, sources: str, env: Dict[str, str],
                zest_env: Dict[str, str], start_timeout: Optional[float] = 600.0, idle_s: float = 1800.0,
-               release_hard: bool = True, python: Optional[str] = None,
+               python: Optional[str] = None,
                io_margin_s: float = 120.0) -> Optional["PersistentZest"]:
         """The GPU's server (reused or started); None when another batch holds it (use a private daemon)."""
         d = base_dir()
@@ -325,7 +323,7 @@ class PersistentZest:
             if hello is not None and hello.get("key") == key and hello.get("protocol") == PROTOCOL:
                 log.info("V3_ZEST_PERSISTENT gpu%s: reusing server pid %s (daemon pid %s, %s client(s), %s slot(s))",
                          gpu, hello["pid"], hello["daemon_pid"], hello["clients"], hello["slots"])
-                return cls(c, lock_fd, hello, io_margin_s, release_hard)
+                return cls(c, lock_fd, hello, io_margin_s)
             pidfile = d / f"{tag}.pid"
             if c is not None and hello is not None:
                 log.warning("V3_ZEST_PERSISTENT gpu%s: server %s has another key: replacing it", gpu, hello.get("pid"))
@@ -335,7 +333,7 @@ class PersistentZest:
             _kill_stale(pidfile)                     # one that does not answer (stuck, or busy with a dead client)
             spec = dict(sock=sock_path, key=key, julia=julia, project=project, daemon_jl=daemon_jl,
                         sources=sources, env=dict(env), zest_env=dict(zest_env), start_timeout=start_timeout,
-                        idle_s=idle_s, release_hard=release_hard, pidfile=str(pidfile))
+                        idle_s=idle_s, pidfile=str(pidfile))
             spec_path = d / f"{tag}.spec.json"
             fd = os.open(str(spec_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w") as fh:
@@ -362,7 +360,7 @@ class PersistentZest:
                     if hello is not None and hello.get("key") == key:
                         log.info("V3_ZEST_PERSISTENT gpu%s: new server pid %s (daemon pid %s) in %.1f s", gpu,
                                  hello["pid"], hello["daemon_pid"], time.time() - t0)
-                        return cls(c, lock_fd, hello, io_margin_s, release_hard)
+                        return cls(c, lock_fd, hello, io_margin_s)
                     c.close()
                 time.sleep(0.2)
             try:
@@ -472,9 +470,8 @@ class PersistentZest:
     def reset_warm(self, timeout: Optional[float] = 60.0) -> None:
         self._request(timeout, op="reset_warm", timeout=timeout)
 
-    def release(self, hard: Optional[bool] = None) -> float:
-        h = self._hard if hard is None else hard
-        return float(self._request(300.0, op="release", hard=h).get("s", 0.0))
+    def release(self) -> float:
+        return float(self._request(300.0, op="release").get("s", 0.0))
 
     def quit(self) -> None:
         try:

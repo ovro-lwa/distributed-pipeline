@@ -474,13 +474,11 @@ class V3Params:
     # peel_io=shm: keep one zest daemon per GPU alive across batches (v3/zest_server.py), so only the first
     # batch on a GPU pays the Julia JIT (~40 s of the first peel).  A batch attaches at its start and detaches
     # at the end of its snapshot loop (aoflag=hour: after pass 1) with a RELEASE that frees the daemon's GPU
-    # memory before the GPU-heavy stages; the server exits after zest_persistent_idle_s without a batch.
+    # memory before the GPU-heavy stages (the idle daemon keeps only its CUDA context, ~0.27 GB, also through the
+    # hour stage); the server exits after zest_persistent_idle_s without a batch.
     # Default off (a daemon per batch, as v4)
     zest_persistent: bool = False
     zest_persistent_idle_s: float = 1800.0
-    # RELEASE also destroys the daemon's CUDA context (0 MiB while detached; the next peel reloads the
-    # kernels, ~4 s); false keeps the context (~0.3 GB held through the hour stage, next peel ~0.5 s)
-    zest_release_hard: bool = True
     # aoflag=hour: pass 1 writes the peeled slot copies in a background thread (the next peel does not wait
     # for the copy; a ring slot is released once its copy is written) and pass 2 reads them back in
     # aoflag_load_threads threads ahead of the engine; the same bytes.  Default off (serial copies, as v4)

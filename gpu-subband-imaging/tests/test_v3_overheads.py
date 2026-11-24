@@ -99,7 +99,7 @@ def test_server_is_reused_across_batches_and_released_at_detach(fake, caplog):
         b.close()
     c = _cmds(fake)
     assert [x.split()[0] for x in c] == ["SHM", "SHM", "RESET_WARM", "RELEASE", "SHM", "RELEASE"]
-    assert all(x.endswith(" hard") for x in c if x.startswith("RELEASE"))        # v3.zest_release_hard default
+    assert all(len(x.split()) == 2 for x in c if x.startswith("RELEASE"))     # RELEASE <id>: the context stays
 
 
 def test_another_key_replaces_the_server(fake):
@@ -200,7 +200,7 @@ def test_worker_falls_back_to_a_private_daemon(monkeypatch, tmp_path):
 
 def test_config_rules():
     v = V3Params()
-    assert not v.zest_persistent and v.zest_release_hard and not v.aoflag_async_io
+    assert not v.zest_persistent and not v.aoflag_async_io
     with pytest.raises(ConfigError, match="zest_persistent"):
         V3Params(zest_persistent=True)                       # peel_io ms
     with pytest.raises(ConfigError, match="aoflag_load_threads"):

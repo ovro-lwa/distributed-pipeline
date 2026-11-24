@@ -61,9 +61,9 @@
 # Commands (one per line): an MS path (peel it in place), "SHM <slot> [<id>]" (gsi v3: peel a
 # /dev/shm slot written by src/gpu_subband_imaging/v3/slots.py in place, see read_slot /
 # write_slot! below; ZEST_COLUMN must be DATA), "RESET_WARM [<id>]" (drop the warm-start
-# gains), "RELEASE <id> [hard]" (gsi v3.zest_persistent: drop the warm-start gains and free the
-# device buffers a peel keeps, i.e. the state of a fresh daemon with its code compiled; hard also
-# destroys the CUDA context), or QUIT.  Replies: the PEEL_* / ZEST_TIMING lines, then
+# gains), "RELEASE <id>" (gsi v3.zest_persistent: drop the warm-start gains and free the device
+# buffers a peel keeps, i.e. the state of a fresh daemon with its code compiled and its CUDA context
+# kept), or QUIT.  Replies: the PEEL_* / ZEST_TIMING lines, then
 # "ZESTED <path> <seconds>" or "FAILED <path> <error on one line>"; slot commands append " id=<id>"
 # to ZESTED and put "id=<id>" right after the path in FAILED; RESET_WARM answers
 # "RESET_WARM_OK id=<id>", RELEASE "RELEASE_OK id=<id>" or "FAILED RELEASE id=<id> <error>".
@@ -863,9 +863,9 @@ function peel_snapshot!(vis, meta, mjd)
 end
 
 """RELEASE: drop the warm-start gains, free the device buffers peels keep (workspace, slot visibilities,
-device slot copy), collect and hand the memory pool back to the driver; `hard` also destroys the CUDA
-context (CUDA.device_reset!: kernels are loaded again by the next peel)."""
-function release_device!(hard::Bool)
+device slot copy), collect and hand the memory pool back to the driver.  The CUDA context stays (~0.27 GB):
+CUDA.device_reset! here makes the next peel_fast peel segfault (TTCalX v0.5.0 keeps device objects)."""
+function release_device!()
     global prev_gains = nothing
     use_gpu || return nothing
     v = slot_device_vis[]
@@ -883,7 +883,6 @@ function release_device!(hard::Bool)
     end
     GC.gc(true)
     CUDA.reclaim()
-    hard && CUDA.device_reset!()
     nothing
 end
 
@@ -905,7 +904,7 @@ for line in eachline(stdin)
         rparts = split(cmd)
         rid = length(rparts) >= 2 ? rparts[2] : ""
         try
-            release_device!(length(rparts) >= 3 && rparts[3] == "hard")
+            release_device!()
             println("RELEASE_OK id=", rid)
         catch e
             println("FAILED RELEASE id=", rid, " ", replace(sprint(showerror, e), r"\s*\n\s*" => " | "))

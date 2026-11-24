@@ -1049,8 +1049,7 @@ class Worker:
             # a private one when another batch holds it or the server cannot be started
             from .v3 import zest_server
             try:
-                d = zest_server.PersistentZest.attach(self.gpu, idle_s=v3.zest_persistent_idle_s,
-                                                      release_hard=v3.zest_release_hard, **kw)
+                d = zest_server.PersistentZest.attach(self.gpu, idle_s=v3.zest_persistent_idle_s, **kw)
                 if d is not None:
                     return d
             except Exception as e:
