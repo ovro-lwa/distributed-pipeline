@@ -407,7 +407,8 @@ def test_hour_op_sets_the_cache_reserve_and_reports_the_fallback(tmp_path, env, 
                 "--qa", "none"]
         r = c.request("hour", timeout=300, argv=argv, expected=[st])
         s = json.loads((out.parent / "23MHz-summary.json").read_text())
-        assert s["env"] == {"TTCALX_CHUNK_CACHE": "store", "TTCALX_CACHE_RESERVE": want}
+        # TTCALX_CACHE_DEVICE is set only for a device_cache=False request (the fresh-engine retry, b93d4e5)
+        assert s["env"] == {"TTCALX_CHUNK_CACHE": "store", "TTCALX_CACHE_RESERVE": want, "TTCALX_CACHE_DEVICE": None}
         assert r["cache_fallback"] == [dict(name=f"{out}-1h", error="OutOfMemoryError: fake", device_cache_GB=1.0)]
     finally:
         c.close()
