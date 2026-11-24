@@ -25,9 +25,20 @@ def test_v5_template_loads_with_the_v5_switches(monkeypatch):
     assert sorted(pl.dispatch_band_order) == sorted(pl.bands) and pl.dispatch_band_order[0] == 78
 
 
+def _strings(x):
+    if isinstance(x, dict):
+        for v in x.values():
+            yield from _strings(v)
+    elif isinstance(x, list):
+        for v in x:
+            yield from _strings(v)
+    elif isinstance(x, str):
+        yield x
+
+
 def test_v5_template_paths_are_gsi_v5():
-    text = "".join(f.read_text() for f in sorted(TEMPLATE.glob("*.yaml")))
-    body = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
-    assert "gsi-v4" not in body and "gsi_v4" not in body
+    # the values only: comments keep the template's v3 / v4 history
+    vals = [v for f in sorted(TEMPLATE.glob("*.yaml")) for v in _strings(yaml.safe_load(f.read_text()))]
+    assert not [v for v in vals if "gsi-v4" in v or "gsi_v4" in v]
     d = yaml.safe_load((TEMPLATE / "pipeline.yaml").read_text())
     assert d["env"]["ttcalx"] == "/opt/devel/pipeline/gsi-v5/TTCalX"
