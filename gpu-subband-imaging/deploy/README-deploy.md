@@ -59,21 +59,71 @@ venv are unchanged).
 
 ## Switching to v5
 
-As v4 (a new `/opt/devel/pipeline/gsi-v5` next to `gsi-v4`, which stays the rollback):
+As v4: a new `/opt/devel/pipeline/gsi-v5` (`$G` below) next to `gsi-v4`, which stays the rollback. The nightly is
+`deploy/nightly/daily_guarded.sh` + `night_guarded.sh` (gsi-v4's `daily_guarded_v4.sh` / `night_guarded_v4.sh`
+with the deploy dir as `G`; `bp_ramp.py` and `etcd_ok.sh` beside them). They run on calim02 as `pipeline`, source
+`$G/gsi_env.sh`, read the template `$G/config-lst-v5-template` and write `$G/config-lst-v5-auto`, the logs
+(`night_guard_<date>.log`, `nightly_<date>.log`), `run_label_<date>.txt` and `last_good_bp.txt` in `$G`.
 
-1. TTCalX: the deploy trees have no git remote, so fetch the release by URL and check out the exact commit
-   (gsi pins TTCalX by this tree's path, `env.ttcalx`; the run metadata records its revision):
+Run every git step in the deploy trees as the `pipeline` user (`sudo -iu pipeline`): the trees belong to it, and
+git run by another user stops with "detected dubious ownership" (do not add a global `safe.directory`).
+
+1. TTCalX. The tag `v0.5.0` must be pushed to https://github.com/nkosogor/TTCalX.git first (the release branch
+   `release/v0.5.0` is not on GitHub); the deploy trees have no git remote, so fetch the tag by URL:
 
    ```bash
-   git clone https://github.com/nkosogor/TTCalX.git /opt/devel/pipeline/gsi-v5/TTCalX   # or copy the v4 tree, then:
-   git -C /opt/devel/pipeline/gsi-v5/TTCalX fetch https://github.com/nkosogor/TTCalX.git release/v0.5.0
-   git -C /opt/devel/pipeline/gsi-v5/TTCalX checkout --detach 7a4b931dd7f08815b64a3f6086fc7f40baea821a                  # TTCalX v0.5.0
+   G=/opt/devel/pipeline/gsi-v5
+   git clone https://github.com/nkosogor/TTCalX.git $G/TTCalX      # or copy the gsi-v4 tree, then:
+   git -C $G/TTCalX fetch https://github.com/nkosogor/TTCalX.git tag v0.5.0
+   git -C $G/TTCalX checkout --detach v0.5.0
+   git -C $G/TTCalX log --oneline -1          # the reviewed v0.5.0 commit (README "Versions" row)
    ```
 
    Copy `Manifest.toml` from the v4 tree (no new Julia dependencies) and precompile
-   (`GSI_TTCALX_DIR=/opt/devel/pipeline/gsi-v5/TTCalX setup_node.sh` on each node).
-2. Imager venv from that tree: `pip install -e '<TTCalX>/python/ttcalx_imager[gpu]'` (`ttcalx_imager` 0.5.0).
-3. gsi at `release/gsi-v5` (or its tag) with its own env script (`GSI_HOME`, `GSI_WORKER_SH`).
-4. Config: `deploy/config-lst-v5-template` (the v4 nightly template + the v5 keys; `git diff` of its two
-   commits shows the change). Its paths assume `/opt/devel/pipeline/gsi-v5` and `/fast/pipeline/gsi_v5`.
-5. Shadow / comparison run on hours v4 already made (never overlapping a nightly), then switch the nightly job.
+   (`GSI_TTCALX_DIR=$G/TTCalX setup_node.sh` on each node).
+2. Imager venv, built as v4's (`/opt/devel/pipeline/gsi-v4/venv`: a plain venv of `py310_orca`, the imager
+   installed editable from its TTCalX tree, the other packages at v4's versions):
+
+   ```bash
+   /opt/devel/pipeline/envs/py310_orca/bin/python -m venv $G/venv
+   /opt/devel/pipeline/gsi-v4/venv/bin/pip freeze --exclude-editable > $G/venv_pins.txt
+   $G/venv/bin/pip install -c $G/venv_pins.txt -e "$G/TTCalX/python/ttcalx_imager[gpu]"
+   $G/venv/bin/python -c 'import ttcalx_imager as t; print(t.__version__, t.__file__)'   # 0.5.0, under $G/TTCalX
+   ```
+3. gsi: `release/gsi-v5` (or its tag) checked out as `$G/distributed-pipeline`, and `$G/gsi_env.sh` =
+   `deploy/nightly/gsi_env.sh` (gsi-v4's with `gsi-v4` -> `gsi-v5`).
+4. Template: `cp -r $G/distributed-pipeline/gpu-subband-imaging/deploy/config-lst-v5-template
+   $G/config-lst-v5-template` (the v4 nightly template + the v5 keys; `git log -p` of the directory shows the
+   change). Its paths assume `$G` and `/fast/pipeline/gsi_v5`.
+5. Shadow / comparison run on hours v4 already made, never overlapping a nightly (a test's `cleanup-nodes`
+   deletes the nightly's node caches).
+6. Switch the nightly (calim02, as `pipeline`), between two nights: never run the v4 and v5 loops at once. Both
+   use the same `state_dir` and `output_root`, and each keeps its own run labels in its `$G`, so two loops would
+   run the same date twice into one tree under two run labels.
+
+   ```bash
+   N=/opt/devel/pipeline/gsi-v5/distributed-pipeline/gpu-subband-imaging/deploy/nightly
+   # a. wait until v4's current night has finished: its night_guard_<date>.log ends with "night <date> finished",
+   #    and nothing of it runs any more
+   pgrep -af 'run_nightly_lst|gpu_subband_imaging.cli'          # empty (a test run's --config is not the nightly)
+   # b. stop the v4 loop (it is then only waiting for the next date's calibration)
+   screen -ls                                                   # daily_v4
+   screen -S daily_v4 -X quit
+   pgrep -af daily_guarded_v4                                   # empty
+   # c. the reference bandpass table carries over
+   cp /opt/devel/pipeline/gsi-v4/last_good_bp.txt /opt/devel/pipeline/gsi-v5/last_good_bp.txt
+   # d. the first v5 date: the next date v4 has not started (no "starting night" in gsi-v4/night_guard_<date>.log)
+   D=2026-MM-DD
+   CHECK_ONLY=1 G=/opt/devel/pipeline/gsi-v5 bash $N/night_guarded.sh $D     # optional: calibration check only
+   screen -dmS daily_v5 bash -c "G=/opt/devel/pipeline/gsi-v5 bash $N/daily_guarded.sh $D 2>&1 | tee -a /opt/devel/pipeline/gsi-v5/daily_v5.log; exec bash"
+   ```
+
+   The loop logs "starting night <date> on gsi-v5" to `$G/night_guard_<date>.log`.
+
+Rollback to v4 (its deploy, template, TTCalX tree and venv are unchanged): the same steps the other way round.
+Wait for (or stop) the running v5 night, `screen -S daily_v5 -X quit`, check `pgrep -af daily_guarded` is empty,
+`cp /opt/devel/pipeline/gsi-v5/last_good_bp.txt /opt/devel/pipeline/gsi-v4/` (the tables v5 accepted), and start
+`screen -dmS daily_v4 bash -c "bash /opt/devel/pipeline/gsi-v4/daily_guarded_v4.sh <next date> 2>&1 | tee -a
+/opt/devel/pipeline/gsi-v4/daily_v4.log; exec bash"`. A night v5 stopped in the middle is redone on v4 with
+`night_guarded_v4.sh <date>`: v4 writes it under its own run label (v4 has no `run_label_<date>.txt` for it); the
+partial v5 run directory stays under the v5 label.
