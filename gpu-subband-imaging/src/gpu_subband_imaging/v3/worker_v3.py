@@ -495,8 +495,8 @@ class V3Batch:
             os._exit(124)
 
     def _plan_shm(self) -> None:
-        """Untar into tmpfs only if it has room next to the ring: (lookahead + 2) slots + lookahead raw
-        MSes (+ the raw MSes kept for the kept-MS writer), else untar to work_root (V3_SHM_TIGHT)."""
+        """Untar into tmpfs only if it has room next to the ring: (lookahead + 2) slots + min(lookahead + 1,
+        max_feeders) raw MSes (+ the raw MSes kept for the kept-MS writer), else untar to work_root (V3_SHM_TIGHT)."""
         root = self.w._untar_root()
         if root is None:
             return
@@ -506,7 +506,8 @@ class V3Batch:
             shm_free = shutil.disk_usage("/dev/shm").free
         except OSError:
             return
-        n_raw = self.lookahead + (2 if self.write_kept else 0)
+        # raw MSes in tmpfs at once: one per running feeder (deleted after its prep), never more than lookahead + 1
+        n_raw = min(self.lookahead + 1, max(1, int(self.cfg.cluster.max_feeders))) + (2 if self.write_kept else 0)
         need_untar = n_raw * tar_b * self.w.UNTAR_SPACE_MARGIN
         need_slots = (self.lookahead + 2) * 130e6
         same = os.stat(str(root.parent) if root.parent.exists() else "/dev/shm").st_dev == os.stat("/dev/shm").st_dev

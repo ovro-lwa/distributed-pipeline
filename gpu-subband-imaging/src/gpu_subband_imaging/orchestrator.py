@@ -243,17 +243,34 @@ class Orchestrator:
         def node_ok(e: dict) -> bool:     # a node no longer in the cluster frees its band-hours
             return not local or e["node"] in (None, slot.node) or e["node"] not in nodes
 
+        pin = self._retry_on_same_node
+
+        def retry_ok(j: Job, e: dict) -> bool:
+            """gsi v3 hour_source=memory with local checkpoints: a band-hour's first retry waits for the node that
+            holds its checkpoint (there only the missing snapshots and the hour are redone, not the whole batch)."""
+            return not (pin and j.status == FAILED and j.attempts == 1 and e["node"] in nodes
+                        and e["node"] != slot.node)
+
         for j in pending:
             if is_hour_job(j):
                 e = st[(j.band, self._group(j))]
                 if node_ok(e) and all(b.status in (DONE, SKIPPED) for b in e["batches"]):
                     return j
         cands = [j for j in pending if not is_hour_job(j)
-                 and node_ok(st[(j.band, self._group(j))])]
+                 and node_ok(st[(j.band, self._group(j))]) and retry_ok(j, st[(j.band, self._group(j))])]
         if not cands:
             return None
+        border = {b: i for i, b in enumerate(getattr(self.cfg.pipeline, "dispatch_band_order", None) or [])}
         return min(cands, key=lambda j: (st[(j.band, self._group(j))]["node"] != slot.node,
-                                         order.get(self._group(j), 99), j.band, j.batch))
+                                         order.get(self._group(j), 99), border.get(j.band, len(border)),
+                                         j.band, j.batch))
+
+    @property
+    def _retry_on_same_node(self) -> bool:
+        from .config import v3_params
+        v3 = v3_params(self.cfg.pipeline)
+        return bool(v3.retry_on_checkpoint_node and self.hour_in_batch and v3.checkpoint == "local"
+                    and v3.archive == "none")
 
     def _run_streaming(self, pool: ThreadPoolExecutor, poll: float) -> None:
         pl = self.cfg.pipeline

@@ -463,6 +463,9 @@ class V3Params:
     # copy + extract attempts per tar on the v2 staging path (None: 1 as v2, 3 in v3 mode; the untar_to
     # stream path always makes 3)
     stage_attempts: Optional[int] = None
+    # hour_source=memory, checkpoint=local: a band-hour's first retry waits for the node with its checkpoint (only
+    # the missing snapshots + the hour are redone there, not the whole batch elsewhere); off = any node, as before
+    retry_on_checkpoint_node: bool = False
 
     @property
     def active(self) -> bool:
@@ -691,6 +694,9 @@ class PipelineConfig:
     prep: str = "casa"
     max_files_per_hour: Optional[int] = None    # testing: first N snapshots of each hour
     description: str = ""               # free text for provenance.json (what this run is); "" = no key
+    # streaming dispatch inside one LST hour: these bands first, in this order (e.g. the slowest first, so the
+    # night's last hour does not end on a long band-hour); the others after them by band.  [] = by band
+    dispatch_band_order: List[int] = field(default_factory=list)
     v3: V3Params = field(default_factory=V3Params)
 
     def __post_init__(self) -> None:
@@ -820,6 +826,7 @@ def load_pipeline(path: Union[str, Path]) -> PipelineConfig:
         max_files_per_hour=(int(d["max_files_per_hour"])
                             if d.get("max_files_per_hour") else None),
         description=str(d.get("description") or ""),
+        dispatch_band_order=[int(b) for b in (d.get("dispatch_band_order") or [])],
         v3=V3Params(**(d.get("v3") or {})),
     )
 
