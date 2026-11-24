@@ -14,6 +14,7 @@ per band and LST hour: 1-h and 10-min images, QA and a movie.
 | **v2** | `gsi-v2` (13405ce; TTCalX `gsi-v2` = 748884a) | Production since 2026-10-26: LST-hour layout as the main pipeline, CLEAN snapshots on the GPU imager, GPU 1-h / 10-min images, QA guards, nightly LST runs. Each snapshot goes through disk several times; the hour job re-reads all kept MSes. |
 | **v3** | opt-in (`v3:` config; TTCalX `v0.3.0`) | One band-hour in one process, data kept in RAM: numpy prep instead of CASA, peel and imaging through shared memory, hour images made from memory. Same images as v2, ~2.5x faster per band-hour. |
 | **v4** | v3 + TTCalX `v0.4.0` + the v4 keys below | The v3 path with the imager speed switches (TTCalX `FAST_ENV`), peel slot I/O on the GPU, cached prep gains and the peel-solution merge during the hour stage. Same images as v3 (deep 1-h products within 0.005 sigma), ~1.7x faster per band-hour from averaged data, ~1.4x from raw nightly data. |
+| **v5** | branch `release/gsi-v5` + TTCalX `v0.5.0` (`release/v0.5.0` @7a4b931) + the v5 keys below | v4 with the TTCalX fast peel (`peel.peel_fast`), the imager's v5 set (`imaging.gpu_env: {TTCALX_V5: "1"}`: zenith-frame snapshot gridding, hour-stage switches), AOFlagger skipping fully flagged baselines (same flags), `v3.aoflag_procs` 16 and two scheduling switches. Peel ~2.6x faster (another rounding of v4's), snapshot imaging ~2.2-2.5x faster at 55-82 MHz, hour stage ~1.14-1.40x faster (0 fails vs production at the rerun floor); the end-to-end v5 vs v4 night comparison is still to be done (`CHANGELOG.md`). |
 
 With no `v3:` block and no new `peel:` options the code runs as v2
 (`docs/default_path_vs_13405ce.md`). Roll back: `git checkout gsi-v2` here and in TTCalX.
@@ -138,6 +139,17 @@ v3:   {prep_procs: 6, prep_gain_cache: true}
 # cluster.yaml: max_feeders: 8   (>= prep_procs + 2)
 ```
 
+v5 = the v4 setup with TTCalX `v0.5.0` and (the deployed template, as a diff against gsi-v4's, is
+`deploy/config-lst-v5-template/`):
+
+```yaml
+peel:    {engine: sky_rfi, precision: mixed, workspace: true, fast_kernels: true, slot_gpu_io: true,
+          solver: rk4, maxiter: 5, peel_fast: true}           # v4 peel keys + peel_fast
+imaging: {gpu_env: {TTCALX_V5: "1"}}                           # next to v4's GSI_SVD_QUANTUM: '0'
+v3:      {aoflag_procs: 16, retry_on_checkpoint_node: true}    # with v4's aoflag: hour, checkpoint: local
+dispatch_band_order: [78, 69, 73, 64, 55, 82, 59, 50, 46, 41, 32, 36, 27, 23, 18]   # slowest first (2026-11-18)
+```
+
 New options (all off / v2 behaviour by default):
 
 | option | default | what it does |
@@ -152,6 +164,8 @@ New options (all off / v2 behaviour by default):
 | `peel.slot_gpu_io` | false | peel reads and writes the shared-memory slot on the GPU (needs `workspace`; same slot bitwise) |
 | `peel.peel_fast` | false | TTCalX fast peel (`zest_sky_rfi!(...; peel_fast=true)`, ComplexF32 visibilities in the daemon): ~0.4x the peel time; another rounding of the default (float32 level at 55 / 82 MHz, up to ~1e-3 relative at 23 MHz where an RFI guard decision occasionally flips, as with `fast_kernels` on vs off); needs the v4 peel keys (`engine: sky_rfi`, `precision: mixed`, `workspace`, `fast_kernels`, rk4, `rfi_mode: after`, no warm_start / smoothing / restore) and TTCalX with `peel_fast` |
 | `v3.prep_gain_cache` | false | prep processes keep the band-hour's per-row gain products (same values; ~0.8 GB RAM per process) |
+| `v3.retry_on_checkpoint_node` | false | `hour_source: memory`, `checkpoint: local`, `archive: none`: a band-hour's first retry waits for the node holding its checkpoint (only the missing snapshots and the hour are redone); later retries go anywhere |
+| `dispatch_band_order` | `[]` | streaming dispatch: these bands first inside each LST hour, in this order (e.g. slowest first); the rest by band |
 | `v3.aoflag` | off | `hour`: AOFlagger after peeling on the whole band-hour (time x frequency per baseline, as the main pipeline's concatenated MS; same flags as the CLI), then imaging; ~+14% night time (`v3.aoflag_procs` 10, needs `hour_source: memory`) |
 | `peel.smooth_flux`, `peel.restore`, ... | off | sponge smoothing and Jupiter restore, not production yet (`docs/peel_config.md`) |
 | `GSI_SNAP_PIPELINE=1` | off | pipelined snapshot-imager daemon (v2 path) |

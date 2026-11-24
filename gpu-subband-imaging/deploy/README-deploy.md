@@ -56,3 +56,24 @@ in the recorded revision.
 
 Rollback: point the nightly job back at the `gsi-v2` deploy (env script, config, TTCalX tree and
 venv are unchanged).
+
+## Switching to v5
+
+As v4 (a new `/opt/devel/pipeline/gsi-v5` next to `gsi-v4`, which stays the rollback):
+
+1. TTCalX: the deploy trees have no git remote, so fetch the release by URL and check out the exact commit
+   (gsi pins TTCalX by this tree's path, `env.ttcalx`; the run metadata records its revision):
+
+   ```bash
+   git clone https://github.com/nkosogor/TTCalX.git /opt/devel/pipeline/gsi-v5/TTCalX   # or copy the v4 tree, then:
+   git -C /opt/devel/pipeline/gsi-v5/TTCalX fetch https://github.com/nkosogor/TTCalX.git release/v0.5.0
+   git -C /opt/devel/pipeline/gsi-v5/TTCalX checkout --detach 7a4b931dd7f08815b64a3f6086fc7f40baea821a                  # TTCalX v0.5.0
+   ```
+
+   Copy `Manifest.toml` from the v4 tree (no new Julia dependencies) and precompile
+   (`GSI_TTCALX_DIR=/opt/devel/pipeline/gsi-v5/TTCalX setup_node.sh` on each node).
+2. Imager venv from that tree: `pip install -e '<TTCalX>/python/ttcalx_imager[gpu]'` (`ttcalx_imager` 0.5.0).
+3. gsi at `release/gsi-v5` (or its tag) with its own env script (`GSI_HOME`, `GSI_WORKER_SH`).
+4. Config: `deploy/config-lst-v5-template` (the v4 nightly template + the v5 keys; `git diff` of its two
+   commits shows the change). Its paths assume `/opt/devel/pipeline/gsi-v5` and `/fast/pipeline/gsi_v5`.
+5. Shadow / comparison run on hours v4 already made (never overlapping a nightly), then switch the nightly job.
