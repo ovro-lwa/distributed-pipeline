@@ -83,6 +83,32 @@ def test_streaming_prefetch_dispatches_the_next_batch_during_the_hour_stage(monk
     assert all(e.is_set() for e in started.values())
 
 
+def test_stale_marker_from_an_earlier_run_does_not_prefetch(monkeypatch, tmp_path):
+    """A marker left by an earlier attempt or orchestrator run (killed worker) is removed when the batch is
+    dispatched again: the slot's next batch waits for this attempt's own hour stage."""
+    orch = _orch(tmp_path, True)
+    monkeypatch.setattr(dispatch, "node_free_cores", lambda node: None)
+    stale = prefetch_marker(orch.cfg, 23, 0)
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text("lwacalim01 gpu1 pid 1\n")
+    running, max_running, lk = set(), [0], threading.Lock()
+
+    def run_one(slot, job, prefetched=False):
+        with lk:
+            running.add(job.band)
+            max_running[0] = max(max_running[0], len(running))
+        if job.band == 23:
+            time.sleep(0.3)                            # no hour stage in this attempt: no second batch
+        with lk:
+            running.discard(job.band)
+        orch.ledger.mark_done(job)
+        return True
+    orch._run_one = run_one
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        orch._run_streaming(pool, poll=0.01)
+    assert max_running[0] == 1 and not stale.exists()
+
+
 def test_prefetch_needs_streaming(tmp_path):
     assert _orch(tmp_path, True)._prefetch and not _orch(tmp_path, True, streaming=False)._prefetch
     assert not _orch(tmp_path, False)._prefetch

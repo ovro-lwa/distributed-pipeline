@@ -378,6 +378,13 @@ class Orchestrator:
                 else:
                     log.info("V3_PREFETCH %sMHz batch%d to %s during the hour stage of its batch", j.band, j.batch,
                              slot)
+                if prefetch and not is_hour_job(j):
+                    # a marker an earlier attempt or run left (killed worker, orchestrator restart) would
+                    # read as "in its hour stage" before this attempt's worker has even started
+                    try:
+                        prefetch_marker(self.cfg, j.band, j.batch).unlink()
+                    except OSError:
+                        pass
                 pending.remove(j)
                 with self._lock:
                     self.ledger.mark_running(j, str(slot))
