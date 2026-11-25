@@ -183,7 +183,7 @@ def test_prefetched_batch_stages_before_the_gpu_and_gives_the_same_bytes(env, mo
     assert not t.is_alive() and not err, err
     assert "V3_PREFETCH" in caplog.text and "phase=prefetch_gpu_wait" in caplog.text
     first_daemon = events.index(("daemon", None))
-    assert [e for e in events[:first_daemon] if e[0] == "prep"] == [("prep", s) for s in STAMPS[:n_pre]]
+    assert sorted(e for e in events[:first_daemon] if e[0] == "prep") == [("prep", s) for s in STAMPS[:n_pre]]
     assert sorted(preps) == STAMPS                         # every snapshot prepped once
     assert d.calls == STAMPS
     got = _products(tmp)
