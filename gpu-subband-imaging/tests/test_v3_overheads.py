@@ -421,11 +421,12 @@ def _fake_aoflag(seen):
 def test_aoflag_async_io_gives_the_same_bytes(env, monkeypatch):
     tmp = env.tmp
     res = {}
-    for mode in (False, True):
+    # (True, 50): more load threads than ring slots (lookahead 2: 4) -- capped, no deadlock
+    for mode in (False, True, (True, 50)):
         seen = []
         monkeypatch.setattr(V3Batch, "_aoflag_hour", _fake_aoflag(seen))
-        cfg = _config(tmp, delete_checkpoint=False, aoflag="hour", aoflag_min_snaps=1, aoflag_async_io=mode,
-                      aoflag_load_threads=2)
+        cfg = _config(tmp, delete_checkpoint=False, aoflag="hour", aoflag_min_snaps=1,
+                      aoflag_async_io=bool(mode), aoflag_load_threads=mode[1] if isinstance(mode, tuple) else 2)
         d = FakeDaemon(sleep=0.05)
         _worker(cfg, d).run_batch(env.tars)
         prov = json.loads((_bdir(tmp) / "provenance.json").read_text())
@@ -440,6 +441,7 @@ def test_aoflag_async_io_gives_the_same_bytes(env, monkeypatch):
         [f"{k:04d}_{s}.slot" for k, s in enumerate(STAMPS)]
     assert res[True][1] == res[False][1] and sorted(res[True][1]) == STAMPS
     assert res[True][2] == res[False][2] == STAMPS
+    assert res[True, 50] == res[True]
 
 
 # -- v3.prep_block_rows: the same arrays --------------------------------------------------------------------
@@ -478,3 +480,4 @@ def test_prep_block_rows_config():
     assert V3Params().prep_block_rows == 0
     with pytest.raises(ConfigError, match="prep_block_rows"):
         V3Params(prep_block_rows=-1)
+

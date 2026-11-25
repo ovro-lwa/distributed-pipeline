@@ -323,3 +323,19 @@ def test_prefetch_room(env, monkeypatch, caplog):
     with caplog.at_level(logging.WARNING, logger="gsi"):
         assert not v._prefetch_room(5)
     assert "V3_PREFETCH_TIGHT" in caplog.text
+
+
+def test_prefetch_stage_without_room_in_tmpfs_stages_nothing(env, monkeypatch, caplog):
+    """A slot ring that cannot be made before the GPU (tmpfs full next to the hour stage) is not a batch failure:
+    no early staging, the snapshot loop makes the ring as without prefetch."""
+    from gpu_subband_imaging.v3 import slots
+    cfg = _config(env.tmp, prefetch=True)
+    v = V3Batch(_worker(cfg, FakeDaemon()), env.tars)
+
+    def no_room(n):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(slots, "SlotRing", no_room)
+    with caplog.at_level(logging.WARNING, logger="gsi"):
+        v._prefetch_stage(env.tars, set())
+    assert v._pre is None and v.ring is None
+    assert "no staging before the GPU" in caplog.text

@@ -1259,7 +1259,9 @@ class V3Batch:
         guard = memory.MemoryGuard(self.v3.ram_reserve_gb, every=self.v3.mem_check_every)
         t_pass2 = time.perf_counter()
         posts: List[tuple] = []
-        nload = int(self.v3.aoflag_load_threads) if self.v3.aoflag_async_io else 0
+        # (nload + 1 loads in flight take ring slots in any order; with nload < len(ring) the head load still finds
+        # one once the post threads have freed theirs, else it could wait forever behind the others)
+        nload = max(1, min(int(self.v3.aoflag_load_threads), len(self.ring) - 1)) if self.v3.aoflag_async_io else 0
 
         def load(it: Item):
             """A ring slot with the flagged copy of `it`: (Item, None), or (None, error)."""
@@ -1406,9 +1408,16 @@ class V3Batch:
         if not self._prefetch_room(len(work)):
             return
         t0 = time.perf_counter()
-        self.ring = slots.SlotRing(self.lookahead + 2)
-        self.w._v3_sweep_untar()
-        self.w._v3_start_pool()
+        try:
+            self.ring = slots.SlotRing(self.lookahead + 2)
+            self.w._v3_sweep_untar()
+            self.w._v3_start_pool()
+        except Exception as e:                                      # e.g. tmpfs full next to the hour stage
+            log.warning("V3_PREFETCH %sMHz batch%d: no staging before the GPU (%s)", self.band, self.batch, e)
+            if self.ring is not None:
+                self.ring.close()
+                self.ring = None
+            return
         pool = ThreadPoolExecutor(max_workers=max(1, self.cfg.cluster.max_feeders))
         futs: Dict[int, Future] = {}
         for j in range(min(len(work), self.lookahead + 1)):         # = top_up(0) in the snapshot loops
