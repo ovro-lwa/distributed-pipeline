@@ -15,6 +15,7 @@ per band and LST hour: 1-h and 10-min images, QA and a movie.
 | **v3** | opt-in (`v3:` config; TTCalX `v0.3.0`) | One band-hour in one process, data kept in RAM: numpy prep instead of CASA, peel and imaging through shared memory, hour images made from memory. Same images as v2, ~2.5x faster per band-hour. |
 | **v4** | v3 + TTCalX `v0.4.0` + the v4 keys below | The v3 path with the imager speed switches (TTCalX `FAST_ENV`), peel slot I/O on the GPU, cached prep gains and the peel-solution merge during the hour stage. Same images as v3 (deep 1-h products within 0.005 sigma), ~1.7x faster per band-hour from averaged data, ~1.4x from raw nightly data. |
 | **v5** | branch `release/gsi-v5` + TTCalX `v0.5.0` (`release/v0.5.0` @f363db6) + the v5 keys below | v4 with the TTCalX fast peel (`peel.peel_fast`), the imager's v5 set (`imaging.gpu_env: {TTCALX_V5: "1"}`: zenith-frame snapshot gridding, hour-stage switches), AOFlagger skipping fully flagged baselines (same flags), `v3.aoflag_procs` 16 and two scheduling switches. Peel ~2.6x faster (0.38x the time; another rounding of v4's), snapshot imaging ~2.2-2.5x faster at 55-82 MHz, hour stage ~1.14-1.40x faster (0 fails vs production at the rerun floor); the end-to-end v5 vs v4 night comparison is still to be done (`CHANGELOG.md`). |
+| **v5.1** | branch `release/gsi-v5.1` (on `gsi-v5`) + TTCalX `v0.5.0` (unchanged) + the v5.1 keys below | v5 with fewer per-batch overheads, all opt-in (`deploy/config-lst-v5.1-template` turns them on): prep in row blocks (`v3.prep_block_rows`, bitwise the same), one zest daemon per GPU across batches (`v3.zest_persistent`, no Julia JIT per batch), overlapped aoflag slot copies (`v3.aoflag_async_io`), the next batch staged and prepped during the hour stage (`v3.prefetch`), `lookahead` / `max_feeders` 16; optional deterministic fpack dither (`fpack_deterministic`, off). Same peel lines, flags and QA as v5, images within the rerun spread; 1.11-1.21x faster wall on the 10-24 04h+05h test (1050 / 1141 s vs ~1270 s). |
 
 With no `v3:` block and no new `peel:` options the code runs as v2
 (`docs/default_path_vs_13405ce.md`). Roll back: `git checkout gsi-v2` here and in TTCalX.
@@ -152,6 +153,14 @@ max_retries: 2                                                 # v4: 1; retry 1 
 dispatch_band_order: [78, 69, 73, 64, 55, 82, 59, 50, 46, 41, 32, 36, 27, 23, 18]   # slowest first (2026-11-18)
 ```
 
+v5.1 = v5 (same TTCalX) and (`deploy/config-lst-v5.1-template/`, the v5 template plus exactly these keys):
+
+```yaml
+v3: {prep_block_rows: 2048, zest_persistent: true, aoflag_async_io: true, prefetch: true, lookahead: 16}
+# cluster.yaml: max_feeders: 16, zest_recycle_files: 0 (zest_persistent needs 0)
+# fpack_deterministic: true (fpack -qt 4) is available but not in the template
+```
+
 New options (all off / v2 behaviour by default):
 
 | option | default | what it does |
@@ -169,6 +178,11 @@ New options (all off / v2 behaviour by default):
 | `v3.retry_on_checkpoint_node` | false | `hour_source: memory`, `checkpoint: local`, `archive: none`: a band-hour's first retry waits for the node holding its checkpoint (only the missing snapshots and the hour are redone), but not for a node that does not answer or left the cluster, and at most `v3.retry_pin_max_wait_s` (default 1800 s); later retries go anywhere (so use `max_retries` >= 2 with it) |
 | `dispatch_band_order` | `[]` | streaming dispatch: these bands first inside each LST hour, in this order (e.g. slowest first); the rest by band |
 | `v3.aoflag` | off | `hour`: AOFlagger after peeling on the whole band-hour (time x frequency per baseline, as the main pipeline's concatenated MS; same flags as the CLI), then imaging; ~+14% night time (`v3.aoflag_procs` 10, needs `hour_source: memory`) |
+| `v3.prep_block_rows` | 0 | prep calibrates + averages this many rows at a time (bitwise the same slot; v5.1 template 2048) |
+| `v3.zest_persistent`, `v3.zest_persistent_idle_s` | false, 1800 | one zest daemon per GPU across batches (`v3/zest_server.py`; no Julia JIT per batch; RELEASE at detach keeps only the CUDA context, ~0.27 GB); needs `peel_io: shm` and `zest_recycle_files: 0`; `gsi cleanup-nodes` stops the servers |
+| `v3.aoflag_async_io`, `v3.aoflag_load_threads` | false, 2 | `aoflag: hour`: slot copies to / from `aoflag_dir` overlap the peels / the engine (same bytes) |
+| `v3.prefetch` | false | streaming LST, `hour_source: memory`: a slot's next batch is dispatched when its batch starts the hour stage, stages + preps its first snapshots and waits for the GPU's flock (CHANGELOG v5.1) |
+| `fpack_deterministic` | false | snapshot FITS with `fpack -qt 4` (dither seed from the data, not the clock: reruns give the same .fz pixels) |
 | `peel.smooth_flux`, `peel.restore`, ... | off | sponge smoothing and Jupiter restore, not production yet (`docs/peel_config.md`) |
 | `GSI_SNAP_PIPELINE=1` | off | pipelined snapshot-imager daemon (v2 path) |
 | `GSI_SNAP_REPLY_TIMEOUT_S` | none (900 s when pipelined) | kill the snapshot-imager daemon after this many seconds without a reply |

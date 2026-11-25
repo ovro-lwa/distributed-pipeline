@@ -166,3 +166,81 @@ Wait for (or stop) the running v5 night, `screen -S daily_v5 -X quit`, check `pg
 /opt/devel/pipeline/gsi-v4/daily_v4.log; exec bash"`. A night v5 stopped in the middle is redone on v4 with
 `night_guarded_v4.sh <date>`: v4 writes it under its own run label (v4 has no `run_label_<date>.txt` for it); the
 partial v5 run directory stays under the v5 label.
+
+## Switching to v5.1
+
+A new `/opt/devel/pipeline/gsi-v5.1` (`$G`) next to `gsi-v5`, which stays the rollback. Only the gsi code, the env
+script, the template and the logs are new; v5.1 has no TTCalX change, so it uses gsi-v5's TTCalX v0.5.0 tree, imager
+venv and CuPy kernel cache (the template points there). That is safe because:
+
+- TTCalX is the same tag (v0.5.0) and v5.1 adds no TTCalX code: the daemon's new `RELEASE` command lives in gsi's
+  `workers/zest_daemon.jl` (from the v5.1 checkout) and calls only TTCalX v0.5.0 functions. Same tree path, so the
+  Julia precompile cache in the shared depot is the one v5 uses (no precompile step).
+- The imager venv is the same imager (v0.5.0, editable from that tree); the CuPy cache holds the same kernels, keyed
+  by source and GPU, written atomically.
+- v5 and v5.1 never run at the same time (one nightly loop at a time), and neither changes those pieces.
+
+So do not update or remove gsi-v5's `TTCalX`, `venv` or `/fast/pipeline/gsi_v5/cupy_cache` while v5.1 is in use. A
+TTCalX change later means a new deploy with its own tree, venv and cache, as for v5.
+
+Run every step as `pipeline` (`sudo -iu pipeline`) on calim02.
+
+1. gsi: the tag `gsi-v5.1` (on `release/gsi-v5.1`) must be pushed to https://github.com/ovro-lwa/distributed-pipeline.git first,
+   or use a bundle (absolute path) in place of the URL:
+
+   ```bash
+   G=/opt/devel/pipeline/gsi-v5.1
+   mkdir $G
+   git clone /opt/devel/pipeline/gsi-v5/distributed-pipeline $G/distributed-pipeline     # local copy, then the tag:
+   git -C $G/distributed-pipeline remote remove origin
+   git -C $G/distributed-pipeline fetch https://github.com/ovro-lwa/distributed-pipeline.git tag gsi-v5.1
+   git -C $G/distributed-pipeline checkout --detach gsi-v5.1
+   git -C $G/distributed-pipeline log --oneline -1          # the release commit (README "Versions" row v5.1)
+   ```
+2. Env script: gsi-v5's with the gsi home of this deploy.
+
+   ```bash
+   sed 's#/opt/devel/pipeline/gsi-v5/#/opt/devel/pipeline/gsi-v5.1/#; s#gsi-v5 GPU#gsi-v5.1 GPU#' \
+       $G/distributed-pipeline/gpu-subband-imaging/deploy/nightly/gsi_env.sh > $G/gsi_env.sh
+   grep GSI_HOME= $G/gsi_env.sh       # /opt/devel/pipeline/gsi-v5.1/distributed-pipeline/gpu-subband-imaging
+   ```
+3. Template and reference table:
+
+   ```bash
+   cp -r $G/distributed-pipeline/gpu-subband-imaging/deploy/config-lst-v5.1-template $G/config-lst-v5.1-template
+   cp /opt/devel/pipeline/gsi-v5/last_good_bp.txt $G/last_good_bp.txt
+   (source $G/gsi_env.sh && python -c "from gpu_subband_imaging.config import Config; \
+       c = Config.load('$G/config-lst-v5.1-template'); print(c.pipeline.env.ttcalx, c.cluster.max_feeders)")
+   ```
+
+   The template is gsi-v5's plus the v5.1 keys (`tests/test_deploy_v5_1_template.py` checks the difference) and
+   `work_root: /fast/pipeline/gsi_v5_1` (the workers create it on each node). `fpack_deterministic` stays off:
+   turning it on (`fpack -qt 4`) changes the archived snapshot pixels at the dither level, a separate decision.
+   No node setup is needed (same Julia depot, CuPy cache already warm from the v5 deploy).
+4. Confirmation run on hours v5 already made (e.g. the 2026-10-24 test input), never overlapping a nightly, and its
+   comparison with v5 (peel lines, flags, QA, images within the rerun floor).
+5. Switch the nightly between two nights exactly as in "Switching to v5" step 6, with `gsi-v5` -> `gsi-v5.1`: wait
+   for or stop the running v5 loop (`screen -S daily_v5 -X quit`), `pgrep -af 'daily_guarded|run_nightly_lst|gpu_subband_imaging.cli'` empty,
+   `cp /opt/devel/pipeline/gsi-v5/last_good_bp.txt $G/` again if v5 ran since step 3, then
+
+   ```bash
+   N=/opt/devel/pipeline/gsi-v5.1/distributed-pipeline/gpu-subband-imaging/deploy/nightly
+   D=2026-MM-DD      # the next date no loop has started
+   CHECK_ONLY=1 G=/opt/devel/pipeline/gsi-v5.1 bash $N/night_guarded.sh $D     # optional: calibration check only
+   screen -dmS daily_v5_1 bash -c "G=/opt/devel/pipeline/gsi-v5.1 bash $N/daily_guarded.sh $D 2>&1 | tee -a /opt/devel/pipeline/gsi-v5.1/daily_v5_1.log; exec bash"
+   ```
+
+   `night_guarded.sh` takes the template name from the deploy dir (`gsi-v5.1` -> `config-lst-v5.1-template`,
+   `config-lst-v5.1-auto`) and logs "starting night <date> on gsi-v5.1" to `$G/night_guard_<date>.log`.
+
+What v5.1 leaves on the GPU nodes (per user, node-local): `/tmp/gsi_zest_<uid>/gpu<n>.{sock,lock,pid,spec.json,log}`
+(the persistent zest servers; the log is appended across nights and has only ZEST_SERVER lines and warnings) and
+`/tmp/gsi_v3gpu_<uid>_gpu<n>.lock` (prefetch). An idle server keeps its Julia process (~2 GB RSS) and ~0.27 GB of GPU
+memory until `zest_persistent_idle_s` (30 min) without a batch, or until `gsi cleanup-nodes` (the nightly runs it after
+the night) stops it: `pgrep -u pipeline -af 'gpu_subband_imaging[.]v3[.]zest_server'` lists them.
+
+Rollback to v5: stop the v5.1 loop (`screen -S daily_v5_1 -X quit`, `pgrep -af daily_guarded` empty),
+`cp $G/last_good_bp.txt /opt/devel/pipeline/gsi-v5/`, and start `daily_v5` as in "Switching to v5" step 6. Leftover
+zest servers exit by themselves after 30 min idle (or `pkill -u pipeline -f 'gpu_subband_imaging[.]v3[.]zest_server'`
+on each GPU node; v5 does not use them). A night v5.1 stopped in the middle is redone on v5 with
+`G=/opt/devel/pipeline/gsi-v5 night_guarded.sh <date>` under v5's own run label.
