@@ -447,6 +447,11 @@ class Orchestrator:
             cmd += (f"; cd {shlex.quote(local)} 2>/dev/null && {{ for d in */{date}/*; do "
                     "[ -d \"$d\" ] || continue; n=$(ls -d \"$d\"/*.ms 2>/dev/null | wc -l); "
                     f"[ \"$n\" -gt 0 ] && {{ {move}; }}; done; rm -rf */{date}; }}; true")
+        if getattr(getattr(pl, "v3", None), "zest_persistent", False):
+            # v3.zest_persistent: stop this user's per-GPU zest servers (an idle one keeps its Julia process and
+            # ~0.3 GB of GPU memory for zest_persistent_idle_s); "[.]" so pkill does not match this ssh command
+            # line.  A batch still attached to one (another run of the same user) goes on with a private daemon
+            cmd += "; pkill -TERM -u \"$(id -u)\" -f 'gpu_subband_imaging[.]v3[.]zest_server'; true"
         for node in sorted({s.node for s in self.slots}):
             r = dispatch._ssh(node, cmd, timeout=3600)
             log.info("node cleanup on %s: %s %s", node, "ok" if r.ok else "FAILED", r.tail.strip())
