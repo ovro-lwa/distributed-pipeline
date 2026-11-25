@@ -34,7 +34,16 @@ Measured (2026-10-24 test input, LST 04h + 05h, 23-82 MHz, 5 nodes x 2 GPUs, the
 Review fixes before the release (`git log e3bf59a..release/gsi-v5.1`): a stale hour marker of an earlier attempt
 is removed at dispatch (it could prefetch onto a slot whose batch had only just started); a prefetched batch's wait
 for the GPU no longer counts against its budget and timeout; the zest server key covers the files ZEST_* settings
-name (an RFI model rewritten in place is not served by a daemon that loaded the old one).
+name (an RFI model rewritten in place is not served by a daemon that loaded the old one), `workers/zest_smooth.jl` and
+TTCalX's Project / Manifest; a killed server's daemon is waited for (30 s, as ZestDaemon) before the slot is
+released; the budget kill reaches the private daemon that replaced a lost server also after its restarts; the
+aoflag pass-2 loaders are capped below the ring size (`aoflag_load_threads` >= the ring could hang); a prefetch
+that cannot make its ring before the GPU (tmpfs full) stages nothing early instead of failing.
+
+Known limits: the servers are per user and GPU, not per run. `gsi cleanup-nodes` of one run stops the servers a
+concurrent run of the same user is attached to (that batch's snapshot in flight fails, the rest peel with a
+private daemon), and two concurrent runs with different settings replace each other's server (JIT again). Never
+overlap test runs with the nightly (as before: a test's cleanup-nodes also deletes the nightly's caches).
 
 Deploy: `deploy/README-deploy.md`, "Switching to v5.1" (a new `/opt/devel/pipeline/gsi-v5.1` next to gsi-v5,
 sharing gsi-v5's TTCalX tree, venv and CuPy cache). Tests: `tests/test_v3_overheads.py`,
