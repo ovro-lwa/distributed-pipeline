@@ -590,3 +590,64 @@ def test_imaging_gpu_env_ttcalx_v5_reaches_use_fast_settings(tmp_path, monkeypat
         pytest.skip("imager without the v5 set (TTCalX < 0.5.0)")
     on = ttcalx_imager.use_fast_settings({"TTCALX_V5": seen["TTCALX_V5"]})
     assert ttcalx_imager.v5_env().items() <= on.items() and on["TTCALX_SNAP_ZEN"] == "1"
+
+
+@pytest.mark.parametrize("checkpoint", [False, True])
+@pytest.mark.parametrize("real_lazy", [False, True])
+def test_hour_input_does_not_depend_on_the_record_arrival_order(tmp_path, monkeypatch, checkpoint, real_lazy):
+    """The hour op's input (what cli.run_hour_snaps gets from get_snaps) is the same whatever order the records
+    reached the store in (v3.prefetch, a resumed checkpoint, a replayed snapshot): op_hour takes the expected stems
+    sorted, and the imager's lazy_snaps sorts by time again.  Same stems, same order, bitwise the same arrays and R.
+    real_lazy=False: an identity lazy_snaps, so the engine's own order is checked without the imager's sort."""
+    import random
+    import types
+    from test_v3_hourstore import _rec
+    eng = _engine_module()
+    stems = [f"20261024_1048{k:02d}_55MHz" for k in range(0, 60, 10)]
+    recs = {s: _rec(seed=k, stem=s)[0] for k, s in enumerate(stems)}      # time grows with the stem
+    rerun = _rec(seed=17, stem=stems[2])[0]                                # a replayed snapshot: newest wins
+    rerun.meta["time"] = recs[stems[2]].meta["time"]
+    orders = {"time": stems, "prefetch-like": stems[3:] + stems[:3], "reversed": stems[::-1]}
+    rng = random.Random(5)
+    for k in range(3):
+        o = list(stems)
+        rng.shuffle(o)
+        orders[f"shuffled{k}"] = o
+    if real_lazy:
+        from ttcalx_imager import gsiv
+        lazy = gsiv.lazy_snaps
+    else:
+        lazy = lambda records, ra=None, dec=None, want_v=True, log=None: [  # noqa: E731
+            dict(meta, R=arrays["R"], arrays=arrays) for meta, arrays, _ in records]
+    got = {}
+
+    def run_hour_snaps(argv, get_snaps, timing=None, t0=None):
+        snaps = get_snaps(None, None, True)               # ra None: the stored R (no casacore needed)
+        got["snaps"] = [(s["stem"], s["time"],
+                         {k: np.asarray(v).tobytes() for k, v in (s.arrays if hasattr(s, "arrays") else s["arrays"]).items()},
+                         np.asarray(s["R"]).tobytes()) for s in snaps]
+        return dict(n_loaded=len(snaps), qa=[dict(stem=s["stem"]) for s in snaps])
+    pkg = types.ModuleType("ttcalx_imager")
+    pkg.cli = types.SimpleNamespace(run_hour_snaps=run_hour_snaps)
+    pkg.gsiv = types.SimpleNamespace(lazy_snaps=lazy)
+    monkeypatch.setitem(sys.modules, "ttcalx_imager", pkg)
+    backend = types.SimpleNamespace(before_hour=lambda: None, after_hour=lambda: None)
+    inputs = {}
+    for name, order in orders.items():
+        path = tmp_path / f"{name}.gsiv" if checkpoint else None
+        e = eng.Engine(backend, None)
+        e.store = hourstore.HourStore(path, backend="memmap" if checkpoint else "ram")
+        appended = [recs[s] for s in order]
+        appended.insert(order.index(stems[2]) + 1, rerun)  # the rerun of stems[2] arrives after the original
+        for r in appended:
+            e.store.append(hourstore.Record(dict(r.meta), dict(r.arrays)))
+        assert (order != stems) == (name != "time")
+        r = e.op_hour(dict(argv=[], expected=list(reversed(stems))))
+        assert r["status"] == "ok" and r["qa_stems"] == stems
+        inputs[name] = got.pop("snaps")
+        e.store.close()
+    ref = inputs["time"]
+    assert [x[0] for x in ref] == stems
+    assert ref[2][2]["I"] == rerun.arrays["I"].tobytes()     # the newest record of stems[2]
+    for name, x in inputs.items():
+        assert x == ref, name

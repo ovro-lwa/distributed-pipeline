@@ -110,10 +110,10 @@ def test_stale_marker_of_a_killed_worker_is_removed(monkeypatch, tmp_path):
 def _products(tmp):
     b = _bdir(tmp)
     prov = json.loads((b / "provenance.json").read_text())
-    recs = {r.stem: {k: a.tobytes() for k, a in r.arrays.items()}
-            for r in hourstore.read_records(Path(prov["v3"]["store_path"]))[2]}
+    stored = hourstore.read_records(Path(prov["v3"]["store_path"]))[2]
+    recs = {r.stem: {k: a.tobytes() for k, a in r.arrays.items()} for r in stored}
     fits = {p.name: p.read_bytes() for p in sorted((b / "snapshots_clean").iterdir())}
-    return prov, recs, fits
+    return prov, recs, fits, [r.stem for r in stored]
 
 
 def _reset(tmp):
@@ -188,6 +188,10 @@ def test_prefetched_batch_stages_before_the_gpu_and_gives_the_same_bytes(env, mo
     assert d.calls == STAMPS
     got = _products(tmp)
     assert got[1] == ref[1] and got[2].keys() == ref[2].keys()
+    # one record per snapshot, prefetched or not.  The store's append order is not fixed (the snapshot loop's 3
+    # post threads race to the engine, with or without prefetch); the hour op takes the stems sorted
+    # (test_v3_engine: test_hour_input_does_not_depend_on_the_record_arrival_order)
+    assert sorted(got[3]) == sorted(ref[3]) and len(set(got[3])) == len(got[3]) == len(STAMPS)
     assert got[0]["hour"]["status"] == "ok" and got[0]["hour"]["n_loaded"] == len(STAMPS)
     assert markers == [True]                               # written in the hour stage
     assert not prefetch_marker(cfg, 23, 0).exists()        # removed at the end of the batch
