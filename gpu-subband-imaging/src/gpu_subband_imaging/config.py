@@ -751,6 +751,10 @@ class PipelineConfig:
     # streaming dispatch inside one LST hour: these bands first, in this order (e.g. the slowest first, so the
     # night's last hour does not end on a long band-hour); the others after them by band.  [] = by band
     dispatch_band_order: List[int] = field(default_factory=list)
+    # snapshot FITS compression: false = `fpack -v` (dither seed from the clock: every rerun's .fz pixels differ
+    # by the quantization dither); true = `fpack -qt 4 -v` (the same level 4, seed from the first tile's checksum:
+    # the same image gives the same compressed pixels).  Default off (as v5)
+    fpack_deterministic: bool = False
     v3: V3Params = field(default_factory=V3Params)
 
     def __post_init__(self) -> None:
@@ -881,8 +885,16 @@ def load_pipeline(path: Union[str, Path]) -> PipelineConfig:
                             if d.get("max_files_per_hour") else None),
         description=str(d.get("description") or ""),
         dispatch_band_order=_band_order(d.get("dispatch_band_order"), d["bands"]),
+        fpack_deterministic=_bool_key(d.get("fpack_deterministic", False), "fpack_deterministic"),
         v3=V3Params(**(d.get("v3") or {})),
     )
+
+
+def _bool_key(value, name: str) -> bool:
+    """A pipeline.yaml true / false key (a quoted 'false' would be truthy as bool())."""
+    if not isinstance(value, bool):
+        raise ConfigError(f"{name} must be true or false, not {value!r}")
+    return value
 
 
 def _band_order(value, bands) -> List[int]:

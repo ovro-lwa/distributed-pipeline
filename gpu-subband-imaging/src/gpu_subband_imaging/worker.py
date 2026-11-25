@@ -798,7 +798,9 @@ class Worker:
         for f, target in pairs:
             t0 = time.perf_counter()
             f = f.rename(f.parent / target.name)
-            fz = compress.fpack(f)
+            # pipeline.yaml fpack_deterministic: `fpack -qt 4` (dither seed from the data, not the clock)
+            fz = compress.fpack(f, deterministic=True) if getattr(self.cfg.pipeline, "fpack_deterministic", False) \
+                else compress.fpack(f)
             log.info("timing %sMHz batch%d stamp=%s phase=fpack file=%s elapsed=%.2f s",
                      self.band, self.batch, stamp, f.name, time.perf_counter() - t0)
             target.parent.mkdir(parents=True, exist_ok=True)
