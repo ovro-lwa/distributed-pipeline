@@ -1,0 +1,159 @@
+# gsi-v5.1 nightly template (2026-11-25, release/gsi-v5.1, TTCalX v0.5.0 tree and imager venv of the gsi-v5 deploy):
+# gsi-v5 template + v3.prep_block_rows 2048, zest_persistent, aoflag_async_io, prefetch, lookahead 16 and
+# cluster.yaml max_feeders 16 (prep_procs 6, zest_recycle_files 0 as v5); work_root /fast/pipeline/gsi_v5_1
+# gsi-v5 nightly template (2026-11-24, release/gsi-v5 + TTCalX v0.5.0): gsi-v4 production template + v5 keys
+# (peel_fast, imaging TTCALX_V5, aoflag_procs 16, retry_on_checkpoint_node + retry_pin_max_wait_s, max_retries 2,
+# dispatch_band_order), gsi-v5 paths
+# gsi-v4 PRODUCTION nightly template (2026-11-05): gsi-v3 production template + v4 keys (slot_gpu_io, prep_procs 6, prep_gain_cache, max_feeders 8)
+# gsi-v3 nightly template: production v2 template (gsi-v2/config-lst-template, 2026-11-03) + v3 in-memory band-hour,
+# main f3a49ce + TTCalX v0.3.1, production-like peeling (no sponge smoothing / restore)
+date: '2026-10-26'
+hours: all
+layout: lst
+lst_hours: []
+run_label: Run_template
+sun_cut: true
+snapshot_phase_centre: lst
+chgcentre: /opt/bin/chgcentre
+bands:
+- 18
+- 23
+- 27
+- 32
+- 36
+- 41
+- 46
+- 50
+- 55
+- 59
+- 64
+- 69
+- 73
+- 78
+- 82
+batch_size: 360
+batch_timeout_seconds: 10800
+# slowest band-hours first inside each LST hour (median dispatch->done of the 2026-11-18 v4 night)
+dispatch_band_order: [78, 69, 73, 64, 55, 82, 59, 50, 46, 41, 32, 36, 27, 23, 18]
+max_retries: 2       # v5: the first retry is pinned to the checkpoint node (v3.retry_on_checkpoint_node), the second goes anywhere
+data_root: /lustre/pipeline/slow
+output_root: /lustre/pipeline/snapshots_gpu_pipeline
+keep_ms_root: /lustre/pipeline/snapshots_gpu_pipeline/_kept_ms
+fix_uvw: centroid
+cal:
+  bp: /lustre/pipeline/calibration/results/2026-10-25/05h/successful/20261025_130754/tables/calibration_2026-10-25_05h.B.flagged
+  xy: /lustre/gh/polcal/xyphase_delay_pos_3.8643ns.Xf
+  sources: /opt/devel/pipeline/gsi-v2/models/sources_7src_tauA.json
+  aoflagger_strategy: /lustre/ghellbourg/AOFlagger_strat_opt/LWA_opt_GH1.lua
+  rfi_sources: /lustre/gh/calibration/pipeline/reference/sources/rfi_43.2_ver20251101.json
+chanbin: 4
+do_aoflag: false
+do_badants: true
+peel:
+  maxiter: 5
+  tolerance: 0.0001
+  minuvw: 5.0
+  peeliter: 3
+  min_source_elevation_deg: 0.0
+  require_convergence: false
+  max_gain_amplitude: 100.0
+  quality_sample_rows: 1024
+  min_visibility_amplitude: 1.0e-12
+  min_visibility_nonzero_fraction: 0.01
+  solver: rk4
+  model: exact
+  uvw: geometric
+  flag_model: true
+  resubtract: true
+  fast_io: true
+  rfi: true
+  flag_zero: true
+  residual_guard: true
+  engine: sky_rfi
+  precision: mixed
+  workspace: true
+  fast_kernels: true
+  slot_gpu_io: true
+  peel_fast: true
+imaging:
+  imager: ttcalx
+  gpu_env:
+    GSI_SVD_QUANTUM: '0'
+    TTCALX_V5: '1'
+  mode: clean
+  weight: briggs
+  robust: 0
+  taper_inner_tukey: 30
+  clean_niter: 50000
+  clean_mgain: 0.9999
+  clean_auto_mask: 5
+  clean_auto_threshold: 1
+  clean_local_rms: true
+  clean_horizon_mask: 10deg
+  clean_mem: 50
+  dirty_mem: 20
+  abs_mem: 20
+  retries: 1
+hour_imaging:
+  ttcalx_image: /opt/devel/pipeline/gsi-v5/venv/bin/ttcalx-image
+  products:
+  - I-Deep-Taper-Robust-0
+  - I-Deep-Taper-Robust-0.75
+  - I-Deep-NoTaper-Robust-0.75
+  - I-Deep-NoTaper-Robust-0
+  - I-Taper-10min
+  - V-Taper-Deep
+  - V-Taper-10min
+  nproc: 8
+  qa: none
+  timeout_seconds: 7200
+  delete_kept_ms: true
+  env:
+    CUPY_CACHE_DIR: /fast/pipeline/gsi_v5/cupy_cache
+    OMP_NUM_THREADS: '4'
+    NUMPY_MADVISE_HUGEPAGE: '0'
+    OPENBLAS_NUM_THREADS: '1'
+movie:
+  enabled: true
+  max_px: 512
+  fps: 20
+  crf: 28
+  scale_mode: adaptive_i
+  fixed_vmax: 20
+  rms_scale: 10.0
+  horizon_mask: true
+  horizon_radius_fraction: 0.49
+  keep_frames: false
+env:
+  conda_env: /opt/devel/pipeline/envs/py38_orca_nkosogor
+  dev_env: /opt/devel/pipeline/envs/development
+  julia_bin: /opt/devel/nkosogor/nkosogor/julia-1.10.4/bin
+  ttcalx: /opt/devel/pipeline/gsi-v5/TTCalX
+  shared_depot: /opt/devel/nkosogor/nkosogor/julia_depot
+stream_hour_images: true
+wideband_per_hour: true
+calcache_cleanup: none
+prep: numpy
+nightly_wait_all: true
+v3:
+  untar_to: /dev/shm/gsi3/untar
+  prep_inmem: 'on'
+  prep_procs: 6
+  prep_gain_cache: true
+  aoflag: hour         # 2026-11-16 gsi-v4.2: AOFlagger after peeling on the band-hour (+~14% time)
+  aoflag_procs: 16
+  peel_io: shm
+  snapshot_io: shm
+  hour_source: memory
+  write_kept_ms: false
+  archive: none
+  store: auto
+  checkpoint: local
+  retry_on_checkpoint_node: true
+  retry_pin_max_wait_s: 1800     # the pinned retry waits at most 30 min for its node, then goes anywhere
+  # v5.1 (2026-11-25, e2e 10-24 04h+05h: wall 1050 / 1141 s vs 1265-1276 s for v5; peel lines, flags, QA identical)
+  prep_block_rows: 2048          # prep calibrates + averages in 2048-row blocks (bitwise the same arrays)
+  zest_persistent: true          # one zest daemon per GPU across batches (no Julia JIT per batch)
+  aoflag_async_io: true          # aoflag=hour: slot copies to / from disk overlap the peels / the engine
+  prefetch: true                 # a slot's next batch stages + preps during the hour stage of its batch
+  lookahead: 16                  # (v5: 8) snapshots staged + prepped ahead of the peel
