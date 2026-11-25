@@ -488,6 +488,15 @@ class V3Params:
     # prep processes calibrate + average this many rows at a time (cache-sized passes; every value comes from the
     # same per-row operations, so the slot is bitwise the same; ~-0.5 s CPU per 55 MHz snapshot); 0 = whole arrays
     prep_block_rows: int = 0
+    # hour_source=memory + streaming: the orchestrator gives a slot its next batch as soon as the slot's batch starts
+    # its hour stage (marker <state_dir>/prefetch/<run_key>/<band>MHz_b<batch>.hour).  Every batch takes a per-GPU
+    # flock (/tmp/gsi_v3gpu_<uid>_gpu<n>.lock); a batch that finds it held (prefetched) does its setup (store plan,
+    # calibration tables, bad antennas) and stages and preps its first lookahead + 1 snapshots (Lustre read, untar,
+    # prep into its slot ring: the same calls and slots as the snapshot loop's first top-up) while the GPU is busy,
+    # and starts the zest daemon, the engine and the peels only once the previous batch has exited.  No prefetch
+    # staging for a retry with FITS already there (its work list needs the store) or with too little RAM.
+    # Default off (one batch per slot)
+    prefetch: bool = False
 
     @property
     def active(self) -> bool:
@@ -570,6 +579,8 @@ class V3Params:
             raise ConfigError("v3.aoflag_load_threads must be >= 1")
         if self.aoflag_async_io and self.aoflag != "hour":
             raise ConfigError("v3.aoflag_async_io needs v3.aoflag=hour (it only acts in the aoflag passes)")
+        if self.prefetch and self.hour_source != "memory":
+            raise ConfigError("v3.prefetch needs v3.hour_source=memory (the batch makes its hour products)")
         if isinstance(self.prep_block_rows, bool) or not isinstance(self.prep_block_rows, int) or self.prep_block_rows < 0:
             raise ConfigError(f"v3.prep_block_rows must be an integer >= 0, not {self.prep_block_rows!r}")
         if not 0 <= self.max_given_up_fraction <= 1 or self.stale_checkpoint_hours < 0:
@@ -908,6 +919,9 @@ def _warn_noop(pipeline: PipelineConfig) -> List[str]:
         msgs.append("peel.slot_gpu_io only acts on shared-memory slots (v3.peel_io: shm); ignored")
     if v3 is not None and getattr(v3, "aoflag", "off") != "off" and v3.snapshot_io != "shm":
         msgs.append("v3.aoflag only acts in the shared-memory snapshot path (v3.snapshot_io: shm); ignored")
+    if v3 is not None and getattr(v3, "prefetch", False) and not (
+            getattr(pipeline, "stream_hour_images", False) and getattr(pipeline, "layout", "utc") == "lst"):
+        msgs.append("v3.prefetch only acts in streaming runs (stream_hour_images: true, layout: lst); ignored")
     for m in msgs:
         logging.getLogger("gsi.config").warning(m)
     return msgs

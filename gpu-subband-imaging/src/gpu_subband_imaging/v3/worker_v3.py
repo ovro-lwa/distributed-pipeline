@@ -170,6 +170,10 @@ class V3Batch:
         self.deadline: Optional[float] = None
         self.n_guard = 0                     # memory guard escalation level
         self.zen_counts: Dict[str, int] = {}  # zenith-router decisions of this batch's images (zen_tally)
+        self._gpu_fd: Optional[int] = None   # v3.prefetch: the per-GPU flock (held from start, or once the GPU is free)
+        self._prefetching = False            # v3.prefetch: started while another batch held the GPU
+        self._pre: Optional[dict] = None     # v3.prefetch: the feeders started before the GPU (pool, futs)
+        self._marker: Optional[Path] = None  # v3.prefetch: this batch's hour-stage marker
 
     # -- names ------------------------------------------------------------------------------------
     def kept_stem(self, stamp: str) -> str:
@@ -837,13 +841,18 @@ class V3Batch:
         batch_start = time.perf_counter()
         self._start_budget(batch_start)
         try:
-            self._prepare(tars, todo)
-        except BaseException:
-            if self._budget is not None:
-                self._budget.cancel()
-            memory.unreserve()
-            raise
-        self._run_main(tars, todo, have_fits, batch_start)
+            if getattr(self.v3, "prefetch", False):
+                self._try_gpu()
+            try:
+                self._prepare(tars, todo)
+            except BaseException:
+                if self._budget is not None:
+                    self._budget.cancel()
+                memory.unreserve()
+                raise
+            self._run_main(tars, todo, have_fits, batch_start)
+        finally:
+            self._drop_gpu()
 
     def _prepare(self, tars, todo) -> None:
         w = self.w
@@ -873,6 +882,9 @@ class V3Batch:
         hour_ok = False
         self._qa_written = False
         try:
+            if self._prefetching:                    # v3.prefetch: stage + prep the first snapshots, then the GPU
+                self._prefetch_stage(todo, have_fits)
+                self._wait_gpu()
             self.daemon = w._start_daemon()          # Julia JIT overlaps the engine start and the prep
             self.engine = self._start_engine()
             have_rec = set(self._open_store(self.engine).get("stems", []))
@@ -884,12 +896,19 @@ class V3Batch:
                             "without imaging", self.band, self.batch, len(replay))
             work = [(t, False) for t in todo] + [(t, True) for t in replay]
             work.sort(key=lambda x: _stamp(x[0]))
-            self.ring = slots.SlotRing(self.lookahead + 2)
+            if self._pre is not None and [t for t, _ in work[:len(self._pre["tars"])]] != self._pre["tars"]:
+                log.warning("V3_PREFETCH %sMHz batch%d: the work list differs from the prefetched one: prefetched "
+                            "snapshots dropped", self.band, self.batch)
+                self._drop_prefeed()
+            if self.ring is None:
+                self.ring = slots.SlotRing(self.lookahead + 2)
             log.info("batch %sMHz/%d: gsi v3 shm batch, %d to image, %d to replay, ring of %d slots, write_kept_ms=%s, "
                      "records=%s, hour_source=%s", self.band, self.batch, len(todo), len(replay), len(self.ring),
                      self.write_kept, self.records, self.v3.hour_source)
-            w._v3_sweep_untar()
-            w._v3_start_pool()
+            if self._pre is None:                    # (v3.prefetch: already done for the prefetched snapshots)
+                w._v3_sweep_untar()
+            if w._v3_pool is None:
+                w._v3_start_pool()
             t_snap = time.perf_counter()
             if self.v3.aoflag == "hour":
                 self._run_snapshots_aoflag(work)
@@ -933,6 +952,12 @@ class V3Batch:
                 self._hour_stage()
                 hour_ok = True
         finally:
+            self._drop_prefeed()                     # (v3.prefetch: an error before the snapshot loop)
+            if self._marker is not None:
+                try:
+                    self._marker.unlink()
+                except OSError:
+                    pass
             if self.daemon is not None:
                 self.daemon.close()
             if self._budget is not None:
@@ -981,10 +1006,10 @@ class V3Batch:
         n = len(work)
         guard = memory.MemoryGuard(self.v3.ram_reserve_gb, every=self.v3.mem_check_every)
         recycle = getattr(self.cfg.cluster, "zest_recycle_files", 25)
-        futs: Dict[int, Future] = {}
+        feeder_pool, futs = self._feeders()
         posts: List[tuple] = []
-        nxt = [0]
-        with ThreadPoolExecutor(max_workers=max(1, self.cfg.cluster.max_feeders)) as feeders, \
+        nxt = [len(futs)]
+        with feeder_pool as feeders, \
                 ThreadPoolExecutor(max_workers=3) as post:
             def top_up(i: int) -> None:
                 while nxt[0] < n and nxt[0] <= i + self.lookahead:
@@ -1087,12 +1112,12 @@ class V3Batch:
                         self.v3.aoflag_min_snaps)
         saved: List[Item] = []
         recycle = getattr(self.cfg.cluster, "zest_recycle_files", 25)
-        futs: Dict[int, Future] = {}
-        nxt = [0]
+        feeder_pool, futs = self._feeders()
+        nxt = [len(futs)]
         saves: List[Future] = []             # v3.aoflag_async_io: copies in flight, in order
         t_pass1 = time.perf_counter()
         try:
-            with ThreadPoolExecutor(max_workers=max(1, self.cfg.cluster.max_feeders)) as feeders, \
+            with feeder_pool as feeders, \
                     ThreadPoolExecutor(max_workers=1, thread_name_prefix="v3-aoflag-save") as saver:
                 def top_up(i: int) -> None:
                     while nxt[0] < n and nxt[0] <= i + self.lookahead:
@@ -1297,6 +1322,134 @@ class V3Batch:
         if self.fatal:
             raise BatchAborted(self.fatal)
 
+    # -- v3.prefetch -----------------------------------------------------------------------------------
+    def _gpu_lock_path(self) -> str:
+        return f"/tmp/gsi_v3gpu_{os.getuid()}_gpu{self.w.gpu}.lock"
+
+    def _try_gpu(self) -> None:
+        """Take the GPU's flock if free; else this batch was prefetched (the slot's previous batch is in its hour
+        stage): setup and the first snapshots' staging + prep now, the GPU later (_wait_gpu)."""
+        import fcntl
+        from ..orchestrator import prefetch_marker
+        try:                                         # a marker a killed earlier attempt left
+            prefetch_marker(self.cfg, self.band, self.batch).unlink()
+        except OSError:
+            pass
+        fd = os.open(self._gpu_lock_path(), os.O_RDWR | os.O_CREAT, 0o600)
+        self._gpu_fd = fd
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            self._prefetching = True
+            log.info("V3_PREFETCH %sMHz batch%d: GPU %s busy (the previous batch is in its hour stage): setup and the "
+                     "first snapshots now, zest daemon, engine and peels after it", self.band, self.batch, self.w.gpu)
+
+    def _wait_gpu(self) -> None:
+        if not self._prefetching:
+            return
+        import fcntl
+        t0 = time.perf_counter()
+        fcntl.flock(self._gpu_fd, fcntl.LOCK_EX)
+        self._prefetching = False
+        n = len(self._pre["futs"]) if self._pre else 0
+        ready = sum(f.done() for f in self._pre["futs"].values()) if self._pre else 0
+        log.info("V3_PREFETCH %sMHz batch%d: GPU %s free after %.1f s (%d of %d prefetched snapshot(s) prepped)",
+                 self.band, self.batch, self.w.gpu, time.perf_counter() - t0, ready, n)
+        log.info("timing %sMHz batch%d phase=prefetch_gpu_wait elapsed=%.2f s", self.band, self.batch,
+                 time.perf_counter() - t0)
+
+    def _drop_gpu(self) -> None:
+        if self._gpu_fd is not None:
+            try:
+                os.close(self._gpu_fd)                # releases the flock
+            except OSError:
+                pass
+            self._gpu_fd = None
+
+    def _prefetch_room(self, n: int) -> bool:
+        """RAM for the prefetched batch's prep processes, ring and raw MSes next to the batch in its hour stage."""
+        from . import memory
+        avail = memory.mem_available()
+        if avail is None:
+            return True
+        try:
+            tar_b = Path(self.tars[0]).stat().st_size
+        except OSError:
+            tar_b = 0
+        k = min(n, self.lookahead + 1)
+        need = (self.v3.ram_reserve_gb * memory.GB + memory.fixed_bytes(self.v3.prep_procs, self.v3.prep_gain_cache)
+                + (self.lookahead + 2) * 130e6
+                + min(k, max(1, int(self.cfg.cluster.max_feeders))) * tar_b * self.w.UNTAR_SPACE_MARGIN)
+        if avail < need:
+            log.warning("V3_PREFETCH_TIGHT %sMHz batch%d: MemAvailable %.1f GB < %.1f GB: no staging before the GPU",
+                        self.band, self.batch, avail / memory.GB, need / memory.GB)
+            return False
+        return True
+
+    def _prefetch_stage(self, todo, have_fits) -> None:
+        """Before the GPU: the slot ring, the prep pool and the snapshot loop's first top-up (snapshots 0..lookahead
+        of the work list, the same _feed calls into the same ring slots).  Only when the work list is known without
+        the store: no FITS there yet (else replays may be interleaved)."""
+        from . import slots
+        if have_fits or not todo:
+            log.info("V3_PREFETCH %sMHz batch%d: a retry (%d with FITS): no staging before the GPU", self.band,
+                     self.batch, len(have_fits))
+            return
+        work = sorted(todo, key=_stamp)
+        if not self._prefetch_room(len(work)):
+            return
+        t0 = time.perf_counter()
+        self.ring = slots.SlotRing(self.lookahead + 2)
+        self.w._v3_sweep_untar()
+        self.w._v3_start_pool()
+        pool = ThreadPoolExecutor(max_workers=max(1, self.cfg.cluster.max_feeders))
+        futs: Dict[int, Future] = {}
+        for j in range(min(len(work), self.lookahead + 1)):         # = top_up(0) in the snapshot loops
+            slot = self.ring.acquire(timeout=None if j == 0 else 0)
+            futs[j] = pool.submit(self._feed, j, work[j], slot, False)
+        self._pre = dict(pool=pool, futs=futs, tars=work[:len(futs)])
+        log.info("V3_PREFETCH %sMHz batch%d: %d snapshot(s) staging + prep before the GPU (%.2f s)", self.band,
+                 self.batch, len(futs), time.perf_counter() - t0)
+
+    def _feeders(self):
+        """The snapshot loop's feeder pool and its futures so far (v3.prefetch: the prefetched ones)."""
+        pre, self._pre = self._pre, None
+        if pre is None:
+            return ThreadPoolExecutor(max_workers=max(1, self.cfg.cluster.max_feeders)), {}
+        return pre["pool"], dict(pre["futs"])
+
+    def _drop_prefeed(self) -> None:
+        """Prefetched feeds not taken by a snapshot loop: wait for them, give their slots back."""
+        pre, self._pre = self._pre, None
+        if pre is None:
+            return
+        for f in pre["futs"].values():
+            f.cancel()
+        for f in pre["futs"].values():
+            if f.cancelled():
+                continue
+            try:
+                x = f.result()
+            except Exception:
+                continue
+            if x is not None:
+                self._release(x.slot)
+                self._cleanup_item(x)
+        pre["pool"].shutdown(wait=True)
+
+    def _write_marker(self) -> None:
+        """v3.prefetch: the orchestrator may give this slot its next batch now (removed when the batch ends)."""
+        if not getattr(self.v3, "prefetch", False):
+            return
+        from ..orchestrator import prefetch_marker
+        try:
+            m = prefetch_marker(self.cfg, self.band, self.batch)
+            m.parent.mkdir(parents=True, exist_ok=True)
+            m.write_text(f"{os.uname().nodename} gpu{self.w.gpu} pid {os.getpid()}\n")
+            self._marker = m
+        except OSError as e:
+            log.warning("V3_PREFETCH %sMHz batch%d: no hour marker (%s)", self.band, self.batch, e)
+
     def _peel(self, it: Item) -> None:
         from . import slots
         self.daemon.zest_slot(it.slot, timeout=self.v3.peel_timeout_s)
@@ -1343,6 +1496,7 @@ class V3Batch:
         qa_dir = bdir / "QA"
         qa_dir.mkdir(parents=True, exist_ok=True)
         t_all = time.perf_counter()
+        self._write_marker()                         # v3.prefetch: the slot's next batch may start now
         rec: Dict = dict(band=self.band, date=pl.date, lst_label=group, run_label=pl.run_label, host=os.uname().nodename,
                          gpu=w.gpu, products=list(h.products), hour_source="memory",
                          start_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))

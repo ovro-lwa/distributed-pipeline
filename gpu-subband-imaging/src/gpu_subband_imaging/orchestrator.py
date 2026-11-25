@@ -46,6 +46,11 @@ def _run_key(pl) -> str:
     return getattr(pl, "run_key", pl.date)
 
 
+def prefetch_marker(cfg, band: int, batch: int) -> Path:
+    """v3.prefetch: written by the worker of (band, batch) when its hour stage starts, removed when it ends."""
+    return Path(cfg.cluster.state_dir) / "prefetch" / _run_key(cfg.pipeline) / f"{band}MHz_b{batch}.hour"
+
+
 class Orchestrator:
     def __init__(self, cfg: Config, config_dir: str, worker_sh: str,
                  list_via_node: Optional[str] = None):
@@ -90,6 +95,14 @@ class Orchestrator:
         (no hour-job rows; the batch's DONE is the band-hour's)."""
         from .config import v3_params
         return v3_params(self.cfg.pipeline).hour_source == "memory"
+
+    @property
+    def _prefetch(self) -> bool:
+        """v3.prefetch (hour_source=memory, streaming): a slot whose batch is in its hour stage (marker file
+        prefetch_marker) takes the next batch; that worker stages its first snapshots and waits for the GPU."""
+        from .config import v3_params
+        return bool(getattr(v3_params(self.cfg.pipeline), "prefetch", False)) and self.hour_in_batch \
+            and self.streaming
 
     # -- planning ------------------------------------------------------------
 
@@ -159,7 +172,8 @@ class Orchestrator:
                  len(pending0), len(self.slots), self.cfg.cluster.free_core_budget)
         free: List[Slot] = list(self.slots)
         running: Dict[Future, Slot] = {}
-        pool = ThreadPoolExecutor(max_workers=len(self.slots) or 1)
+        # v3.prefetch: up to two batches per slot (the next one starts during the hour stage of the current one)
+        pool = ThreadPoolExecutor(max_workers=(len(self.slots) or 1) * (2 if self._prefetch else 1))
         self._write_metadata("running")
         final_status = "completed"
         error = None
@@ -313,6 +327,8 @@ class Orchestrator:
         budget = self.cfg.cluster.free_core_budget
         free: List[Slot] = list(self.slots)
         running: Dict[Future, Slot] = {}
+        jobs_of: Dict[Future, Job] = {}
+        prefetch = self._prefetch
         while True:
             fcs: Dict[str, Optional[float]] = {}     # node_free_cores once per node and pass
 
@@ -342,14 +358,26 @@ class Orchestrator:
                 pending.append(j)
             if not pending and not running:
                 break
-            for slot in list(free):
+            avail = list(free)
+            if prefetch:                # a slot with one batch, in its hour stage, takes the next batch now
+                busy = list(running.values())
+                for f, slot in running.items():
+                    jr = jobs_of.get(f)
+                    if (busy.count(slot) == 1 and jr is not None and not is_hour_job(jr)
+                            and prefetch_marker(self.cfg, jr.band, jr.batch).exists()):
+                        avail.append(slot)
+            for slot in avail:
                 j = self._choose(slot, pending, st, local, order, free_cores)
-                if j is None:
+                if j is None or (slot not in free and is_hour_job(j)):
                     continue
                 fc = free_cores(slot.node)
                 if not (fc is None or fc >= budget):
                     continue
-                free.remove(slot)
+                if slot in free:
+                    free.remove(slot)
+                else:
+                    log.info("V3_PREFETCH %sMHz batch%d to %s during the hour stage of its batch", j.band, j.batch,
+                             slot)
                 pending.remove(j)
                 with self._lock:
                     self.ledger.mark_running(j, str(slot))
@@ -357,11 +385,20 @@ class Orchestrator:
                 e = st[(j.band, self._group(j))]
                 e["node"] = e["node"] or slot.node
                 fn = self._run_hour_job if is_hour_job(j) else self._run_one
-                running[pool.submit(fn, slot, j)] = slot
+                fut = pool.submit(fn, slot, j)
+                running[fut] = slot
+                jobs_of[fut] = j
             done = [f for f in running if f.done()]
             for f in done:
                 slot = running.pop(f)
-                free.append(slot)
+                jd = jobs_of.pop(f, None)
+                if prefetch and jd is not None:      # a killed worker leaves its marker: never a third batch
+                    try:
+                        prefetch_marker(self.cfg, jd.band, jd.batch).unlink()
+                    except OSError:
+                        pass
+                if slot not in running.values():
+                    free.append(slot)
                 exc = f.exception()
                 if exc is not None:
                     log.error("dispatch thread on %s crashed: %r", slot, exc)
