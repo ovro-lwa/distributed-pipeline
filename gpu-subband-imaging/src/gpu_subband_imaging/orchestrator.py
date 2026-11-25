@@ -51,6 +51,10 @@ def prefetch_marker(cfg, band: int, batch: int) -> Path:
     return Path(cfg.cluster.state_dir) / "prefetch" / _run_key(cfg.pipeline) / f"{band}MHz_b{batch}.hour"
 
 
+# v3.prefetch: set in the environment of a worker dispatched to a slot whose batch is in its hour stage
+PREFETCHED_ENV = "GSI_V3_PREFETCHED"
+
+
 class Orchestrator:
     def __init__(self, cfg: Config, config_dir: str, worker_sh: str,
                  list_via_node: Optional[str] = None):
@@ -147,13 +151,18 @@ class Orchestrator:
         return str(self.state / "manifests" / _run_key(self.cfg.pipeline) /
                    f"{j.band}_{j.batch}.txt")
 
-    def _run_one(self, slot: Slot, j: Job) -> bool:
+    def _run_one(self, slot: Slot, j: Job, prefetched: bool = False) -> bool:
         log.info("dispatching %sMHz batch%d to %s (%d files)",
                  j.band, j.batch, slot, j.n_files)
+        timeout, env = self.cfg.pipeline.batch_timeout_seconds, self.worker_env
+        if prefetched and timeout:
+            # v3.prefetch: the worker waits for the slot's previous batch (at most that batch's own budget,
+            # < batch_timeout_seconds) and restarts its budget once it has the GPU (GSI_V3_PREFETCHED,
+            # V3Batch._wait_gpu): the wait must not count against the batch's own timeout
+            timeout, env = 2 * timeout, {**(env or {}), PREFETCHED_ENV: "1"}
         r = dispatch.run_worker(slot.node, slot.gpu, self.worker_sh,
                                self.config_dir, j.band, j.batch, self._manifest(j),
-                               timeout=self.cfg.pipeline.batch_timeout_seconds,
-                               env=self.worker_env)
+                               timeout=timeout, env=env)
         with self._lock:
             if r.ok:
                 self.ledger.mark_done(j)
@@ -373,11 +382,12 @@ class Orchestrator:
                 fc = free_cores(slot.node)
                 if not (fc is None or fc >= budget):
                     continue
-                if slot in free:
-                    free.remove(slot)
-                else:
+                prefetched = slot not in free
+                if prefetched:
                     log.info("V3_PREFETCH %sMHz batch%d to %s during the hour stage of its batch", j.band, j.batch,
                              slot)
+                else:
+                    free.remove(slot)
                 if prefetch and not is_hour_job(j):
                     # a marker an earlier attempt or run left (killed worker, orchestrator restart) would
                     # read as "in its hour stage" before this attempt's worker has even started
@@ -391,8 +401,12 @@ class Orchestrator:
                 j.status = "running"
                 e = st[(j.band, self._group(j))]
                 e["node"] = e["node"] or slot.node
-                fn = self._run_hour_job if is_hour_job(j) else self._run_one
-                fut = pool.submit(fn, slot, j)
+                if is_hour_job(j):
+                    fut = pool.submit(self._run_hour_job, slot, j)
+                elif prefetched:
+                    fut = pool.submit(self._run_one, slot, j, True)
+                else:
+                    fut = pool.submit(self._run_one, slot, j)
                 running[fut] = slot
                 jobs_of[fut] = j
             done = [f for f in running if f.done()]

@@ -1357,6 +1357,13 @@ class V3Batch:
                  self.band, self.batch, self.w.gpu, time.perf_counter() - t0, ready, n)
         log.info("timing %sMHz batch%d phase=prefetch_gpu_wait elapsed=%.2f s", self.band, self.batch,
                  time.perf_counter() - t0)
+        from ..orchestrator import PREFETCHED_ENV
+        if os.environ.get(PREFETCHED_ENV) == "1" and self._budget is not None:
+            # dispatched as a prefetch (the orchestrator allows 2 x batch_timeout_seconds): the budget counts
+            # from here, so a long hour stage of the previous batch does not eat this batch's own budget
+            self._budget.cancel()
+            self._start_budget(time.perf_counter())
+            log.info("V3_PREFETCH %sMHz batch%d: budget restarted with the GPU", self.band, self.batch)
 
     def _drop_gpu(self) -> None:
         if self._gpu_fd is not None:

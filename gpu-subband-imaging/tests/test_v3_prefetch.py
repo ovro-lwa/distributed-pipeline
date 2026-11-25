@@ -58,8 +58,10 @@ def test_streaming_prefetch_dispatches_the_next_batch_during_the_hour_stage(monk
     concurrent, max_running = [], [0]
     running = set()
     lk = threading.Lock()
+    how = {}
 
-    def run_one(slot, job):
+    def run_one(slot, job, prefetched=False):
+        how[job.band] = prefetched
         with lk:
             running.add(job.band)
             max_running[0] = max(max_running[0], len(running))
@@ -81,6 +83,9 @@ def test_streaming_prefetch_dispatches_the_next_batch_during_the_hour_stage(monk
     assert concurrent == [prefetch]
     assert max_running[0] == (2 if prefetch else 1)
     assert all(e.is_set() for e in started.values())
+    # 55 is given during 23's hour stage (82 too when 55 ends first: the slot then again has one batch, in its
+    # hour stage); the first batch never
+    assert how[23] is False and how[55] is prefetch and (prefetch or how[82] is False)
 
 
 def test_stale_marker_from_an_earlier_run_does_not_prefetch(monkeypatch, tmp_path):
@@ -107,6 +112,56 @@ def test_stale_marker_from_an_earlier_run_does_not_prefetch(monkeypatch, tmp_pat
     with ThreadPoolExecutor(max_workers=3) as pool:
         orch._run_streaming(pool, poll=0.01)
     assert max_running[0] == 1 and not stale.exists()
+
+
+@pytest.mark.parametrize("prefetched", [False, True])
+def test_prefetched_dispatch_gets_twice_the_timeout_and_the_flag(monkeypatch, tmp_path, prefetched):
+    from gpu_subband_imaging.orchestrator import PREFETCHED_ENV
+    orch = _orch(tmp_path, True)
+    orch.cfg.pipeline.batch_timeout_seconds = 1000
+    orch.worker_sh, orch.config_dir, orch.worker_env = "w.sh", "cfg", {"GSI_NICE": "10"}
+    orch.state = tmp_path / "state"
+    seen = {}
+
+    def run_worker(node, gpu, worker_sh, config_dir, band, batch, manifest, timeout=None, env=None):
+        seen.update(timeout=timeout, env=dict(env))
+        return dispatch.RunResult(True, 0, "")
+    monkeypatch.setattr(dispatch, "run_worker", run_worker)
+    job = orch.ledger.pending()[0]
+    assert orch._run_one(orch.slots[0], job, prefetched) if prefetched else orch._run_one(orch.slots[0], job)
+    assert seen["timeout"] == (2000 if prefetched else 1000)
+    assert seen["env"] == ({"GSI_NICE": "10", PREFETCHED_ENV: "1"} if prefetched else {"GSI_NICE": "10"})
+    assert orch.worker_env == {"GSI_NICE": "10"}               # the shared env is not changed
+
+
+@pytest.mark.parametrize("flag", ["1", None])
+def test_prefetched_worker_restarts_its_budget_with_the_gpu(env, monkeypatch, tmp_path, flag):
+    from gpu_subband_imaging.orchestrator import PREFETCHED_ENV
+    if flag:
+        monkeypatch.setenv(PREFETCHED_ENV, flag)
+    else:
+        monkeypatch.delenv(PREFETCHED_ENV, raising=False)
+    cfg = _config(env.tmp, prefetch=True, budget_margin_s=100)
+    v = V3Batch(_worker(cfg, FakeDaemon()), env.tars)
+    lock = tmp_path / "gpu.lock"
+    monkeypatch.setattr(V3Batch, "_gpu_lock_path", lambda self: str(lock))
+    t0 = time.perf_counter() - 500.0                         # "started 500 s ago, waiting for the GPU since"
+    v._start_budget(t0)
+    first = v._budget
+    try:
+        v._prefetching = True
+        v._gpu_fd = os.open(str(lock), os.O_RDWR | os.O_CREAT, 0o600)
+        v._wait_gpu()
+        left = float(cfg.pipeline.batch_timeout_seconds) - 100.0
+        if flag:
+            assert v._budget is not first and first.finished.is_set()     # the first timer was cancelled
+            assert abs(v.deadline - (time.perf_counter() + left)) < 5.0
+        else:
+            assert v._budget is first and abs(v.deadline - (t0 + left)) < 1e-6
+    finally:
+        for b in {first, v._budget}:
+            b.cancel()
+        v._drop_gpu()
 
 
 def test_prefetch_needs_streaming(tmp_path):
