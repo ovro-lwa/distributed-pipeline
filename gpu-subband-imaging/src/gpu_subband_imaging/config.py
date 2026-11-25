@@ -476,7 +476,8 @@ class V3Params:
     # at the end of its snapshot loop (aoflag=hour: after pass 1) with a RELEASE that frees the daemon's GPU
     # memory before the GPU-heavy stages (the idle daemon keeps only its CUDA context, ~0.27 GB, also through the
     # hour stage); the server exits after zest_persistent_idle_s without a batch.
-    # Default off (a daemon per batch, as v4)
+    # Needs cluster.yaml defaults.zest_recycle_files: 0 (a recycle would only detach and re-attach to the same
+    # daemon, not restart it).  Default off (a daemon per batch, as v4)
     zest_persistent: bool = False
     zest_persistent_idle_s: float = 1800.0
     # aoflag=hour: pass 1 writes the peeled slot copies in a background thread (the next peel does not wait
@@ -567,6 +568,8 @@ class V3Params:
             raise ConfigError("v3.zest_persistent_idle_s must be > 0")
         if self.aoflag_load_threads < 1:
             raise ConfigError("v3.aoflag_load_threads must be >= 1")
+        if self.aoflag_async_io and self.aoflag != "hour":
+            raise ConfigError("v3.aoflag_async_io needs v3.aoflag=hour (it only acts in the aoflag passes)")
         if isinstance(self.prep_block_rows, bool) or not isinstance(self.prep_block_rows, int) or self.prep_block_rows < 0:
             raise ConfigError(f"v3.prep_block_rows must be an integer >= 0, not {self.prep_block_rows!r}")
         if not 0 <= self.max_given_up_fraction <= 1 or self.stale_checkpoint_hours < 0:
@@ -910,6 +913,16 @@ def _warn_noop(pipeline: PipelineConfig) -> List[str]:
     return msgs
 
 
+def _check_zest_persistent(cluster: ClusterConfig, pipeline: PipelineConfig) -> None:
+    """v3.zest_persistent keeps one daemon per GPU across batches: zest_recycle_files would only RELEASE and
+    re-attach to that same daemon every N files (no new process, the warm-start gains dropped), not the
+    restart the setting asks for."""
+    v3 = getattr(pipeline, "v3", None)
+    if v3 is not None and getattr(v3, "zest_persistent", False) and cluster.zest_recycle_files > 0:
+        raise ConfigError(f"v3.zest_persistent needs cluster.yaml defaults.zest_recycle_files: 0 (not "
+                          f"{cluster.zest_recycle_files}): the persistent daemon is never recycled")
+
+
 def _warn_feeders(cluster: ClusterConfig, pipeline: PipelineConfig) -> Optional[str]:
     """Warn (no error) when the v3 in-memory prep has fewer feeder threads than prep processes: a feeder untars
     its tar and then waits for its prep task, so with max_feeders < prep_procs some prep processes never get
@@ -940,6 +953,7 @@ class Config:
         _validate_lustre_write_roots(cluster, pipeline)
         check_protected(pipeline.cal.sources)
         check_protected(pipeline.cal.rfi_sources)
+        _check_zest_persistent(cluster, pipeline)
         _warn_feeders(cluster, pipeline)
         _warn_noop(pipeline)
         return Config(cluster, load_subbands(d / "subbands.yaml"), pipeline)
