@@ -205,6 +205,176 @@ def test_config_rules():
         V3Params(zest_persistent=True)                       # peel_io ms
     with pytest.raises(ConfigError, match="aoflag_load_threads"):
         V3Params(aoflag_load_threads=0)
+    with pytest.raises(ConfigError, match="aoflag_async_io needs v3.aoflag=hour"):
+        V3Params(aoflag_async_io=True)
+    V3Params(prep_inmem="on", peel_io="shm", snapshot_io="shm", hour_source="memory", aoflag="hour",
+             aoflag_async_io=True)
+
+
+@pytest.mark.parametrize("recycle,persistent,ok", [(25, True, False), (0, True, True), (25, False, True)])
+def test_zest_persistent_needs_no_recycling(recycle, persistent, ok):
+    from types import SimpleNamespace
+    from gpu_subband_imaging.config import _check_zest_persistent
+    cl = SimpleNamespace(zest_recycle_files=recycle)
+    pl = SimpleNamespace(v3=SimpleNamespace(zest_persistent=persistent))
+    if ok:
+        _check_zest_persistent(cl, pl)
+    else:
+        with pytest.raises(ConfigError, match="zest_recycle_files: 0"):
+            _check_zest_persistent(cl, pl)
+
+
+# -- faults (verifier's fault injection) -------------------------------------------------------------------
+
+def test_server_killed_mid_batch_the_rest_of_the_batch_uses_a_private_daemon(fake):
+    """The server dies (not its daemon): the request in flight fails, the remaining snapshots are peeled by a
+    private daemon, close() quits it, and the next batch gets a new server."""
+    import signal
+    a = _attach(fake)
+    a.zest_slot(Path("/dev/shm/x_0"), timeout=10)
+    spid = a._p.pid
+    os.kill(spid, signal.SIGKILL)
+    time.sleep(0.3)
+    with pytest.raises(RuntimeError, match="zest server"):
+        a.zest_slot(Path("/dev/shm/x_1"), timeout=10)
+    assert a.closed
+    assert [a.zest_slot(Path(f"/dev/shm/x_{i}"), timeout=10) for i in (2, 3)] == [pytest.approx(0.25)] * 2
+    a.reset_warm()
+    priv = a._private
+    assert priv is not None and a.pid == priv.pid and a._p is priv._p      # the budget kill reaches it
+    a.close()
+    assert a._private is None and priv._p.poll() is not None              # the private daemon quit
+    with pytest.raises(RuntimeError, match="closed"):
+        a.zest_slot(Path("/dev/shm/x_4"), timeout=10)
+    assert [x.split()[0] for x in _cmds(fake)][-4:] == ["SHM", "SHM", "RESET_WARM", "QUIT"]
+    b = _attach(fake)                                        # the next batch gets a new server
+    try:
+        assert b is not None and b._p.pid != spid
+        assert b.zest_slot(Path("/dev/shm/x_5"), timeout=10) == pytest.approx(0.25)
+    finally:
+        b.close()
+
+
+def test_daemon_killed_mid_batch_is_restarted_inside_the_server(fake):
+    import signal
+    a = _attach(fake)
+    try:
+        a.zest_slot(Path("/dev/shm/x_0"), timeout=10)
+        spid = a._p.pid
+        os.kill(a.pid, signal.SIGKILL)
+        time.sleep(0.3)
+        res = []
+        for i in range(1, 4):
+            try:
+                res.append(a.zest_slot(Path(f"/dev/shm/x_{i}"), timeout=10))
+            except RuntimeError:
+                res.append("err")
+        # at most the first request after the death fails (as a private ZestDaemon); the same server goes on
+        assert res[1:] == [pytest.approx(0.25)] * 2 and a.restarts == 1
+        assert not a.closed and a._private is None and a._p.pid == spid
+    finally:
+        a.close()
+
+
+def _slow_julia(fake, tmp_path):
+    slow = tmp_path / "slow"
+    script = Path(fake["julia"]).read_text()
+    j2 = tmp_path / "julia2"
+    j2.write_text(f'#!/bin/sh\n[ -f {slow} ] && sleep 3\n' + script.split("\n", 1)[1])
+    j2.chmod(0o755)
+    return j2, slow
+
+
+def _attach_julia(fake, julia, **kw):
+    return zest_server.PersistentZest.attach(0, julia=str(julia), project="/nonexistent/TTCalX", daemon_jl="daemon.jl",
+                                             sources="s.json", env=fake["env"], zest_env={"ZEST_ENGINE": "sky_rfi"},
+                                             start_timeout=60, python=sys.executable, **kw)
+
+
+def test_short_io_margin_kills_a_restarting_server_and_falls_back(fake, tmp_path):
+    """peel timeout 1 s, the restarted daemon needs 3 s, client margin 1 s: the server is killed; the rest of
+    the batch still peels (private daemon)."""
+    j2, slow = _slow_julia(fake, tmp_path)
+    a = _attach_julia(fake, j2, io_margin_s=1.0)
+    slow.write_text("1")
+    res = []
+    for name in ("x_hang", "x_1", "x_2"):
+        try:
+            res.append(a.zest_slot(Path(f"/dev/shm/{name}"), timeout=1))
+        except Exception as e:                                  # noqa: BLE001
+            res.append(type(e).__name__)
+    a.close()
+    assert res == ["RuntimeError", pytest.approx(0.25), pytest.approx(0.25)]
+
+
+def test_default_io_margin_waits_for_the_daemon_restart(fake, tmp_path):
+    """The same with the default margin (start_timeout + 90 s): a ZestTimeout, the server lives on."""
+    j2, slow = _slow_julia(fake, tmp_path)
+    a = _attach_julia(fake, j2)
+    assert a._margin == 60 + 90
+    slow.write_text("1")
+    try:
+        spid = a._p.pid
+        with pytest.raises(ZestTimeout):
+            a.zest_slot(Path("/dev/shm/x_hang"), timeout=1)
+        assert a.zest_slot(Path("/dev/shm/x_1"), timeout=10) == pytest.approx(0.25)
+        assert not a.closed and a._p.pid == spid and a.restarts == 1
+    finally:
+        a.close()
+
+
+def test_private_daemon_that_cannot_start_fails_fast(fake, monkeypatch):
+    import signal
+    from gpu_subband_imaging.stages import peel
+    a = _attach(fake)
+    os.kill(a._p.pid, signal.SIGKILL)
+    time.sleep(0.3)
+    with pytest.raises(RuntimeError):
+        a.zest_slot(Path("/dev/shm/x_0"), timeout=10)
+    calls = []
+
+    def boom(**kw):
+        calls.append(kw)
+        raise RuntimeError("no julia")
+    monkeypatch.setattr(peel, "ZestDaemon", boom)
+    for _ in range(3):
+        with pytest.raises(RuntimeError, match="no julia"):
+            a.zest_slot(Path("/dev/shm/x_1"), timeout=10)
+    assert len(calls) == 1                                       # one start attempt, not one per snapshot
+    a.close()
+
+
+def test_server_log_keeps_only_server_lines(fake):
+    """The server's log (appended across nights) has no per-snapshot PEEL_* lines; the worker still gets them."""
+    a = _attach(fake)
+    for i in range(5):
+        a.zest_slot(Path(f"/dev/shm/x_{i}"), timeout=10)
+    a.close()
+    text = (fake["dir"] / "gpu0.log").read_text()
+    assert "ZEST_SERVER" in text and "PEEL_SUMMARY" not in text
+
+
+def test_server_key_covers_peel_py():
+    files = [Path(f).name for f in zest_server._SERVER_FILES]
+    assert files == ["zest_server.py", "peel.py"] and all(Path(f).exists() for f in zest_server._SERVER_FILES)
+
+
+def test_cleanup_nodes_stops_the_zest_servers(monkeypatch, tmp_path):
+    import re
+    from types import SimpleNamespace
+    from gpu_subband_imaging import dispatch, orchestrator
+    sent = []
+    monkeypatch.setattr(dispatch, "_ssh", lambda node, cmd, timeout: sent.append(cmd) or SimpleNamespace(ok=True, tail=""))
+    for persistent in (False, True):
+        o = orchestrator.Orchestrator.__new__(orchestrator.Orchestrator)
+        o.cfg = SimpleNamespace(cluster=SimpleNamespace(work_root=str(tmp_path)),
+                                pipeline=SimpleNamespace(keep_ms_local=None, v3=SimpleNamespace(zest_persistent=persistent)))
+        o.slots = [SimpleNamespace(node="calimX", gpu=0)]
+        o.cleanup_nodes()
+    assert "pkill" not in sent[0] and "pkill" in sent[1]
+    pat = re.search(r"-f '([^']+)'", sent[1]).group(1)
+    assert re.search(pat, f"{sys.executable} -m gpu_subband_imaging.v3.zest_server /tmp/gsi_zest_1/gpu0.spec.json")
+    assert not re.search(pat, f"bash -c {sent[1]}")             # pkill does not match its own ssh command line
 
 
 # -- v3.aoflag_async_io: the same bytes ----------------------------------------------------------------------

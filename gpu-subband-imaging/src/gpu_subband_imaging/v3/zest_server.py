@@ -17,7 +17,10 @@ to over a UNIX socket and detaches from at the end of its snapshot loop:
 * the server quits its daemon and exits after ``idle_s`` without a client, and on ``quit``.
 
 The daemon is the ordinary ZestDaemon (timeouts, restarts, stale replies as before); its PEEL_* /
-ZEST_TIMING log lines are returned with each reply and logged by the worker under gsi.peel.
+ZEST_TIMING log lines are returned with each reply and logged by the worker under gsi.peel (the server's
+own log keeps only ZEST_SERVER* lines and warnings / errors).  A server lost mid-batch (no reply within
+timeout + io_margin_s: killed; or it died) fails the request in flight, as a ZestDaemon restart does, and
+the rest of the batch peels with a private ZestDaemon.  ``gsi cleanup-nodes`` stops the servers.
 
 Protocol: one JSON object per line each way.  Requests {"op": hello | zest | reset_warm | release |
 quit, ...}; replies {"ok": true, ...} or {"ok": false, "error": str, "timeout": bool}.
@@ -57,13 +60,17 @@ def _file_sig(p: str) -> list:
         return [p, None, None]
 
 
+# the Python the server runs (this module and the ZestDaemon it drives): an in-place deploy restarts old servers
+_SERVER_FILES = [__file__, str(Path(__file__).resolve().parents[1] / "stages" / "peel.py")]
+
+
 def server_key(cmd: List[str], run_env: Dict[str, str], files: List[str]) -> str:
     """Two batches may share a daemon iff this is equal: the daemon command, the environment that
     reaches its behaviour, and the size / mtime of the files it loads (daemon script, sky model,
-    TTCalX sources, this module)."""
+    TTCalX sources) or runs (this module, stages/peel.py)."""
     env = {k: v for k, v in run_env.items() if k.startswith(_KEY_ENV_PREFIXES)}
     blob = json.dumps(dict(protocol=PROTOCOL, cmd=list(cmd), env=env,
-                           files=[_file_sig(f) for f in sorted(set(files + [__file__]))]), sort_keys=True)
+                           files=[_file_sig(f) for f in sorted(set(files + _SERVER_FILES))]), sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()[:24]
 
 
@@ -248,9 +255,36 @@ def _owner_is_me(p: str) -> bool:
         return False
 
 
+class _ServerOnly(logging.Filter):
+    """The server log keeps the server's own events (ZEST_SERVER*) and every warning / error (ZEST_DAEMON_KILL,
+    _RESTART, ZEST_STALE_REPLY, ...), not the daemon's per-snapshot PEEL_* / ZEST_TIMING lines."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno >= logging.WARNING:
+            return True
+        try:
+            return record.getMessage().startswith("ZEST_SERVER")
+        except Exception:                               # noqa: BLE001
+            return True
+
+
+def _setup_server_logging() -> None:
+    # the daemon's PEEL_* / ZEST_TIMING lines go back to the worker with each reply (_Collect on gsi.peel); the
+    # server log (/tmp/gsi_zest_<uid>/gpuN.log, appended across nights) keeps only the server's own lines
+    fmt = logging.Formatter("%(asctime)s %(name)s %(message)s")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    pl = logging.getLogger("gsi.peel")
+    pl.setLevel(logging.INFO)
+    pl.propagate = False
+    h = logging.StreamHandler(sys.stderr)
+    h.setFormatter(fmt)
+    h.addFilter(_ServerOnly())
+    pl.addHandler(h)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    _setup_server_logging()
     spec = json.loads(Path(argv[0]).read_text())
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     import faulthandler
@@ -276,7 +310,8 @@ class _ServerProc:
 class PersistentZest:
     """ZestDaemon's interface (zest_slot, reset_warm, close, pid, _p) on a per-GPU server."""
 
-    def __init__(self, sock: socket.socket, lock_fd: int, hello: dict, io_margin_s: float):
+    def __init__(self, sock: socket.socket, lock_fd: int, hello: dict, io_margin_s: float,
+                 private_kw: Optional[dict] = None):
         self._sock = sock
         self._rf = sock.makefile("r")
         self._lock_fd = lock_fd
@@ -285,19 +320,55 @@ class PersistentZest:
         self._p = _ServerProc(int(hello["pid"]))
         self.restarts = 0
         self.abandoned: List[int] = []
-        self.closed = False
+        self.closed = False                 # no server connection (detached, or the server was lost)
+        self._finished = False              # close() was called: no more requests at all
+        # the server lost mid-batch (killed after no reply, or it died): the rest of the batch peels with a private
+        # ZestDaemon(**private_kw), as a ZestDaemon restarts its own daemon, instead of failing every snapshot left
+        self._private_kw = private_kw
+        self._private = None
+        self._private_error: Optional[BaseException] = None
 
     @property
     def pid(self) -> int:
+        if self._private is not None:
+            return self._private.pid
         return int(self.hello.get("daemon_pid", 0))
+
+    def _fallback(self):
+        if self._private_error is not None:                 # one failed start is enough (each waits start_timeout)
+            raise RuntimeError(f"zest server lost and no private daemon: {self._private_error}")
+        if self._private is None:
+            from ..stages.peel import ZestDaemon
+            log.error("V3_ZEST_PERSISTENT server pid %s lost: a private daemon for the rest of the batch",
+                      self._p.pid)
+            try:
+                self._private = ZestDaemon(**self._private_kw)
+            except Exception as e:                          # noqa: BLE001
+                self._private_error = e
+                raise
+            self._p = self._private._p                     # the worker's budget kill reaches it
+        return self._private
+
+    def _use_private(self) -> bool:
+        if self._finished:
+            raise RuntimeError("persistent zest client is closed")
+        return self.closed and self._private_kw is not None
 
     # -- attach ----------------------------------------------------------------------------------
     @classmethod
     def attach(cls, gpu, julia: str, project: str, daemon_jl: str, sources: str, env: Dict[str, str],
                zest_env: Dict[str, str], start_timeout: Optional[float] = 600.0, idle_s: float = 1800.0,
                python: Optional[str] = None,
-               io_margin_s: float = 120.0) -> Optional["PersistentZest"]:
-        """The GPU's server (reused or started); None when another batch holds it (use a private daemon)."""
+               io_margin_s: Optional[float] = None) -> Optional["PersistentZest"]:
+        """The GPU's server (reused or started); None when another batch holds it (use a private daemon).
+
+        A request without a reply within its timeout + `io_margin_s` kills the server.  The server's ZestDaemon
+        answers a timed-out peel only after it killed (kill_wait 30 s) and restarted (<= start_timeout) its
+        daemon, so the default margin is start_timeout + 90 s: a shorter one kills a healthy server."""
+        if io_margin_s is None:
+            io_margin_s = (start_timeout if start_timeout is not None else 600.0) + 90.0
+        private_kw = dict(julia=julia, project=project, daemon_jl=daemon_jl, sources=sources, env=env,
+                          zest_env=zest_env, start_timeout=start_timeout)
         d = base_dir()
         d.mkdir(mode=0o700, parents=True, exist_ok=True)
         tag = f"gpu{gpu}"
@@ -323,7 +394,7 @@ class PersistentZest:
             if hello is not None and hello.get("key") == key and hello.get("protocol") == PROTOCOL:
                 log.info("V3_ZEST_PERSISTENT gpu%s: reusing server pid %s (daemon pid %s, %s client(s), %s slot(s))",
                          gpu, hello["pid"], hello["daemon_pid"], hello["clients"], hello["slots"])
-                return cls(c, lock_fd, hello, io_margin_s)
+                return cls(c, lock_fd, hello, io_margin_s, private_kw)
             pidfile = d / f"{tag}.pid"
             if c is not None and hello is not None:
                 log.warning("V3_ZEST_PERSISTENT gpu%s: server %s has another key: replacing it", gpu, hello.get("pid"))
@@ -360,7 +431,7 @@ class PersistentZest:
                     if hello is not None and hello.get("key") == key:
                         log.info("V3_ZEST_PERSISTENT gpu%s: new server pid %s (daemon pid %s) in %.1f s", gpu,
                                  hello["pid"], hello["daemon_pid"], time.time() - t0)
-                        return cls(c, lock_fd, hello, io_margin_s)
+                        return cls(c, lock_fd, hello, io_margin_s, private_kw)
                     c.close()
                 time.sleep(0.2)
             try:
@@ -465,9 +536,13 @@ class PersistentZest:
             pass
 
     def zest_slot(self, slot: Path, timeout: Optional[float] = 600.0) -> float:
+        if self._use_private():
+            return self._fallback().zest_slot(slot, timeout=timeout)
         return float(self._request(timeout, op="zest", slot=str(slot), timeout=timeout)["s"])
 
     def reset_warm(self, timeout: Optional[float] = 60.0) -> None:
+        if self._use_private():
+            return self._fallback().reset_warm(timeout=timeout)
         self._request(timeout, op="reset_warm", timeout=timeout)
 
     def release(self) -> float:
@@ -480,7 +555,14 @@ class PersistentZest:
             self._drop()
 
     def close(self) -> None:
-        """Detach: RELEASE (the GPU memory goes back before the hour stage), keep the server."""
+        """Detach: RELEASE (the GPU memory goes back before the hour stage), keep the server; or quit the
+        private daemon that replaced a lost server."""
+        self._finished = True
+        if self._private is not None:
+            try:
+                self._private.close()
+            finally:
+                self._private = None
         if self.closed:
             return
         try:
