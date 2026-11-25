@@ -84,9 +84,15 @@ def _env_files(run_env: Dict[str, str]) -> List[str]:
 def _ttcalx_files(project: str) -> List[str]:
     src = Path(project) / "src"
     try:
-        return [str(p) for p in sorted(src.rglob("*.jl"))]
+        files = [str(p) for p in sorted(src.rglob("*.jl"))]
     except OSError:
-        return []
+        files = []
+    return files + [str(Path(project) / f) for f in ("Project.toml", "Manifest.toml")]
+
+
+def _daemon_files(daemon_jl: str) -> List[str]:
+    """The daemon script and what it includes from its own directory (zest_smooth.jl)."""
+    return [daemon_jl, str(Path(daemon_jl).parent / "zest_smooth.jl")]
 
 
 # -- server ------------------------------------------------------------------------------------------
@@ -324,7 +330,7 @@ class PersistentZest:
         self._lock_fd = lock_fd
         self.hello = hello
         self._margin = io_margin_s
-        self._p = _ServerProc(int(hello["pid"]))
+        self._server_p = _ServerProc(int(hello["pid"]))
         self.restarts = 0
         self.abandoned: List[int] = []
         self.closed = False                 # no server connection (detached, or the server was lost)
@@ -334,6 +340,14 @@ class PersistentZest:
         self._private_kw = private_kw
         self._private = None
         self._private_error: Optional[BaseException] = None
+
+    @property
+    def _p(self):
+        """What the worker's budget kill kills: the server (with its daemon), or the private daemon that replaced a
+        lost server -- its current process, also after one of its own restarts."""
+        if self._private is not None:
+            return self._private._p
+        return self._server_p
 
     @property
     def pid(self) -> int:
@@ -347,13 +361,12 @@ class PersistentZest:
         if self._private is None:
             from ..stages.peel import ZestDaemon
             log.error("V3_ZEST_PERSISTENT server pid %s lost: a private daemon for the rest of the batch",
-                      self._p.pid)
+                      self._server_p.pid)
             try:
                 self._private = ZestDaemon(**self._private_kw)
             except Exception as e:                          # noqa: BLE001
                 self._private_error = e
                 raise
-            self._p = self._private._p                     # the worker's budget kill reaches it
         return self._private
 
     def _use_private(self) -> bool:
@@ -393,7 +406,8 @@ class PersistentZest:
             run_env = dict(env)
             run_env.update(zest_env)
             cmd = [julia, f"--project={project}", daemon_jl, sources]
-            key = server_key(cmd, run_env, [daemon_jl, sources] + _env_files(run_env) + _ttcalx_files(project))
+            key = server_key(cmd, run_env, _daemon_files(daemon_jl) + [sources] + _env_files(run_env)
+                             + _ttcalx_files(project))
             sock_path = str(d / f"{tag}.sock")
             t0 = time.time()
             c = cls._connect(sock_path, timeout=30.0)
@@ -520,10 +534,20 @@ class PersistentZest:
             raise RuntimeError(r.get("error", "zest server error"))
         return r
 
-    def _broken(self, why: str) -> None:
-        """The server does not answer: kill it (with its daemon) so no stale peel touches a later slot."""
-        log.error("V3_ZEST_PERSISTENT server pid %s: %s: killing it", self._p.pid, why)
-        self._p.kill()
+    def _broken(self, why: str, kill_wait: float = 30.0) -> None:
+        """The server does not answer: kill it (with its daemon) and wait for both to exit, as ZestDaemon._kill
+        waits for its daemon, so no stale peel write-back touches the slot the caller releases next."""
+        log.error("V3_ZEST_PERSISTENT server pid %s: %s: killing it", self._server_p.pid, why)
+        self._server_p.kill()
+        pids = [p for p in (self._server_p.pid, int(self.hello.get("daemon_pid") or 0)) if p]
+        deadline = time.time() + kill_wait
+        while time.time() < deadline and any(_alive(p) for p in pids):
+            time.sleep(0.1)
+        for p in pids:
+            if _alive(p):                     # e.g. stuck in a CUDA driver call (D state)
+                self.abandoned.append(p)
+                log.critical("ZEST_DAEMON_ABANDONED pid=%d did not exit %.0f s after SIGKILL (D state?)", p,
+                             kill_wait)
         self._drop()
 
     def _drop(self) -> None:
@@ -574,10 +598,10 @@ class PersistentZest:
             return
         try:
             t = self.release()
-            log.info("V3_ZEST_PERSISTENT detached from server pid %s (release %.2f s)", self._p.pid, t)
+            log.info("V3_ZEST_PERSISTENT detached from server pid %s (release %.2f s)", self._server_p.pid, t)
         except Exception as e:                      # noqa: BLE001 (a server that cannot release must go)
             log.error("V3_ZEST_PERSISTENT release failed (%s): killing the server", e)
-            self._p.kill()
+            self._server_p.kill()
         finally:
             self._drop()
 

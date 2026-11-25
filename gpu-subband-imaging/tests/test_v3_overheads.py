@@ -481,3 +481,52 @@ def test_prep_block_rows_config():
     with pytest.raises(ConfigError, match="prep_block_rows"):
         V3Params(prep_block_rows=-1)
 
+
+# -- review fixes (release/gsi-v5.1) ------------------------------------------------------------------------
+
+def test_budget_kill_reaches_the_private_daemon_after_its_restart(fake):
+    """After a lost server the worker's budget kill (daemon._p.kill()) must reach the private daemon's current
+    process, also after that daemon restarted itself."""
+    import signal
+    a = _attach(fake)
+    server = a._p
+    os.kill(server.pid, signal.SIGKILL)
+    time.sleep(0.3)
+    with pytest.raises(RuntimeError, match="zest server"):
+        a.zest_slot(Path("/dev/shm/x_0"), timeout=10)
+    try:
+        assert a.zest_slot(Path("/dev/shm/x_1"), timeout=10) == pytest.approx(0.25)     # the private daemon
+        priv = a._private
+        assert a._p is priv._p and a._p is not server
+        priv._kill_restart("test restart")                       # its own restart: a new Popen
+        assert a._p is priv._p and a.pid == priv._p.pid
+    finally:
+        a.close()
+
+
+def test_broken_server_waits_for_its_processes(fake, monkeypatch, caplog):
+    """_broken waits (kill_wait) for the server and its daemon to exit before the caller releases the slot, and
+    records a process that does not (D state) as abandoned."""
+    a = _attach(fake)
+    spid, dpid = a._p.pid, a.pid
+    real_alive = zest_server._alive
+    monkeypatch.setattr(zest_server, "_alive", lambda pid: True if pid == dpid else real_alive(pid))
+    t0 = time.time()
+    with caplog.at_level(logging.CRITICAL, logger="gsi.peel"):
+        a._broken("test", kill_wait=1.0)
+    assert time.time() - t0 >= 1.0 and a.abandoned == [dpid] and a.closed
+    assert "ZEST_DAEMON_ABANDONED pid=%d" % dpid in caplog.text
+    monkeypatch.setattr(zest_server, "_alive", real_alive)
+    assert not real_alive(spid)
+    a.close()
+
+
+def test_server_key_covers_the_daemon_includes_and_the_manifest(tmp_path):
+    jl = tmp_path / "workers" / "zest_daemon.jl"
+    assert zest_server._daemon_files(str(jl)) == [str(jl), str(tmp_path / "workers" / "zest_smooth.jl")]
+    files = zest_server._ttcalx_files(str(tmp_path / "TTCalX"))
+    assert files[-2:] == [str(tmp_path / "TTCalX" / "Project.toml"), str(tmp_path / "TTCalX" / "Manifest.toml")]
+    (tmp_path / "Manifest.toml").write_text("a")
+    k1 = zest_server.server_key(["j"], {}, [str(tmp_path / "Manifest.toml")])
+    (tmp_path / "Manifest.toml").write_text("ab")
+    assert zest_server.server_key(["j"], {}, [str(tmp_path / "Manifest.toml")]) != k1
