@@ -6,7 +6,8 @@ critical path).  With the option, the daemon runs under a small server process p
 to over a UNIX socket and detaches from at the end of its snapshot loop:
 
 * attach (``PersistentZest.attach``): per-GPU flock; a live server with the same key (the daemon's
-  command, its ZEST_* / JULIA_* / CUDA_* environment and the files it loads) is reused, else it is
+  command, its ZEST_* / JULIA_* / CUDA_* environment and the files it loads, including the ones ZEST_*
+  values name such as ZEST_RFI_SOURCES) is reused, else it is
   told to quit and a new one is started.  The flock is held while attached; a second batch on the
   same GPU (lanes, prefetch) does not wait for it but gets a private daemon (``None``).
 * detach (``close``): RELEASE -- the daemon frees its workspace, device slot buffers and warm-start
@@ -72,6 +73,12 @@ def server_key(cmd: List[str], run_env: Dict[str, str], files: List[str]) -> str
     blob = json.dumps(dict(protocol=PROTOCOL, cmd=list(cmd), env=env,
                            files=[_file_sig(f) for f in sorted(set(files + _SERVER_FILES))]), sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()[:24]
+
+
+def _env_files(run_env: Dict[str, str]) -> List[str]:
+    """The files the daemon's ZEST_* settings name (ZEST_RFI_SOURCES, ...): the daemon reads them once at its start,
+    so a model rewritten in place must not be served by a daemon that loaded the old one."""
+    return sorted(v for k, v in run_env.items() if k.startswith("ZEST_") and v.startswith("/") and os.path.isfile(v))
 
 
 def _ttcalx_files(project: str) -> List[str]:
@@ -386,7 +393,7 @@ class PersistentZest:
             run_env = dict(env)
             run_env.update(zest_env)
             cmd = [julia, f"--project={project}", daemon_jl, sources]
-            key = server_key(cmd, run_env, [daemon_jl, sources] + _ttcalx_files(project))
+            key = server_key(cmd, run_env, [daemon_jl, sources] + _env_files(run_env) + _ttcalx_files(project))
             sock_path = str(d / f"{tag}.sock")
             t0 = time.time()
             c = cls._connect(sock_path, timeout=30.0)

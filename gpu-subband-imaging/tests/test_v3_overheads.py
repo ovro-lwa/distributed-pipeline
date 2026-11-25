@@ -180,6 +180,27 @@ def test_server_key():
     assert k != zest_server.server_key(["julia", "d.jl"], {"ZEST_A": "1", "CUDA_VISIBLE_DEVICES": "1"}, [])
 
 
+def test_server_key_covers_the_files_zest_settings_name(fake, tmp_path):
+    """ZEST_RFI_SOURCES (read once at the daemon's start) rewritten at the same path: a new server, not the old
+    daemon with the old model."""
+    rfi = tmp_path / "rfi.json"
+    rfi.write_text("[1]")
+    zenv = {"ZEST_ENGINE": "sky_rfi", "ZEST_RFI_SOURCES": str(rfi)}
+    assert zest_server._env_files(dict(zenv, HOME=str(rfi), ZEST_X="rel/path")) == [str(rfi)]
+    a = _attach(fake, zest_env=zenv)
+    pid = a._p.pid
+    a.close()
+    b = _attach(fake, zest_env=zenv)                         # unchanged: reused
+    assert b._p.pid == pid
+    b.close()
+    rfi.write_text("[1, 2]")                                 # another size (mtime may be the same second)
+    c = _attach(fake, zest_env=zenv)
+    try:
+        assert c._p.pid != pid
+    finally:
+        c.close()
+
+
 def test_worker_falls_back_to_a_private_daemon(monkeypatch, tmp_path):
     from gpu_subband_imaging import worker as wmod
     made = []
